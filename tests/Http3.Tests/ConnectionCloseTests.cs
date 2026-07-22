@@ -1,0 +1,117 @@
+/*
+ * Copyright (c) 2010-2026 GraphDefined GmbH <achim.friedland@graphdefined.com>
+ * This file is part of Vanaheimr Hermod <https://www.github.com/Vanaheimr/Hermod>
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#region Usings
+
+using System.Threading;
+using org.GraphDefined.Vanaheimr.Hermod.Quic;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
+
+#endregion
+
+namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
+
+/// <summary>
+/// Tests für Immediate Close und Draining (RFC 9000 §10.2): ein CONNECTION_CLOSE versetzt den Sender in
+/// den Closing-, den Empfänger in den Draining-Zustand; nach 3·PTO folgt der endgültige Closed-Zustand.
+/// </summary>
+public class ConnectionCloseTests
+{
+    private static (QuicClientConnection client, QuicServerConnection server) Handshaken(ServerCertificate cert)
+    {
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+        var client = new QuicClientConnection("localhost", certificateValidation: validation);
+        var server = new QuicServerConnection(cert);
+        client.Start();
+
+        for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
+        {
+            foreach (byte[] dg in client.GetDatagramsToSend())
+                server.ProcessDatagram(dg);
+            foreach (byte[] dg in server.GetDatagramsToSend())
+                client.ProcessDatagram(dg);
+        }
+        Assert.True(client.HandshakeConfirmed, "Handshake muss zustande kommen.");
+        return (client, server);
+    }
+
+    [Fact]
+    public void Close_PutsSenderInClosing_AndReceiverInDraining_PropagatingErrorAndReason()
+    {
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        (QuicClientConnection client, QuicServerConnection server) = Handshaken(cert);
+        using var _ = client;
+        using var __ = server;
+
+        client.Close(TransportError.ApplicationError, "tschüss");
+        Assert.True(client.IsClosing);
+
+        // Ein Umlauf bringt das CONNECTION_CLOSE zum Server.
+        foreach (byte[] dg in client.GetDatagramsToSend())
+            server.ProcessDatagram(dg);
+
+        Assert.True(server.IsDraining, "Empfang eines CONNECTION_CLOSE muss in den Draining-Zustand führen.");
+        Assert.NotNull(server.PeerCloseFrame);
+        Assert.Equal((ulong)TransportError.ApplicationError, server.PeerCloseFrame!.ErrorCode);
+        Assert.Equal("tschüss", server.PeerCloseFrame.ReasonPhrase);
+        Assert.False(server.PeerCloseFrame.IsApplicationError); // Transport-CONNECTION_CLOSE (Typ 0x1c)
+
+        // Draining: Der Server sendet keinerlei Datagramme mehr (RFC 9000 §10.2.2).
+        Assert.Empty(server.GetDatagramsToSend());
+    }
+
+    [Fact]
+    public void ClosingEndpoint_ResendsConnectionClose_OnIncomingPacket_ButNotOtherwise()
+    {
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        (QuicClientConnection client, QuicServerConnection server) = Handshaken(cert);
+        using var _ = client;
+        using var __ = server;
+
+        client.Close();
+        IReadOnlyList<byte[]> first = client.GetDatagramsToSend();
+        Assert.Single(first);                       // genau ein Close-Paket
+        Assert.Empty(client.GetDatagramsToSend());  // ohne Anlass nicht erneut
+
+        // Ein eingehendes Paket im Closing-Zustand löst ein erneutes CONNECTION_CLOSE aus (RFC 9000 §10.2.1).
+        client.ProcessDatagram(first[0]);
+        Assert.Single(client.GetDatagramsToSend());
+    }
+
+    [Fact]
+    public void ClosingConnection_TransitionsToClosed_AfterCloseTimeout()
+    {
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        (QuicClientConnection client, QuicServerConnection server) = Handshaken(cert);
+        using var _ = client;
+        using var __ = server;
+
+        client.Close();
+        Assert.True(client.IsClosing);
+        Assert.False(client.IsClosed);
+
+        // Nach mehr als 3·PTO (in-process winzig) folgt der endgültige Closed-Zustand.
+        Thread.Sleep(400);
+        client.CheckIdleTimeout(); // treibt den Übergang
+
+        Assert.True(client.IsClosed);
+        Assert.False(client.IsClosing);
+        Assert.Empty(client.GetDatagramsToSend());
+    }
+}

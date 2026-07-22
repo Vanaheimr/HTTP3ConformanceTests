@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>org.GraphDefined.Vanaheimr.Hermod.Quic.Tls</RootNamespace>
+  </PropertyGroup>
+
+  <!-- TargetFramework, Nullable, ImplicitUsings etc. kommen aus Directory.Build.props -->
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Http3.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Quic.Core\Quic.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,94 @@
+/*
+ * Copyright (c) 2010-2026 GraphDefined GmbH <achim.friedland@graphdefined.com>
+ * This file is part of Vanaheimr Hermod <https://www.github.com/Vanaheimr/Hermod>
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#region Usings
+
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
+
+#endregion
+
+namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
+
+/// <summary>
+/// Sendeseite eines Streams (RFC 9000 §3.1): puffert zu sendende Bytes und erzeugt daraus STREAM-
+/// Frames, begrenzt durch das Flow-Control-Fenster des Peers (max_stream_data) und die maximale
+/// Frame-Größe. Verfolgt den Sende-Offset und das FIN.
+/// </summary>
+public sealed class StreamSendBuffer(ulong streamId)
+{
+    private readonly List<byte> _pending = [];
+    private ulong _sentOffset;
+    private bool _finQueued;
+    private bool _finSent;
+
+    public StreamId StreamId { get; } = new(streamId);
+
+    /// <summary>
+    /// Vom Peer gewährtes Sende-Limit (max_stream_data). Wächst über MAX_STREAM_DATA.
+    /// </summary>
+    public ulong MaxData { get; set; }
+
+    /// <summary>
+    /// Bereits in Frames ausgegebene Byte-Menge (Sende-Offset).
+    /// </summary>
+    public ulong SentOffset => _sentOffset;
+
+    /// <summary>
+    /// Es liegen noch nicht ausgegebene Daten oder ein ausstehendes FIN vor.
+    /// </summary>
+    public bool HasPending => _pending.Count > 0 || (_finQueued && !_finSent);
+
+    /// <summary>
+    /// Der Sender ist durch das Flow-Control-Fenster blockiert (Daten da, aber kein Kredit).
+    /// </summary>
+    public bool IsBlocked => _pending.Count > 0 && _sentOffset >= MaxData;
+
+    public void Write(ReadOnlySpan<byte> data) => _pending.AddRange(data.ToArray());
+
+    /// <summary>
+    /// Markiert das Stream-Ende; das nächste Frame, das die Restdaten leert, trägt das FIN.
+    /// </summary>
+    public void Finish() => _finQueued = true;
+
+    /// <summary>
+    /// Erzeugt das nächste STREAM-Frame (bis zu <paramref name="maxPayload"/> Bytes, innerhalb des
+    /// Flow-Control-Fensters) oder <c>null</c>, wenn nichts zu senden ist.
+    /// </summary>
+    public StreamFrame? NextFrame(int maxPayload)
+    {
+        if (_finSent)
+            return null;
+
+        ulong window = _sentOffset < MaxData ? MaxData - _sentOffset : 0;
+        int count = (int)Math.Min(Math.Min((ulong)_pending.Count, (ulong)maxPayload), window);
+
+        // Nur ein reines FIN-Frame (ohne Daten) senden, wenn keine Daten mehr ausstehen.
+        bool fin = _finQueued && _pending.Count == count;
+        if (count == 0 && !fin)
+            return null;
+
+        byte[] data = count > 0 ? _pending.GetRange(0, count).ToArray() : [];
+        if (count > 0)
+            _pending.RemoveRange(0, count);
+
+        var frame = new StreamFrame(StreamId.Value, _sentOffset, data, fin);
+        _sentOffset += (ulong)count;
+        if (fin)
+            _finSent = true;
+        return frame;
+    }
+}

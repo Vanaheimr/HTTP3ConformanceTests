@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>org.GraphDefined.Vanaheimr.Hermod.Quic.Core</RootNamespace>
+  </PropertyGroup>
+
+  <!-- TargetFramework, Nullable, ImplicitUsings etc. kommen aus Directory.Build.props -->
+
+</Project>

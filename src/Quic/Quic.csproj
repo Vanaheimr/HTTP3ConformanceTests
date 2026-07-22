@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>org.GraphDefined.Vanaheimr.Hermod.Quic</RootNamespace>
+  </PropertyGroup>
+
+  <!-- TargetFramework, Nullable, ImplicitUsings etc. kommen aus Directory.Build.props -->
+
+  <ItemGroup>
+    <!-- Quic.Core kommt transitiv über Quic.Tls (bewusst, kein direkter Verweis). -->
+    <ProjectReference Include="..\Quic.Tls\Quic.Tls.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Http3.Tests" />
+  </ItemGroup>
+
+</Project>
