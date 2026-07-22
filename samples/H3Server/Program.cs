@@ -50,9 +50,11 @@ bool requireRetry = args.Contains("--retry");
 // GOAWAY senden, dann (einen Austausch später) mit H3_NO_ERROR schließen: --goaway.
 bool goAwayDemo = args.Contains("--goaway");
 
-// Optional ein Ed25519- oder Ed448-Serverzertifikat (RFC 8032/8410) statt ECDSA-P-256: --ed25519 / --ed448.
+// Optional ein Ed25519-, Ed448- oder ML-DSA-Serverzertifikat statt ECDSA-P-256:
+// --ed25519 / --ed448 (RFC 8032/8410) bzw. --mldsa (FIPS 204, Post-Quantum, draft-ietf-tls-mldsa).
 bool useEd25519 = args.Contains("--ed25519");
 bool useEd448 = args.Contains("--ed448");
+bool useMLDsa = args.Contains("--mldsa");
 
 // Optional eine Named Group bevorzugen: --x448 (RFC 7748) oder --mlkem (PQ-Hybrid X25519MLKEM768).
 // Für normale Clients bleiben X25519/P-256 als Rückfall.
@@ -62,7 +64,8 @@ IReadOnlyList<NamedGroup>? preferGroups =
     : null;
 
 using var certificate =
-    useEd448 ? ServerCertificate.CreateSelfSignedEd448("localhost")
+    useMLDsa ? ServerCertificate.CreateSelfSignedMLDsa("localhost")
+    : useEd448 ? ServerCertificate.CreateSelfSignedEd448("localhost")
     : useEd25519 ? ServerCertificate.CreateSelfSignedEd25519("localhost")
     : ServerCertificate.CreateSelfSigned("localhost");
 // Prozessweiter Ticket-Store für Session Resumption (RFC 8446 §4.6.1): eine Instanz für alle Verbindungen.
@@ -162,7 +165,8 @@ while (true)
             connectHandler: HandleConnect,      // RFC 9220: WebSockets über Extended CONNECT
             enableDatagrams: true,              // RFC 9297/9221: HTTP-Datagramme
             webTransportMaxSessions: 4,         // draft-webtrans-http3: WebTransport
-            webTransportHandler: HandleWebTransport), from);
+            webTransportHandler: HandleWebTransport,
+            webTransportProtocolSelector: SelectWebTransportProtocol), from); // draft §3.3
         connections.Add(conn);
         Console.WriteLine($"Neue Verbindung von {from}");
     }
@@ -339,8 +343,20 @@ Action<WebTransportSession>? HandleWebTransport(Http3Request request)
     return session =>
     {
         webTransportSessions.Add(session);
-        Console.WriteLine($"  ✓ WebTransport-Session {session.SessionId} etabliert.");
+        Console.WriteLine($"  ✓ WebTransport-Session {session.SessionId} etabliert"
+                          + (session.NegotiatedProtocol is { } p ? $" (WT-Protocol: {p})." : "."));
+        // Keying-Material-Exporter (draft §4.7): muss byte-genau mit dem Client übereinstimmen.
+        byte[] ekm = session.ExportKeyingMaterial("demo-export", [1, 2, 3], 16);
+        Console.WriteLine($"  → Keying-Material-Export (Label \"demo-export\"): {Convert.ToHexString(ekm).ToLowerInvariant()}");
     };
+}
+
+// Protokoll-Aushandlung (draft-webtrans-http3 §3.3): wir sprechen echo-v2/echo-v1 — die Angebotsliste
+// des Clients ist nach Präferenz sortiert, also gewinnt sein bestes von uns unterstütztes Angebot.
+static string? SelectWebTransportProtocol(Http3Request request, IReadOnlyList<string> offered)
+{
+    Console.WriteLine($"  → WT-Available-Protocols: {string.Join(", ", offered)}");
+    return offered.FirstOrDefault(p => p is "echo-v2" or "echo-v1");
 }
 
 static Http3Response Handle(Http3Request request)

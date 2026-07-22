@@ -153,6 +153,53 @@ public class TlsHandshakeInProcessTests
     }
 
     [Test]
+    public void ClientAndServer_CompleteHandshake_WithMLDsaServerCertificate()
+    {
+        if (!System.Security.Cryptography.MLDsa.IsSupported)
+            Assert.Ignore("ML-DSA wird auf dieser Plattform nicht unterstützt (BCL/OS).");
+
+        using var cert = ServerCertificate.CreateSelfSignedMLDsa("localhost");
+        Assert.That(cert.SignatureScheme, Is.EqualTo(SignatureScheme.MLDsa65));
+        var tp = new byte[] { 0x0f, 0x00 };
+
+        // Insecure prüft die CertificateVerify-Signatur — hier den ML-DSA-Verifikationspfad
+        // (draft-ietf-tls-mldsa §4: pure, FIPS-204-Kontext leer) —, aber nicht die X.509-Kette.
+        var client = new TlsClientHandshake("localhost", tp,
+            certificateValidation: CertificateValidationOptions.Insecure);
+        using var server = new TlsServerHandshake(cert, tp);
+
+        RunHandshake(client, server);
+
+        Assert.That(client.ServerCertificateValid, Is.True, "Client muss die ML-DSA-CertificateVerify-Signatur akzeptieren.");
+        Assert.That(server.ClientFinishedValid, Is.True);
+        AssertMatchingSecrets(client, server);
+        client.Dispose();
+    }
+
+    [Test]
+    public void MLDsaCertificates_AllThreeParameterSets_CarryMatchingKeys()
+    {
+        if (!System.Security.Cryptography.MLDsa.IsSupported)
+            Assert.Ignore("ML-DSA wird auf dieser Plattform nicht unterstützt (BCL/OS).");
+
+        // NIST-CSOR-OIDs: id-ML-DSA-44/65/87 = 2.16.840.1.101.3.4.3.17/.18/.19.
+        foreach ((SignatureScheme scheme, string oid) in new[]
+        {
+            (SignatureScheme.MLDsa44, "2.16.840.1.101.3.4.3.17"),
+            (SignatureScheme.MLDsa65, "2.16.840.1.101.3.4.3.18"),
+            (SignatureScheme.MLDsa87, "2.16.840.1.101.3.4.3.19"),
+        })
+        {
+            using var cert = ServerCertificate.CreateSelfSignedMLDsa("localhost", scheme);
+            Assert.That(cert.SignatureScheme, Is.EqualTo(scheme));
+            Assert.That(cert.Certificate.PublicKey.Oid.Value, Is.EqualTo(oid));
+            Assert.That(cert.SignCertificateVerify([1, 2, 3]), Is.Not.Empty);
+        }
+
+        Assert.Throws<ArgumentException>(() => ServerCertificate.CreateSelfSignedMLDsa("localhost", SignatureScheme.Ed25519));
+    }
+
+    [Test]
     public void HelloRetryRequest_WhenClientOffersOnlyP256ButServerPrefersX25519()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");

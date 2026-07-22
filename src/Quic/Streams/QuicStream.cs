@@ -63,6 +63,15 @@ public sealed class QuicStream
     public void Reset(ulong errorCode) => Send.Reset(errorCode);
 
     /// <summary>
+    /// Bricht die Sendeseite ab, garantiert aber die zuverlässige Zustellung der ersten
+    /// <paramref name="reliableSize"/> bereits gesendeten Bytes (draft-ietf-quic-reliable-stream-reset §5):
+    /// der Endpoint sendet ein RESET_STREAM_AT (sofern der Peer die Extension unterstützt, sonst ein
+    /// gewöhnliches RESET_STREAM). Nützlich, wenn der Empfänger einen kritischen Präfix (z. B. den
+    /// WebTransport-Stream-Kopf) trotz Abbruch sehen muss.
+    /// </summary>
+    public void ResetAt(ulong errorCode, ulong reliableSize) => Send.ResetAt(errorCode, reliableSize);
+
+    /// <summary>
     /// Bricht das Lesen ab (RFC 9000 §2.4/§3.5): der Endpoint sendet ein STOP_SENDING mit
     /// <paramref name="errorCode"/> und bittet den Peer so um ein RESET_STREAM seiner Sendeseite.
     /// </summary>
@@ -78,6 +87,13 @@ public sealed class QuicStream
     /// Der Fehlercode aus dem RESET_STREAM des Peers, falls empfangen.
     /// </summary>
     public ulong? PeerResetErrorCode => Receive.ResetReceived ? Receive.ResetErrorCode : null;
+
+    /// <summary>
+    /// Bei einem per RESET_STREAM_AT abgebrochenen Empfangsstream die (kleinste) Reliable Size, bis zu der
+    /// der Peer die Bytes noch zuverlässig zustellt (draft-ietf-quic-reliable-stream-reset §5); <c>null</c>
+    /// bei gewöhnlichem RESET_STREAM oder gar keinem Reset.
+    /// </summary>
+    public ulong? PeerReliableSize => Receive.ReliableSize;
 
     /// <summary>
     /// Der Fehlercode aus einem empfangenen STOP_SENDING des Peers, falls empfangen (unsere Sendeseite

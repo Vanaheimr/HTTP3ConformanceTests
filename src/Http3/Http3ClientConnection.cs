@@ -373,13 +373,27 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     /// Öffnet eine WebTransport-Session (draft-webtrans-http3 §3.2): sendet ein Extended CONNECT mit
     /// <c>:protocol = webtransport</c>. Gibt die CONNECT-Stream-ID (= Session-ID) zurück; die Session
     /// selbst steht nach der 2xx-Antwort über <see cref="TryGetWebTransportSession"/> bereit.
+    /// Mit <paramref name="availableProtocols"/> (Präferenz zuerst) wird ein ALPN-artiges
+    /// Anwendungsprotokoll ausgehandelt (draft §3.3, Header <c>WT-Available-Protocols</c>); die
+    /// Server-Wahl steht danach in <see cref="WebTransportSession.NegotiatedProtocol"/>.
     /// </summary>
-    public ulong ConnectWebTransport(string authority, string path, IReadOnlyList<HeaderField>? headers = null)
+    public ulong ConnectWebTransport(string authority, string path, IReadOnlyList<HeaderField>? headers = null,
+                                     IReadOnlyList<string>? availableProtocols = null)
     {
         if (!ServerSupportsWebTransport)
             throw new InvalidOperationException("Der Server unterstützt WebTransport nicht (draft §3.1: WT_MAX_SESSIONS/Datagramme fehlen).");
+        if (availableProtocols is { Count: > 0 })
+        {
+            var combined = new List<HeaderField>(headers ?? [])
+            {
+                new(WebTransportProtocols.AvailableProtocolsHeader,
+                    WebTransportProtocols.SerializeProtocolList(availableProtocols)),
+            };
+            headers = combined;
+        }
         ulong streamId = SendExtendedConnect(authority, path, "webtransport", headers);
         _requests[streamId].IsWebTransport = true;
+        _requests[streamId].OfferedWtProtocols = availableProtocols is { Count: > 0 } ? [.. availableProtocols] : null;
         return streamId;
     }
 
@@ -403,6 +417,29 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     /// </summary>
     public int? WebTransportConnectStatus(ulong streamId)
         => _requests.TryGetValue(streamId, out RequestState? state) ? state.ConnectStatus : null;
+
+    /// <summary>
+    /// Wertet den <c>WT-Protocol</c>-Header der 2xx-Antwort aus (draft §3.3). Das Feld MUSS ignoriert
+    /// werden, wenn wir nichts angeboten haben, es mehrfach auftritt (dann wäre es kein einzelnes
+    /// SF-Item mehr), kein SF-String ist oder die Server-Wahl nicht aus unserer Angebotsliste stammt.
+    /// </summary>
+    private static string? SelectNegotiatedProtocol(RequestState state, List<HeaderField> headers)
+    {
+        if (state.OfferedWtProtocols is not { Count: > 0 } offered)
+            return null;
+        string? value = null;
+        foreach (HeaderField h in headers)
+        {
+            if (h.Name != WebTransportProtocols.ProtocolHeader)
+                continue;
+            if (value is not null)
+                return null; // mehrfach ⇒ ignorieren
+            value = h.Value;
+        }
+        if (value is null || !WebTransportProtocols.TryParseProtocol(value, out string chosen))
+            return null;
+        return offered.Contains(chosen) ? chosen : null; // MUSS aus der Angebotsliste stammen
+    }
 
     /// <summary>
     /// Liefert Status (und Header) der Extended-CONNECT-Antwort, sobald sie da ist; bei 2xx zusätzlich
@@ -733,6 +770,9 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     ulong IWebTransportHost.PeerInitialMaxStreamsBidi => _qpack.PeerWtInitialMaxStreamsBidi;
     ulong IWebTransportHost.PeerInitialMaxData => _qpack.PeerWtInitialMaxData;
 
+    byte[] IWebTransportHost.ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
+        => _quic.ExportKeyingMaterial(label, context, length); // RFC 8446 §7.5 / draft §4.7
+
     QuicStream IWebTransportHost.OpenWebTransportUniStream(ulong sessionId)
     {
         QuicStream stream = _quic.OpenUnidirectionalStream();
@@ -864,7 +904,10 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                     if (status is >= 200 and < 300 && state.IsWebTransport)
                     {
                         // WebTransport-Session etabliert (draft §3.2): CONNECT-Stream trägt fortan Capsules.
-                        var session = new WebTransportSession(state.Stream.Id.Value, this);
+                        var session = new WebTransportSession(state.Stream.Id.Value, this)
+                        {
+                            NegotiatedProtocol = SelectNegotiatedProtocol(state, headers), // draft §3.3
+                        };
                         state.WebTransportSession = session;
                         _webTransport.RegisterSession(session);
                     }
@@ -1017,6 +1060,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
         public string Method { get; init; } = "GET"; // für die Content-Length-Ausnahme (HEAD, §4.1.2)
         public bool IsConnect { get; init; }         // Extended CONNECT (RFC 8441/9220)
         public bool IsWebTransport { get; set; }     // :protocol = webtransport (draft-webtrans-http3)
+        public List<string>? OfferedWtProtocols { get; set; } // per WT-Available-Protocols angeboten (draft §3.3)
         public int? ConnectStatus { get; set; }      // Status der CONNECT-Antwort, sobald empfangen
         public Http3Tunnel? Tunnel { get; set; }     // Tunnel nach 2xx-Annahme, sonst null
         public WebTransportSession? WebTransportSession { get; set; } // WebTransport-Session (draft-webtrans-http3)

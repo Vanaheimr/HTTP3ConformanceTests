@@ -31,6 +31,14 @@ public enum StreamReceiveResult
     /// Widersprüchliche Final Size (FIN) ⇒ FINAL_SIZE_ERROR.
     /// </summary>
     FinalSizeError,
+    /// <summary>
+    /// RESET_STREAM_AT mit Reliable Size &gt; Final Size (draft §4) ⇒ FRAME_ENCODING_ERROR.
+    /// </summary>
+    FrameEncodingError,
+    /// <summary>
+    /// Ein weiteres RESET_STREAM_AT/RESET_STREAM ändert den Fehlercode (draft §5.2) ⇒ STREAM_STATE_ERROR.
+    /// </summary>
+    StreamStateError,
 }
 
 /// <summary>
@@ -44,6 +52,8 @@ public sealed class StreamReceiveBuffer
     private readonly SortedDictionary<ulong, byte[]> _fragments = new();
     private ulong _readOffset;
     private ulong? _finalSize;
+    private ulong _flowControlConsumed; // bei RESET(_AT) übernommene Final Size (Kredit-Abrechnung, entkoppelt vom Lese-Offset)
+    private ulong? _reliableSize;       // kleinste Reliable Size eines RESET_STREAM_AT (draft §5.2)
 
     /// <summary>
     /// Höchster empfangener Offset (Ende des am weitesten reichenden Fragments).
@@ -56,9 +66,18 @@ public sealed class StreamReceiveBuffer
     public ulong MaxData { get; set; } = ulong.MaxValue;
 
     /// <summary>
-    /// Offset bis zu dem der Anwendung bereits Bytes geliefert wurden.
+    /// Für die Flow-Control-Abrechnung „verbrauchter" Offset. Nach einem RESET(_AT) zählt die Final Size
+    /// vollständig als verbraucht (§4.5), auch wenn der Lese-Offset (bei RESET_STREAM_AT) noch bei der
+    /// Reliable Size verharrt, während die Anwendung die zuverlässig zugestellten Bytes abholt.
     /// </summary>
-    public ulong BytesConsumed => _readOffset;
+    public ulong BytesConsumed => Math.Max(_readOffset, _flowControlConsumed);
+
+    /// <summary>
+    /// Der Peer hat die Empfangsseite per RESET_STREAM_AT mit garantierter Teilzustellung abgebrochen; dies
+    /// ist die (kleinste) Reliable Size, bis zu der Bytes noch an die Anwendung geliefert werden (draft §5).
+    /// <c>null</c> = kein RESET_STREAM_AT.
+    /// </summary>
+    public ulong? ReliableSize => _reliableSize;
 
     /// <summary>
     /// FIN empfangen (Final Size bekannt).
@@ -145,9 +164,71 @@ public sealed class StreamReceiveBuffer
         HighestReceivedOffset = finalSize;
         // §4.5: die Final Size zählt vollständig als verbrauchter Flow-Control-Kredit — als „konsumiert"
         // verbuchen, damit die MAX_DATA-Fensterrechnung der Verbindung stimmig bleibt.
+        _flowControlConsumed = finalSize;
         _readOffset = finalSize;
         _fragments.Clear();
         return StreamReceiveResult.Ok;
+    }
+
+    /// <summary>
+    /// Verarbeitet ein empfangenes RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset §4/§5): wie
+    /// <see cref="Reset"/>, aber die ersten <paramref name="reliableSize"/> Bytes werden weiterhin an die
+    /// Anwendung geliefert. Mehrfache Frames dürfen die Reliable Size nur senken (§5.2); Erhöhungen (durch
+    /// Reordering) werden ignoriert, ein geänderter Fehlercode ist ein STREAM_STATE_ERROR.
+    /// </summary>
+    public StreamReceiveResult ResetAt(ulong errorCode, ulong finalSize, ulong reliableSize)
+    {
+        if (reliableSize > finalSize)
+            return StreamReceiveResult.FrameEncodingError; // draft §4
+        if (finalSize > MaxData)
+            return StreamReceiveResult.FlowControlError;    // §4.1: Final Size verbraucht Kredit
+        if (_finalSize is { } known && known != finalSize)
+            return StreamReceiveResult.FinalSizeError;      // §4.5: bekannte Final Size ist unveränderlich
+        if (!ResetReceived && HighestReceivedOffset > finalSize)
+            return StreamReceiveResult.FinalSizeError;      // §4.5: Daten jenseits der Final Size gesehen
+        if (ResetReceived && errorCode != ResetErrorCode)
+            return StreamReceiveResult.StreamStateError;    // draft §5.2: Fehlercode darf sich nicht ändern
+
+        if (ResetReceived)
+        {
+            // §5.2: die Reliable Size darf nur sinken; Erhöhungen (Reordering) ignorieren.
+            if (_reliableSize is { } prev && reliableSize < prev)
+            {
+                _reliableSize = reliableSize;
+                TrimAboveReliable(reliableSize);
+            }
+            return StreamReceiveResult.Ok;
+        }
+
+        ResetReceived = true;
+        ResetErrorCode = errorCode;
+        _finalSize = finalSize;
+        _reliableSize = reliableSize;
+        HighestReceivedOffset = finalSize;
+        // §4.5: die volle Final Size zählt als verbrauchter Kredit; der Lese-Offset verharrt aber bei der
+        // Reliable Size, bis die Anwendung die zuverlässig zugestellten Bytes abgeholt hat.
+        _flowControlConsumed = finalSize;
+        TrimAboveReliable(reliableSize); // Daten jenseits der Reliable Size werden nicht mehr zugestellt
+        return StreamReceiveResult.Ok;
+    }
+
+    /// <summary>
+    /// Verwirft gepufferte Fragmente jenseits der Reliable Size und kürzt ein Fragment, das die Grenze
+    /// überschreitet (draft §5.2: jenseits der Reliable Size wird nichts mehr zugestellt).
+    /// </summary>
+    private void TrimAboveReliable(ulong reliableSize)
+    {
+        foreach (ulong start in _fragments.Keys.ToArray())
+        {
+            if (start >= reliableSize)
+            {
+                _fragments.Remove(start);
+                continue;
+            }
+            byte[] data = _fragments[start];
+            if (start + (ulong)data.Length > reliableSize)
+                _fragments[start] = data[..(int)(reliableSize - start)];
+        }
     }
 
     /// <summary>
@@ -185,6 +266,14 @@ public sealed class StreamReceiveBuffer
             {
                 slice = data[(int)(_readOffset - start)..];
                 start = _readOffset;
+            }
+            // Nach RESET_STREAM_AT nichts jenseits der Reliable Size mehr puffern (draft §5.2).
+            if (_reliableSize is { } rel)
+            {
+                if (start >= rel)
+                    return StreamReceiveResult.Ok;
+                if (start + (ulong)slice.Length > rel)
+                    slice = slice[..(int)(rel - start)];
             }
             _fragments[start] = slice.ToArray();
         }

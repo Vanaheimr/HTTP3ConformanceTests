@@ -733,6 +733,17 @@ public abstract class QuicEndpoint : IDisposable
     public ulong PeerMaxDatagramFrameSize => PeerParams?.MaxDatagramFrameSizeValue ?? 0;
 
     /// <summary>
+    /// TLS-Keying-Material-Exporter der Verbindung (RFC 8446 §7.5): beide Endpunkte erhalten für
+    /// gleiches Label und gleichen Kontext identisches Schlüsselmaterial — z. B. für Channel Binding
+    /// oder den WebTransport-Exporter (draft-webtrans-http3 §4.7). Verfügbar, sobald die 1-RTT-Secrets
+    /// stehen; vorher <see cref="InvalidOperationException"/>.
+    /// </summary>
+    public byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
+        => TlsHandshake is { } tls
+            ? tls.ExportKeyingMaterial(label, context, length)
+            : throw new InvalidOperationException("Kein TLS-Handshake vorhanden.");
+
+    /// <summary>
     /// Reiht ein QUIC-DATAGRAM (RFC 9221) zum Senden ein — unzuverlässig: bei Verlust KEINE
     /// Retransmission; unter Congestion-Druck wird verzögert (§5.4). <c>false</c>, wenn der Peer keine
     /// DATAGRAM-Frames angekündigt hat (§3 MUST NOT) oder das Frame sein Limit/die MTU sprengt.
@@ -907,9 +918,10 @@ public abstract class QuicEndpoint : IDisposable
     /// </summary>
     private void CollectStreamCancellationFrames(List<Frame> frames)
     {
+        bool peerResetAt = PeerParams?.PeerSupportsResetStreamAt ?? false;
         foreach ((ulong id, QuicStream stream) in StreamMap)
         {
-            if (stream.Send.TakeResetFrame() is { } reset)
+            if (stream.Send.TakeResetFrame(peerResetAt) is { } reset)
                 frames.Add(reset);
             if (stream.Receive.TakeStopSendingErrorCode() is { } errorCode)
                 frames.Add(new StopSendingFrame(id, errorCode));
@@ -924,8 +936,10 @@ public abstract class QuicEndpoint : IDisposable
         {
             // RFC 9000 §19.4: nach einem RESET_STREAM keine STREAM-Frames dieses Streams mehr
             // (re)transmittieren; §3.5: ein STOP_SENDING ist überflüssig, sobald der Peer schon
-            // zurückgesetzt hat.
-            if (frame is StreamFrame sf && StreamMap.TryGetValue(sf.StreamId, out QuicStream? s) && s.Send.IsReset)
+            // zurückgesetzt hat. Ausnahme: nach RESET_STREAM_AT müssen Daten bis zur Reliable Size
+            // weiter retransmittiert werden (draft-ietf-quic-reliable-stream-reset §5).
+            if (frame is StreamFrame sf && StreamMap.TryGetValue(sf.StreamId, out QuicStream? s) && s.Send.IsReset &&
+                !(s.Send.IsResetAt && sf.Offset < s.Send.ReliableSize))
                 continue;
             if (frame is StopSendingFrame ss && StreamMap.TryGetValue(ss.StreamId, out QuicStream? r) && r.Receive.ResetReceived)
                 continue;
@@ -942,7 +956,7 @@ public abstract class QuicEndpoint : IDisposable
         _pacer.OnBytesSent(size);
         _idle.OnAckElicitingPacketSent(_clock.Elapsed.Ticks); // RFC 9000 §10.1
         // RESET_STREAM/STOP_SENDING müssen zuverlässig ankommen (RFC 9000 §19.4/§3.5) ⇒ mitverfolgen.
-        List<Frame> retransmittable = frames.Where(f => f is CryptoFrame or StreamFrame or ResetStreamFrame or StopSendingFrame).ToList();
+        List<Frame> retransmittable = frames.Where(f => f is CryptoFrame or StreamFrame or ResetStreamFrame or ResetStreamAtFrame or StopSendingFrame).ToList();
         _recovery.OnPacketSent(level, new SentPacket
         {
             PacketNumber = packetNumber,
@@ -1256,6 +1270,9 @@ public abstract class QuicEndpoint : IDisposable
                 case ResetStreamFrame rs:
                     HandleResetStream(rs);
                     break;
+                case ResetStreamAtFrame rsa:
+                    HandleResetStreamAt(rsa);
+                    break;
                 case StopSendingFrame ss:
                     HandleStopSending(ss);
                     break;
@@ -1424,6 +1441,45 @@ public abstract class QuicEndpoint : IDisposable
                 break;
             case StreamReceiveResult.FinalSizeError:     // §4.5: Final Size widersprüchlich
                 CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size in RESET_STREAM");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Verarbeitet ein RESET_STREAM_AT des Peers (draft-ietf-quic-reliable-stream-reset §4/§5): wie
+    /// <see cref="HandleResetStream"/>, liefert aber die ersten Reliable-Size-Bytes noch an die Anwendung.
+    /// </summary>
+    private void HandleResetStreamAt(ResetStreamAtFrame rsa)
+    {
+        var id = new StreamId(rsa.StreamId);
+
+        // §19.4 (analog): RESET_STREAM_AT auf einer reinen Sendeseite bzw. einem nie geöffneten,
+        // lokal initiierten Stream ⇒ STREAM_STATE_ERROR.
+        if ((id.IsUnidirectional && LocallyInitiated(id)) ||
+            (LocallyInitiated(id) && !StreamMap.ContainsKey(rsa.StreamId)))
+        {
+            CloseWithTransportError(TransportError.StreamStateError, "RESET_STREAM_AT on send-only or uncreated stream");
+            return;
+        }
+        if (!LocallyInitiated(id) && id.Index >= StreamLimitFor(id))
+        {
+            CloseWithTransportError(TransportError.StreamLimitError, "stream limit exceeded");
+            return;
+        }
+
+        switch (GetOrCreateStream(id).Receive.ResetAt(rsa.ApplicationErrorCode, rsa.FinalSize, rsa.ReliableSize))
+        {
+            case StreamReceiveResult.FrameEncodingError: // draft §4: Reliable Size > Final Size
+                CloseWithTransportError(TransportError.FrameEncodingError, "RESET_STREAM_AT reliable size exceeds final size");
+                break;
+            case StreamReceiveResult.FlowControlError:   // §4.1: Final Size über dem gewährten Fenster
+                CloseWithTransportError(TransportError.FlowControlError, "reset final size exceeds flow control");
+                break;
+            case StreamReceiveResult.FinalSizeError:     // §4.5: Final Size widersprüchlich
+                CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size in RESET_STREAM_AT");
+                break;
+            case StreamReceiveResult.StreamStateError:   // draft §5.2: Fehlercode geändert
+                CloseWithTransportError(TransportError.StreamStateError, "RESET_STREAM_AT changed error code");
                 break;
         }
     }

@@ -48,6 +48,7 @@ public sealed class TransportParameters
     private const ulong InitialSourceConnectionId = 0x0f;
     private const ulong MaxDatagramFrameSize = 0x20; // RFC 9221 §3
     private const ulong RetrySourceConnectionId = 0x10;
+    private const ulong ResetStreamAt = 0x1d; // draft-ietf-quic-reliable-stream-reset §3 (provisorisch)
 
     /// <summary>
     /// Idle-Timeout in Millisekunden (0 = deaktiviert).
@@ -93,6 +94,19 @@ public sealed class TransportParameters
     public ulong MaxDatagramFrameSizeValue { get; set; }
 
     /// <summary>
+    /// reset_stream_at (draft-ietf-quic-reliable-stream-reset §3): kündigt an, dass wir RESET_STREAM_AT-
+    /// Frames zu EMPFANGEN bereit sind (leerer Wert). Standard <c>true</c> — die Extension ist harmlos und
+    /// ermöglicht Peers die zuverlässige Teilzustellung (z. B. den WebTransport-Stream-Präfix).
+    /// </summary>
+    public bool ResetStreamAtSupported { get; set; } = true;
+
+    /// <summary>
+    /// Der Peer hat reset_stream_at angekündigt — wir DÜRFEN ihm RESET_STREAM_AT-Frames senden. Wird beim
+    /// Parsen der Peer-Parameter gesetzt.
+    /// </summary>
+    public bool PeerSupportsResetStreamAt { get; private set; }
+
+    /// <summary>
     /// Serialisiert die Parameter zu den opaken Extension-Bytes.
     /// </summary>
     public byte[] Encode()
@@ -113,6 +127,8 @@ public sealed class TransportParameters
             WriteInteger(ref writer, ActiveConnectionIdLimit, ActiveConnectionIdLimitValue);
             if (MaxDatagramFrameSizeValue > 0)
                 WriteInteger(ref writer, MaxDatagramFrameSize, MaxDatagramFrameSizeValue); // RFC 9221 §3
+            if (ResetStreamAtSupported)
+                WriteBytes(ref writer, ResetStreamAt, []); // draft §3: leerer Wert signalisiert Empfangsbereitschaft
             WriteBytes(ref writer, InitialSourceConnectionId, InitialSourceConnectionIdValue.Span);
             if (OriginalDestinationConnectionIdValue is { } odcid)
                 WriteBytes(ref writer, OriginalDestinationConnectionId, odcid.Span);
@@ -161,6 +177,11 @@ public sealed class TransportParameters
                 case InitialMaxStreamsUni: result.InitialMaxStreamsUniValue = ReadVarIntValue(value); break;
                 case ActiveConnectionIdLimit: result.ActiveConnectionIdLimitValue = ReadVarIntValue(value); break;
                 case MaxDatagramFrameSize: result.MaxDatagramFrameSizeValue = ReadVarIntValue(value); break;
+                case ResetStreamAt:
+                    if (value.Length != 0)
+                        return false; // draft §3: nicht-leerer Wert ⇒ TRANSPORT_PARAMETER_ERROR
+                    result.PeerSupportsResetStreamAt = true;
+                    break;
                 case InitialSourceConnectionId: result.InitialSourceConnectionIdValue = new ConnectionId(value); break;
                 case OriginalDestinationConnectionId: result.OriginalDestinationConnectionIdValue = new ConnectionId(value); break;
                 case RetrySourceConnectionId: result.RetrySourceConnectionIdValue = new ConnectionId(value); break;

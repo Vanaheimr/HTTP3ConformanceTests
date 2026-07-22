@@ -144,6 +144,30 @@ public static class ServerCertificateValidator
                     leaf.PublicKey.ExportSubjectPublicKeyInfo(), content, signature);
             }
 
+            case SignatureScheme.MLDsa44:
+            case SignatureScheme.MLDsa65:
+            case SignatureScheme.MLDsa87:
+            {
+                // ML-DSA (FIPS 204, draft-ietf-tls-mldsa §4): pure Signatur, FIPS-204-Kontext leer.
+                // Der Schlüssel kommt als id-ML-DSA-44/65/87-SPKI aus dem Leaf; die Parameterstärke
+                // MUSS zum SignatureScheme passen (§4: „subject public key MUST … corresponding").
+                // SYSLIB5006: X509-PQC-Integration in .NET 10 noch „experimentell" — punktuell unterdrückt.
+#pragma warning disable SYSLIB5006
+                using MLDsa? mldsa = leaf.GetMLDsaPublicKey();
+#pragma warning restore SYSLIB5006
+                if (mldsa is null)
+                    return false;
+                MLDsaAlgorithm expected = scheme switch
+                {
+                    SignatureScheme.MLDsa44 => MLDsaAlgorithm.MLDsa44,
+                    SignatureScheme.MLDsa65 => MLDsaAlgorithm.MLDsa65,
+                    _ => MLDsaAlgorithm.MLDsa87,
+                };
+                if (mldsa.Algorithm != expected)
+                    return false;
+                return mldsa.VerifyData(content.AsSpan(), signature, context: default);
+            }
+
             default:
                 // rsa_pkcs1_* sind in TLS 1.3 für CertificateVerify unzulässig; alles Übrige nicht unterstützt.
                 throw new CertificateValidationException($"Signaturverfahren {scheme} wird nicht unterstützt.");

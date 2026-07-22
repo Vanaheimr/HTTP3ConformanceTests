@@ -118,6 +118,12 @@ public static class FrameParser
                     frames.Add(stopSending!);
                     break;
 
+                case FrameType.ResetStreamAt: // draft-ietf-quic-reliable-stream-reset §4
+                    if (!ResetStreamAtFrame.TryReadBody(ref reader, out ResetStreamAtFrame? resetStreamAt))
+                        return FrameParseResult.EncodingError;
+                    frames.Add(resetStreamAt!);
+                    break;
+
                 case FrameType.DatagramNoLength:
                 case FrameType.DatagramWithLength: // RFC 9221 §4
                     if (!DatagramFrame.TryReadBody(ref reader, hasLength: type == FrameType.DatagramWithLength, out DatagramFrame? datagram))

@@ -95,6 +95,35 @@ public sealed class ServerCertificate : IDisposable
     }
 
     /// <summary>
+    /// Erzeugt ein frisches selbstsigniertes <b>ML-DSA</b>-Zertifikat (FIPS 204, Post-Quantum) für
+    /// <paramref name="commonName"/>. Schlüssel, Zertifikatsbau und Signatur kommen komplett aus der
+    /// .NET-10-BCL (<see cref="MLDsa"/> + <see cref="CertificateRequest"/>); der TLS-Handshake nutzt
+    /// das zugehörige SignatureScheme mldsa44/65/87 (draft-ietf-tls-mldsa §3, FIPS-204-Kontext leer).
+    /// </summary>
+    public static ServerCertificate CreateSelfSignedMLDsa(
+        string commonName = "localhost", SignatureScheme scheme = SignatureScheme.MLDsa65)
+    {
+        MLDsaAlgorithm algorithm = scheme switch
+        {
+            SignatureScheme.MLDsa44 => MLDsaAlgorithm.MLDsa44,
+            SignatureScheme.MLDsa65 => MLDsaAlgorithm.MLDsa65,
+            SignatureScheme.MLDsa87 => MLDsaAlgorithm.MLDsa87,
+            _ => throw new ArgumentException("Erwartet wird MLDsa44, MLDsa65 oder MLDsa87.", nameof(scheme)),
+        };
+        MLDsa key = MLDsa.GenerateKey(algorithm);
+        // SYSLIB5006: die X509-PQC-Integration (CertificateRequest mit MLDsa) ist in .NET 10 noch als
+        // „experimentell" markiert — die Signatur-APIs selbst sind stabil; bewusst punktuell unterdrückt.
+#pragma warning disable SYSLIB5006
+        var request = new CertificateRequest($"CN={commonName}", key);
+#pragma warning restore SYSLIB5006
+        AddExtensions(request, commonName);
+
+        X509Certificate2 cert = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(1));
+        return new ServerCertificate(cert, new MLDsaSigner(key, scheme));
+    }
+
+    /// <summary>
     /// Baut das selbstsignierte Zertifikat über einen <see cref="X509SignatureGenerator"/> (für Schlüsseltypen,
     /// die die BCL nicht nativ kennt — Ed25519/Ed448). SAN + BasicConstraints wie bei den ECDSA-Zertifikaten.
     /// </summary>
@@ -163,6 +192,21 @@ public sealed class ServerCertificate : IDisposable
         public SignatureScheme Scheme => SignatureScheme.Ed448;
         public byte[] Sign(ReadOnlySpan<byte> content) => ed.Sign(content);
         public void Dispose() { }
+    }
+
+    private sealed class MLDsaSigner(MLDsa key, SignatureScheme scheme) : ICertificateSigner
+    {
+        public SignatureScheme Scheme => scheme;
+
+        // draft-ietf-tls-mldsa §4: pure ML-DSA (kein Vor-Hash), FIPS-204-Kontextparameter MUSS leer sein.
+        public byte[] Sign(ReadOnlySpan<byte> content)
+        {
+            byte[] signature = new byte[key.Algorithm.SignatureSizeInBytes];
+            key.SignData(content, signature, context: default);
+            return signature;
+        }
+
+        public void Dispose() => key.Dispose();
     }
 
     /// <summary>

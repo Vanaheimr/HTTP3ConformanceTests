@@ -94,6 +94,22 @@ public enum SignatureScheme : ushort
     RsaPssRsaeSha512 = 0x0806,
     RsaPkcs1Sha256 = 0x0401,
     RsaPkcs1Sha384 = 0x0501,
+
+    /// <summary>
+    /// ML-DSA-44 (FIPS 204, draft-ietf-tls-mldsa §3): Post-Quantum-Signatur, pure (kein Vor-Hash),
+    /// FIPS-204-Kontextparameter MUSS leer sein.
+    /// </summary>
+    MLDsa44 = 0x0904,
+
+    /// <summary>
+    /// ML-DSA-65 (FIPS 204, draft-ietf-tls-mldsa §3).
+    /// </summary>
+    MLDsa65 = 0x0905,
+
+    /// <summary>
+    /// ML-DSA-87 (FIPS 204, draft-ietf-tls-mldsa §3).
+    /// </summary>
+    MLDsa87 = 0x0906,
 }
 
 /// <summary>

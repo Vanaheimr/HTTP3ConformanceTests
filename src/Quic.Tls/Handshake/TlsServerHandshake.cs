@@ -49,6 +49,7 @@ public sealed class TlsServerHandshake : ITlsHandshake
     private byte[] _clientHello1 = [];
     private NamedGroup _requestedGroup;
     private byte[] _transcriptThroughServerFinished = [];
+    private byte[]? _exporterMasterSecret; // exporter_master_secret (RFC 8446 §7.1) für §7.5-Exporte
 
     private readonly IReadOnlyList<CipherSuite> _preferredCipherSuites;
     private CipherSuite _cipherSuite = CipherSuite.Aes128GcmSha256;
@@ -100,6 +101,15 @@ public sealed class TlsServerHandshake : ITlsHandshake
     public byte[]? PeerQuicTransportParameters { get; private set; }
     public bool ClientFinishedValid { get; private set; }
     public bool IsComplete => _state == State.Complete;
+
+    /// <summary>
+    /// TLS-Keying-Material-Exporter (RFC 8446 §7.5) auf Basis des <c>exporter_master_secret</c>;
+    /// verfügbar, sobald die Application Secrets abgeleitet sind (mit dem Server-Finished).
+    /// </summary>
+    public byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
+        => _exporterMasterSecret is { } secret && _ks is { } ks
+            ? ks.ExportKeyingMaterial(secret, label, context, length)
+            : throw new InvalidOperationException("Keying-Material-Export erst nach dem Server-Finished möglich (RFC 8446 §7.5).");
 
     /// <summary>
     /// Ob ein HelloRetryRequest gesendet wurde (Diagnose/Test).
@@ -316,6 +326,8 @@ public sealed class TlsServerHandshake : ITlsHandshake
 
         _transcriptThroughServerFinished = _transcript.CurrentHash();
         ApplicationSecrets = _ks.DeriveApplicationSecrets(HandshakeSecrets.HandshakeSecret, _transcriptThroughServerFinished);
+        // exporter_master_secret (RFC 8446 §7.1) über CH…server-Finished — für §7.5-Keying-Material-Exporte.
+        _exporterMasterSecret = _ks.ExporterMasterSecret(ApplicationSecrets.MasterSecret, _transcriptThroughServerFinished);
         _state = State.WaitClientFinished;
     }
 

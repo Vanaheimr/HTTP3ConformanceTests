@@ -61,5 +61,11 @@ public static class FrameType
     public const ulong ConnectionCloseApp = 0x1d;
     public const ulong HandshakeDone = 0x1e;
 
+    /// <summary>
+    /// RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset §4): RESET_STREAM mit garantierter
+    /// Teilzustellung bis zu einer Reliable Size.
+    /// </summary>
+    public const ulong ResetStreamAt = 0x24;
+
     public static bool IsStream(ulong type) => type is >= StreamBase and <= 0x0f;
 }

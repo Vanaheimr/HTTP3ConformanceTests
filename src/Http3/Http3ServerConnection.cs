@@ -50,6 +50,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     private readonly WebTransportManager _webTransport = new(weAreClient: false);
     private readonly ulong _wtMaxSessions;   // draft-webtrans-http3 §9.2 (0 = WebTransport aus)
     private readonly Func<Http3Request, Action<WebTransportSession>?>? _webTransportHandler;
+    private readonly Func<Http3Request, IReadOnlyList<string>, string?>? _webTransportProtocolSelector;
     private int _wtSessionCount;
 
     /// <param name="qpackMaxTableCapacity">
@@ -68,6 +69,12 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     /// „websocket") über Annahme (2xx + <see cref="Http3ConnectResult.OnTunnel"/>) oder Ablehnung.
     /// Unbekannte :protocol-Werte SOLLEN mit 501 beantwortet werden (RFC 9220 §3).
     /// </param>
+    /// <param name="webTransportProtocolSelector">
+    /// Optionale ALPN-artige Protokollwahl je WebTransport-Session (draft-webtrans-http3 §3.3): erhält
+    /// den Request und die per <c>WT-Available-Protocols</c> angebotenen Protokolle (Präferenz zuerst)
+    /// und wählt EINES davon (die 2xx-Antwort trägt es als <c>WT-Protocol</c>) oder <c>null</c> (kein
+    /// Header). Eine Wahl außerhalb der Angebotsliste wird verworfen (draft-MUST).
+    /// </param>
     public Http3ServerConnection(
         ServerCertificate certificate,
         Func<Http3Request, Http3Response> handler,
@@ -82,11 +89,13 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         Func<Http3Request, Http3ConnectResult>? connectHandler = null,
         bool enableDatagrams = false,
         ulong webTransportMaxSessions = 0,
-        Func<Http3Request, Action<WebTransportSession>?>? webTransportHandler = null)
+        Func<Http3Request, Action<WebTransportSession>?>? webTransportHandler = null,
+        Func<Http3Request, IReadOnlyList<string>, string?>? webTransportProtocolSelector = null)
     {
         _connectHandler = connectHandler;
         _wtMaxSessions = webTransportMaxSessions;
         _webTransportHandler = webTransportHandler;
+        _webTransportProtocolSelector = webTransportProtocolSelector;
         // WebTransport setzt Extended CONNECT + HTTP/3-Datagramme voraus (draft §3.1) ⇒ beides mit aktivieren.
         if (webTransportMaxSessions > 0)
             enableDatagrams = true;
@@ -223,6 +232,9 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     ulong IWebTransportHost.PeerInitialMaxStreamsUni => _qpack.PeerWtInitialMaxStreamsUni;
     ulong IWebTransportHost.PeerInitialMaxStreamsBidi => _qpack.PeerWtInitialMaxStreamsBidi;
     ulong IWebTransportHost.PeerInitialMaxData => _qpack.PeerWtInitialMaxData;
+
+    byte[] IWebTransportHost.ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
+        => _quic.ExportKeyingMaterial(label, context, length); // RFC 8446 §7.5 / draft §4.7
 
     QuicStream IWebTransportHost.OpenWebTransportUniStream(ulong sessionId)
     {
@@ -881,9 +893,14 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             return true;
         }
 
+        // Protokoll-Aushandlung (draft §3.3): angebotene Protokolle parsen und ggf. eines wählen.
+        string? negotiated = NegotiateWebTransportProtocol(state.Request!);
+
         // 2xx senden (KEIN FIN — der CONNECT-Stream trägt fortan Capsules); Session anlegen.
-        SendHeadersOnly(state.Stream, 200);
-        var session = new WebTransportSession(state.Stream.Id.Value, this);
+        SendHeadersOnly(state.Stream, 200,
+            negotiated is null ? null : new HeaderField(WebTransportProtocols.ProtocolHeader,
+                                                        WebTransportProtocols.SerializeProtocol(negotiated)));
+        var session = new WebTransportSession(state.Stream.Id.Value, this) { NegotiatedProtocol = negotiated };
         state.WebTransportSession = session;
         _webTransport.RegisterSession(session);
         _wtSessionCount++;
@@ -892,9 +909,33 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         return true;
     }
 
-    private void SendHeadersOnly(QuicStream stream, int status)
-        => stream.Write(Http3Frames.Build(Http3FrameType.Headers,
-            _qpack.EncodeHeaders(stream.Id.Value, [new HeaderField(":status", status.ToString())])));
+    /// <summary>
+    /// Wertet <c>WT-Available-Protocols</c> des CONNECT-Requests aus und lässt den Selector wählen
+    /// (draft §3.3). Mehrere Header-Instanzen werden per Komma zusammengefügt (SF-Lists dürfen über
+    /// mehrere Feldzeilen verteilt sein); ein ungültiges Feld wird KOMPLETT ignoriert (MUST), eine
+    /// Selector-Wahl außerhalb der Angebotsliste verworfen (MUST include a single choice from the list).
+    /// </summary>
+    private string? NegotiateWebTransportProtocol(Http3Request request)
+    {
+        if (_webTransportProtocolSelector is null)
+            return null;
+        string? fieldValue = null;
+        foreach (HeaderField h in request.AdditionalHeaders)
+            if (h.Name == WebTransportProtocols.AvailableProtocolsHeader)
+                fieldValue = fieldValue is null ? h.Value : fieldValue + "," + h.Value;
+        if (fieldValue is null || !WebTransportProtocols.TryParseProtocolList(fieldValue, out List<string> offered))
+            return null;
+        string? chosen = _webTransportProtocolSelector(request, offered);
+        return chosen is not null && offered.Contains(chosen) ? chosen : null;
+    }
+
+    private void SendHeadersOnly(QuicStream stream, int status, HeaderField? extra = null)
+    {
+        var fields = new List<HeaderField> { new(":status", status.ToString()) };
+        if (extra is { } field)
+            fields.Add(field);
+        stream.Write(Http3Frames.Build(Http3FrameType.Headers, _qpack.EncodeHeaders(stream.Id.Value, fields)));
+    }
 
     /// <summary>
     /// Behandelt einen malformed Request (RFC 9114 §4.1.2): Stream-Fehler H3_MESSAGE_ERROR — der

@@ -55,6 +55,10 @@ public sealed class ClientHelloOptions
         SignatureScheme.RsaPssRsaeSha512,
         SignatureScheme.EcdsaSecp384r1Sha384,
         SignatureScheme.RsaPkcs1Sha256,
+        // Post-Quantum (draft-ietf-tls-mldsa): wir VERIFIZIEREN ML-DSA-signierte CertificateVerify.
+        SignatureScheme.MLDsa65,
+        SignatureScheme.MLDsa44,
+        SignatureScheme.MLDsa87,
     ];
 
     /// <summary>

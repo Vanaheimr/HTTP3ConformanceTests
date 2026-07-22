@@ -72,13 +72,18 @@ src/
     Recovery/            # RTT, Loss Detection, PTO, NewReno, Pacer (RFC 9002)
   Http3.Qpack/           # QPACK (RFC 9204): Static Table, Huffman (RFC 7541 App. B, generiert),
                          # statischer + dynamischer Encoder/Decoder
-  Http3/                 # HTTP/3 (RFC 9114) + öffentliche API
+  Http3/                 # HTTP/3 (RFC 9114) + Extensions + öffentliche API
     Http3ClientConnection.cs / Http3ServerConnection.cs
+    Http3Client.cs / Http3Server.cs   # async API: Task-Fassaden mit Socket + Hintergrund-Pump
     Http3Frame.cs / Http3Constants.cs / Http3Message.cs   # Frames, Fehlercodes, Request/Response
     Http3Qpack.cs        # QPACK-Anbindung + Uni-Stream-/Control-Stream-Zustandsmaschine
     Http3MessageValidator.cs  # Malformed-Erkennung (§4.1.2/§4.2/§4.3)
+    Http3Priority.cs     # RFC 9218 (priority-Header/PRIORITY_UPDATE)
+    Http3Tunnel.cs       # Extended-CONNECT-Tunnel (RFC 8441/9220)
+    WebSocket/           # RFC-6455-Framing (Kopien aus Hermod.HTTP2, nur Namespace getauscht)
+    WebTransport/        # WebTransport über HTTP/3 (draft-13): Session/Streams/Capsules/Manager
 tests/
-  Http3.Tests/           # 315 Tests, u. a. mit RFC-Testvektoren und „bösen" Roh-QUIC-Peers
+  Http3.Tests/           # 378 NUnit-Tests, u. a. mit RFC-Testvektoren und „bösen" Roh-QUIC-Peers
 samples/
   H3Get/                 # HTTP/3-Client-CLI (GET/POST, Cancel, GOAWAY, 0-RTT, … — s. README)
   H3Server/              # Demo-Server über UDP (CID-Demux, Retry, Stateless Reset, GOAWAY, …)
@@ -92,7 +97,7 @@ HTTP/3-Schicht. Projekt-/Assemblynamen bleiben die kurzen. Usings in #region Usi
 
 ## Phasen
 
-**Status-Legende:** ✅ fertig · 🔶 teilweise · ⬜ offen. Stand: 346 Tests grün, Meilensteine M1–M3
+**Status-Legende:** ✅ fertig · 🔶 teilweise · ⬜ offen. Stand: 378 Tests grün, Meilensteine M1–M3
 erreicht (M1: Live-Handshake gegen cloudflare-quic.com · M2: echtes `GET` → Status 200 + 126 KB HTML ·
 M3: eigener HTTP/3-Server, `H3Get`-Client holt Status 200 über echtes localhost-UDP).
 
@@ -268,11 +273,45 @@ Bewusst offen bleiben nur noch: Server-Push (MAY), klassisches CONNECT-Proxying.
     SETTINGS_WT_INITIAL_MAX_* + proaktives Nachführen; aktiv nur bei WT_MAX_SESSIONS > 1 (§5.1).
   - **Session-Ende** (§6): WT_CLOSE_SESSION-Capsule (0x2843, 32-Bit-Code + UTF-8-Grund) + FIN; sauberes
     FIN = Code 0; alle zugehörigen Streams mit WT_SESSION_GONE abgebrochen.
+  - **Protokoll-Aushandlung** (§3.3, ALPN-artig): Client bietet per `WT-Available-Protocols`
+    (Structured-Fields-List aus Strings, RFC 9651, Präferenz zuerst) an; der Server wählt per
+    `WT-Protocol` (SF-Item-String) in der 2xx-Antwort GENAU eines davon. Nicht-String-Werte machen
+    das GESAMTE Feld ungültig, Parameter werden ignoriert, eine Wahl außerhalb der Angebotsliste wird
+    beidseitig verworfen (alle §3.3-MUSTs). API: `ConnectWebTransport(…, availableProtocols:)`,
+    Server-ctor `webTransportProtocolSelector`, `WebTransportSession.NegotiatedProtocol`;
+    SF-Kodierung in `WebTransportProtocols` (eigener strikter RFC-9651-Parser für List/Item/String
+    inkl. Parameter-Überlesen aller Bare-Item-Typen).
+  - **Keying-Material-Exporter** (§4.7): TLS-Exporter (RFC 8446 §7.5) über das neu abgeleitete
+    `exporter_master_secret` (§7.1, gegen RFC 8448 verifiziert) — Kette KeySchedule →
+    ITlsHandshake/beide Handshakes → `QuicEndpoint.ExportKeyingMaterial` →
+    `WebTransportSession.ExportKeyingMaterial` (Label fest `EXPORTER-WebTransport`, Kontext =
+    Session-ID(64) ‖ App-Label(1–255) ‖ App-Kontext(0–255) ⇒ getrenntes Material je Session,
+    identisches je Session-Ende).
   - 7 Tests (Error-Mapping, Capsule-Reader, Support-Gating, Session/404, Datagramm+uni+bidi-Echo
-    end-to-end, Close mit Code/Grund, Session-Limit). **Live über UDP:** `H3Get --webtransport` gegen
-    `H3Server` — Session, Datagramm-Echo, uni-/bidi-Stream (Echo), sauberes Ende; alle anderen
-    Sample-Modi + Cloudflare regressionsfrei. Deferred: RESET_STREAM_AT (eigene Extension),
-    WT-Available-Protocols-Negotiation, Keying-Material-Exporter.
+    end-to-end, Close mit Code/Grund, Session-Limit) + 7 Tests Protokoll-Aushandlung (SF-Kodierung/
+    -Ablehnung, Ende-zu-Ende-Wahl, Out-of-List-Guard, ohne Angebot) + 5 Tests Exporter (RFC-8448-
+    Vektor, Determinismus/Label-Kontext-Trennung, QUIC-Ende-zu-Ende, vor Handshake, WT-Sessions).
+    **Live über UDP:** `H3Get --webtransport` gegen `H3Server` — Session, Datagramm-Echo,
+    uni-/bidi-Stream (Echo), sauberes Ende, WT-Protocol `echo-v2` aus `echo-v3, echo-v2, echo-v1`
+    ausgehandelt, Keying-Material-Export in beiden Prozessen byte-identisch; alle anderen
+    Sample-Modi + Cloudflare regressionsfrei. **Damit ist draft-webtrans-http3-13 KOMPLETT.**
+- ✅ **RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset-08)** — Stream-Reset mit garantierter
+  Teilzustellung (die Grundlage dafür, dass der WebTransport-Stream-Präfix trotz Reset ankommt):
+  - **Transport-Parameter** `reset_stream_at` (0x1d, leerer Wert): kündigt Empfangsbereitschaft an
+    (Standard aktiv); nicht-leerer Wert ⇒ TRANSPORT_PARAMETER_ERROR. `PeerSupportsResetStreamAt`
+    steuert, ob wir dem Peer AT-Frames senden dürfen.
+  - **Frame** RESET_STREAM_AT (Typ 0x24): wie RESET_STREAM plus Reliable Size. Reliable Size > Final
+    Size ⇒ FRAME_ENCODING_ERROR.
+  - **Empfangsseite:** liefert die ersten Reliable-Size-Bytes weiter an die Anwendung (Lese-Offset
+    entkoppelt von der Flow-Control-Abrechnung, die die volle Final Size verbucht); spätere Frames
+    dürfen die Reliable Size nur senken (§5.2, Erhöhungen aus Reordering werden ignoriert), ein
+    geänderter Fehlercode ⇒ STREAM_STATE_ERROR.
+  - **Sendeseite:** `QuicStream.ResetAt(code, reliableSize)` garantiert bereits gesendete Bytes
+    (Reliable Size auf den Sende-Offset begrenzt); STREAM-Frames unterhalb der Reliable Size werden
+    bei Verlust weiter retransmittiert; ohne Peer-Unterstützung degradiert der Abbruch zu RESET_STREAM.
+  - 13 Tests (Frame-Roundtrip/Truncation, TP-Kodierung/Ablehnung, Empfangs-Teilzustellung/Senkung/
+    Fehlercode-Wechsel/Spät-Frame-Kappung, Sende-Emission/Degradierung/Clamping, Ende-zu-Ende über
+    echte QUIC-Frames). **Live über UDP:** Cloudflare akzeptiert den TP 0x1d (Handshake + GET 200).
 - ✅ **HTTP-Datagramme (RFC 9297) über QUIC-DATAGRAM (RFC 9221)** — die Grundlage von MASQUE/WebTransport:
   - **QUIC-Schicht (RFC 9221):** Transport-Parameter `max_datagram_frame_size` (0x20, senden/parsen),
     `DatagramFrame` (Typ 0x30 ohne / 0x31 mit Length), Emission im 1-RTT-Sendepfad (unfragmentierbar
@@ -426,8 +465,18 @@ Bewusst offen bleiben nur noch: Server-Push (MAY), klassisches CONNECT-Proxying.
   HTML über echtes localhost-UDP; zusätzlich In-Process-Test (Client↔Server, beide from scratch).
   ✅ Interop-Bausteine: **X25519** (BouncyCastle, `IKeyExchange`) und **HelloRetryRequest** (Client +
   Server) implementiert. Client bietet X25519+P-256 an; Server wählt aus den Key Shares bzw. sendet HRR.
-  Live-Beweis: gegen cloudflare-quic.com wird X25519 ausgehandelt. ⬜ Direkter Test mit `curl --http3`
-  steht aus (lokales curl ist ein Schannel-Build ohne HTTP/3-Backend).
+  Live-Beweis: gegen cloudflare-quic.com wird X25519 ausgehandelt.
+- ✅ **`curl --http3`-Interop (Server-Seite)** — gegen ZWEI unabhängige fremde HTTP/3-Stacks:
+  - **Windows:** offizielles curl-8.21.0-Paket (curl.se, **ngtcp2 1.24 + nghttp3 1.17 + LibreSSL 4.3.2**)
+    → `curl --http3-only -k https://127.0.0.1:4433/` gegen `H3Server`: Handshake, GET 200 (HTML),
+    POST /echo (Rumpf byte-genau zurück), GET /big (300 000 B in ~22 ms), GET /hints (**103 Early
+    Hints + finale 200 + Trailer `checksum` werden von curl angezeigt**), Connection-Reuse.
+  - **WSL (Debian 13):** Distro-curl 8.14.1 mit **OpenSSL-3.5-QUIC** (curls openssl-quic-Backend,
+    kein ngtcp2!) + nghttp3 → dieselben Tests über die WSL2-NAT-Grenze (Host-IP aus `ip route`):
+    GET 200, POST-Echo, 300 000 B in ~38 ms, 103+Trailer; saubere Closes (Fehlercode 0).
+  - Damit ist die Server-Seite gegen ngtcp2/LibreSSL, OpenSSL-QUIC UND (Client-Seite) Cloudflares
+    quiche interop-bestätigt. (Das lokale System-curl ist ein Schannel-Build ohne HTTP/3 — das
+    HTTP/3-fähige curl liegt als entpacktes Paket im Session-Scratchpad; in WSL ist es vorinstalliert.)
 
 ### 🔶 Phase 8 — Robustheit & Server-Vollständigkeit
 - ✅ **Version Negotiation** (RFC 9000 §6): Server sendet ein VN-Paket bei nicht unterstützter Version
@@ -518,12 +567,27 @@ Bewusst offen bleiben nur noch: Server-Push (MAY), klassisches CONNECT-Proxying.
 - Grease: reservierte Frame-/Stream-Typen der Gegenseite tolerieren.
 
 ### 🔶 Phase 9 — Performance & Nice-to-have (offenes Ende)
-*(0-RTT und die PQ-/Krypto-Kür sind hier historisch einsortiert und längst ✅; wirklich offen sind
-die Performance-Punkte: Zero-Allocation-Pfad, UDP-Batching, async API, `Http3Client.GetAsync`,
-Window-Auto-Tuning.)*
+*(0-RTT und die PQ-/Krypto-Kür sind hier historisch einsortiert und längst ✅; die async API ebenfalls;
+wirklich offen sind die Performance-Punkte: Zero-Allocation-Pfad, UDP-Batching, Window-Auto-Tuning.)*
 - Zero-Allocation-Pfad: `SocketAddress`-basierte Sende-/Empfangsschleife, Buffer-Pooling,
   `IBufferWriter<byte>`-Pipeline.
 - UDP-Batching: mehrere Datagramme pro Syscall; GSO/GRO (Linux) hinter Abstraktion.
+- ✅ **async API — Task-basierte Fassaden über echten Sockets** (`src/Http3/Http3Client.cs` /
+  `Http3Server.cs`): der deterministische, transport-agnostische Kern bleibt unangetastet (alle Tests
+  weiter synchron in-process); obendrauf besitzen die Fassaden den UDP-Socket und eine Hintergrund-
+  Pump (ReceiveAsync + 20-ms-Timer-Tick, Task.WhenAny).
+  - **Client** `Http3Client`: `ConnectAsync` (Handshake + InitializeHttp3, TimeoutException statt
+    Hänger; SIO_UDP_CONNRESET auf Windows abgeschaltet), `SendAsync`/`GetAsync`/`PostAsync` (Request →
+    `Task<Http3Response>`; endgültige Fehlschläge als `Http3RequestException` mit `IsRetryable` für
+    GOAWAY-Rejections; CancellationToken ⇒ §4.1.1-Cancellation), `PerformAsync`/`QueryAsync`/
+    `WaitUntilAsync` (serialisierter Zugriff für Datagramme/WebTransport/CONNECT), `CloseAsync`
+    (graceful), `DisposeAsync`. Kern-Zugriffe strikt über ein SemaphoreSlim serialisiert.
+  - **Server** `Http3Server`: bindet den Socket (Port 0 = ephemär, `Port`-Property), demuxt vorrangig
+    über die Connection ID (Migration trifft dieselbe Verbindung), neue Verbindungen NUR auf echte
+    Initial-Pakete (§5.2), optional Stateless Reset für unbekannte Short-Header (§10.3), Idle-Cleanup;
+    voll konfigurierbar über eine `Func<Http3ServerConnection>`-Factory (WebTransport & Co. inklusive).
+  - 5 Tests (Http3AsyncApiTests) über ECHTE Loopback-UDP-Sockets: GET, drei parallele Requests auf
+    einer Verbindung, POST-Echo, Timeout gegen toten Port, Query/WaitUntil.
 - ✅ **0-RTT (RFC 8446 §2.3 / RFC 9001 §4) — vollständig**:
   - **Phase A — Session Resumption (PSK)**: NewSessionTicket (Ausstellen + Parsen), resumption_master_secret /
     Resumption-PSK, `pre_shared_key` mit **Binder** (HMAC über den abgeschnittenen ClientHello, RFC 8446
@@ -582,6 +646,14 @@ Window-Auto-Tuning.)*
   Transportschicht, die Protokoll-Logik ist vollständig.
 - ✅ Krypto-Roadmap **komplett**: X25519, X448, ChaCha20-Poly1305, Ed25519, Ed448 (Primitive aus
   BouncyCastle) **und** der PQ-Hybrid X25519MLKEM768 (ML-KEM aus der BCL + X25519) — live/interop bestätigt.
+- ✅ **ML-DSA-Signaturen (FIPS 204, draft-ietf-tls-mldsa)** — Post-Quantum-Serverzertifikate, komplett
+  BCL-nativ (.NET 10 `MLDsa` + `CertificateRequest`; X509-PQC-APIs punktuell per SYSLIB5006-Pragma):
+  SignatureSchemes mldsa44/65/87 (0x0904–0x0906, pure, FIPS-204-Kontext leer — §4),
+  `ServerCertificate.CreateSelfSignedMLDsa` (Standard ML-DSA-65), Client verifiziert CertificateVerify
+  inkl. Parameterstärke-Check (SPKI-OID 2.16.840.1.101.3.4.3.17/.18/.19 muss zum Scheme passen) und
+  bietet die drei Schemes in signature_algorithms an. 2 Tests (Handshake + alle drei Parametersätze;
+  `MLDsa.IsSupported`-Guard). **Live über UDP:** `H3Server --mldsa` + `H3Get -k` → Status 200; und
+  **voll post-quantum** `--mldsa --mlkem` beidseitig: X25519MLKEM768-KEX + ML-DSA-65-Signatur → 200.
 - ✅ **Connection Migration** (RFC 9000 §8.2/§9): Pfadvalidierung (`InitiatePathValidation` sendet
   PATH_CHALLENGE mit 8 Zufallsbytes, passendes PATH_RESPONSE → `PathValidated`, mit 3·PTO-Frist);
   PATH_CHALLENGE wird beantwortet. `OwnsConnectionId` erlaubt CID-basiertes Demuxing. **Live über UDP:**
@@ -607,9 +679,9 @@ Window-Auto-Tuning.)*
    Mindestens: packet_sent/received, frames, loss, recovery-Metriken.
 4. **Lossy-UDP-Proxy** im Testprojekt (Drop/Reorder/Duplicate/Delay konfigurierbar,
    seed-basiert deterministisch) für Recovery-Tests ohne externe Tools.
-5. **Interop-Ziele:** cloudflare-quic.com, quic.nginx.org, www.google.com (Client-Seite);
-   `curl --http3`, Firefox/Chrome (Server-Seite). Später ggf. quic-interop-runner-Testfälle
-   manuell nachstellen.
+5. **Interop-Ziele:** cloudflare-quic.com ✅, quic.nginx.org, www.google.com (Client-Seite);
+   `curl --http3` ✅ (ngtcp2/LibreSSL unter Windows + OpenSSL-QUIC unter WSL/Debian),
+   Firefox/Chrome (Server-Seite). Später ggf. quic-interop-runner-Testfälle manuell nachstellen.
 6. **State-Machine-Tests in-process:** eigener Client gegen eigenen Server ohne echtes
    Netzwerk (In-Memory-„UDP"), damit Handshake-Tests in Millisekunden laufen.
 
@@ -697,13 +769,16 @@ neue Suiten/Gruppen ohne Änderungen am Transport-Code einsteckbar sind.
 ## Bewusste Auslassungen (Scope-Kontrolle)
 
 *(Historische v1-Auslassungen inzwischen nachgerüstet: ChaCha20-Poly1305, X25519/X448/Hybrid-PQ,
-0-RTT und die dynamische QPACK-Tabelle sind längst umgesetzt — siehe Krypto-Roadmap und Phasen 6/9.)*
+0-RTT und die dynamische QPACK-Tabelle sind längst umgesetzt — siehe Krypto-Roadmap und Phasen 6/9.
+Ebenso ALLE HTTP/3-Extensions: Priorities (9218), WebSockets (9220), HTTP-Datagramme (9297/9221),
+WebTransport (draft-13) — siehe Phase 7.)*
 
 - **Kein** Server-Push (MAY; PUSH-Frames/-Streams werden validierend abgewiesen), **kein**
-  CONNECT-Proxying (gültiger CONNECT ⇒ 501), **keine** Extensions RFC 9297/9220
-  (Priorities nach **RFC 9218 sind umgesetzt** — siehe Phase 7).
+  klassisches CONNECT-Proxying (gültiger CONNECT ohne :protocol ⇒ 501).
 - **Kein** CUBIC/BBR (NewReno reicht), **keine** Multipath-Erweiterung.
 - Kein HTTP/1.1/2-Fallback, kein Alt-Svc-Handling — reines HTTP/3.
+- WebTransport (draft-13) ist inzwischen VOLLSTÄNDIG umgesetzt — inkl. der einst offenen Randstücke
+  RESET_STREAM_AT, WT-Protocol-Negotiation (§3.3) und Keying-Material-Exporter (§4.7), siehe Phase 7.
 
 ## Empfohlene Reihenfolge der ersten Schritte
 
@@ -713,11 +788,11 @@ neue Suiten/Gruppen ohne Änderungen am Transport-Code einsteckbar sind.
 3. ✅ ClientHello bauen, Initial-Paket an cloudflare-quic.com senden, ServerHello zurückparsen —
    ab hier gibt es bei jedem Schritt echtes Server-Feedback statt Trockenübungen.
 
-**Als Nächstes (Stand 2026-07-22):** Die Phasen 0–7 sind komplett (RFC-9114-Feature-Audit
+**Als Nächstes (Stand 2026-07-23):** Die Phasen 0–7 sind komplett (RFC-9114-Feature-Audit
 abgeschlossen). Offen sind nur noch der Rest der Transport-Error-Matrix in Phase 8
-(connection-level FLOW_CONTROL_ERROR, TRANSPORT_PARAMETER_ERROR, Parser-Fuzzer), ein
-`curl --http3`-Interop-Test sowie Phase 9 (Performance & Nice-to-have: Zero-Allocation-Pfad,
-UDP-Batching, async API, `Http3Client.GetAsync`, Window-Auto-Tuning).
+(connection-level FLOW_CONTROL_ERROR, TRANSPORT_PARAMETER_ERROR, Parser-Fuzzer) sowie
+der Phase-9-Rest (Performance: Zero-Allocation-Pfad, UDP-Batching, Window-Auto-Tuning — die
+async API `Http3Client`/`Http3Server` und der `curl --http3`-Interop-Test sind umgesetzt).
 
 ## Referenzen
 

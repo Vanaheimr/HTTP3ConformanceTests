@@ -182,6 +182,26 @@ public sealed class KeySchedule
     }
 
     /// <summary>
+    /// Das <c>exporter_master_secret</c> (RFC 8446 §7.1): <c>Derive-Secret(Master Secret, "exp master",
+    /// ClientHello…server Finished)</c>. Grundlage aller Keying-Material-Exporte (§7.5).
+    /// </summary>
+    public byte[] ExporterMasterSecret(
+        ReadOnlySpan<byte> masterSecret, ReadOnlySpan<byte> transcriptHashThroughServerFinished)
+        => DeriveSecret(masterSecret, "exp master", transcriptHashThroughServerFinished);
+
+    /// <summary>
+    /// Der TLS-Exporter (RFC 8446 §7.5): <c>HKDF-Expand-Label(Derive-Secret(exporter_master_secret,
+    /// label, ""), "exporter", Hash(context), length)</c>. Beide Seiten der Verbindung erhalten für
+    /// gleiches Label/gleichen Kontext identisches Schlüsselmaterial (z. B. für Channel Binding).
+    /// </summary>
+    public byte[] ExportKeyingMaterial(
+        ReadOnlySpan<byte> exporterMasterSecret, string label, ReadOnlySpan<byte> context, int length)
+    {
+        byte[] derived = DeriveSecret(exporterMasterSecret, label, _emptyTranscriptHash);
+        return TlsHkdf.ExpandLabel(_hash, derived, "exporter", HashBytes(context), length);
+    }
+
+    /// <summary>
     /// Der <c>finished_key</c> eines Traffic Secrets: <c>HKDF-Expand-Label(secret, "finished", "", Hash.length)</c>
     /// (RFC 8446 §4.4.4). Kontext ist leer.
     /// </summary>

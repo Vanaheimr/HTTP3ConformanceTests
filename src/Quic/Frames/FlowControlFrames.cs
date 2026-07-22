@@ -163,6 +163,34 @@ public sealed record ResetStreamFrame(ulong StreamId, ulong ApplicationErrorCode
 }
 
 /// <summary>
+/// RESET_STREAM_AT-Frame (Typ 0x24, draft-ietf-quic-reliable-stream-reset §4): wie RESET_STREAM, aber mit
+/// einer zusätzlichen <paramref name="ReliableSize"/> — der Sender garantiert die zuverlässige Zustellung
+/// der ersten <paramref name="ReliableSize"/> Bytes, obwohl der Stream zurückgesetzt wird. Reliable Size 0
+/// ist gleichbedeutend mit einem gewöhnlichen RESET_STREAM.
+/// </summary>
+public sealed record ResetStreamAtFrame(ulong StreamId, ulong ApplicationErrorCode, ulong FinalSize, ulong ReliableSize) : Frame
+{
+    public override void Write(ref BufferWriter writer)
+    {
+        writer.WriteVarInt(FrameType.ResetStreamAt);
+        writer.WriteVarInt(StreamId);
+        writer.WriteVarInt(ApplicationErrorCode);
+        writer.WriteVarInt(FinalSize);
+        writer.WriteVarInt(ReliableSize);
+    }
+
+    public static bool TryReadBody(ref BufferReader reader, out ResetStreamAtFrame? frame)
+    {
+        frame = null;
+        if (!reader.TryReadVarInt(out ulong id) || !reader.TryReadVarInt(out ulong error) ||
+            !reader.TryReadVarInt(out ulong finalSize) || !reader.TryReadVarInt(out ulong reliableSize))
+            return false;
+        frame = new ResetStreamAtFrame(id, error, finalSize, reliableSize);
+        return true;
+    }
+}
+
+/// <summary>
 /// DATAGRAM-Frame (Typ 0x30/0x31, RFC 9221 §4): unzuverlässige Anwendungsdaten — nicht retransmittiert,
 /// nicht flow-controlled, aber ack-eliciting und congestion-controlled. Wir senden stets die Variante
 /// MIT Length-Feld (0x31); geparst werden beide (bei 0x30 reicht die Nutzlast bis ans Paketende).

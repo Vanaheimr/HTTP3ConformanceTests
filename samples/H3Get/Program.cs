@@ -102,7 +102,8 @@ if (!http3.HandshakeConfirmed) { Console.WriteLine("Handshake fehlgeschlagen.");
 Console.WriteLine($"✓ Handshake abgeschlossen (Gruppe {http3.Quic.NegotiatedGroup}, Suite {http3.Quic.NegotiatedCipherSuite})"
                   + (http3.RetryHandled ? " nach Retry (Adressvalidierung)" : "")
                   + $"{(lossPercent > 0 ? $" trotz {dropped} verworfenen Datagrammen" : "")}.");
-Console.WriteLine($"  Serverzertifikat: {http3.Quic.ServerCertificate?.Subject} — "
+Console.WriteLine($"  Serverzertifikat: {http3.Quic.ServerCertificate?.Subject} "
+                  + $"(Schlüssel-OID {http3.Quic.ServerCertificate?.PublicKey.Oid.Value}) — "
                   + (insecure ? "Signatur geprüft, Kette/Hostname übersprungen (-k)"
                              : "Signatur + Kette + Hostname geprüft") + "\n");
 
@@ -269,11 +270,18 @@ if (args.Contains("--webtransport"))
     if (!http3.ServerSupportsWebTransport) { Console.WriteLine("✗ Server unterstützt kein WebTransport."); return 1; }
     Console.WriteLine("→ Server-Support erkannt (WT_MAX_SESSIONS > 0, Extended CONNECT, Datagramme).");
 
-    ulong wtStream = http3.ConnectWebTransport(host, "/wt");
+    // Protokoll-Aushandlung (draft §3.3): Angebote in Präferenzreihenfolge; der Server wählt eines.
+    ulong wtStream = http3.ConnectWebTransport(host, "/wt",
+        availableProtocols: ["echo-v3", "echo-v2", "echo-v1"]);
     org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport.WebTransportSession? wt = null;
     for (int round = 0; round < 40 && wt is null; round++) { Exchange(); http3.TryGetWebTransportSession(wtStream, out wt); }
     if (wt is null) { Console.WriteLine($"✗ Session fehlgeschlagen (Status {http3.WebTransportConnectStatus(wtStream)})."); return 1; }
-    Console.WriteLine($"→ Session {wt.SessionId} etabliert (Flow Control: {(wt.FlowControlEnabled ? "an" : "aus")}).");
+    Console.WriteLine($"→ Session {wt.SessionId} etabliert (Flow Control: {(wt.FlowControlEnabled ? "an" : "aus")}, " +
+                      $"WT-Protocol: {wt.NegotiatedProtocol ?? "keines"}).");
+
+    // Keying-Material-Exporter (draft §4.7 / RFC 8446 §7.5): muss byte-genau mit dem Server übereinstimmen.
+    byte[] ekm = wt.ExportKeyingMaterial("demo-export", [1, 2, 3], 16);
+    Console.WriteLine($"→ Keying-Material-Export (Label \"demo-export\"): {Convert.ToHexString(ekm).ToLowerInvariant()}");
 
     // Datagramm.
     wt.SendDatagram(System.Text.Encoding.UTF8.GetBytes("WT-Datagramm!"));

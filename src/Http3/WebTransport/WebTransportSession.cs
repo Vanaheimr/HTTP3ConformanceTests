@@ -17,6 +17,9 @@
 
 #region Usings
 
+using System.Buffers.Binary;
+using System.Text;
+
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 
 #endregion
@@ -42,6 +45,11 @@ internal interface IWebTransportHost
     ulong PeerInitialMaxStreamsUni { get; }
     ulong PeerInitialMaxStreamsBidi { get; }
     ulong PeerInitialMaxData { get; }
+
+    /// <summary>
+    /// TLS-Keying-Material-Exporter der zugrunde liegenden QUIC-Verbindung (RFC 8446 §7.5).
+    /// </summary>
+    byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length);
 }
 
 /// <summary>
@@ -91,6 +99,38 @@ public sealed class WebTransportSession
 
     /// <summary>Flow Control ist aktiv (beide Seiten WT_MAX_SESSIONS &gt; 1, §5.1).</summary>
     public bool FlowControlEnabled => _host.FlowControlEnabled;
+
+    /// <summary>
+    /// Das per WT-Available-Protocols/WT-Protocol ausgehandelte Anwendungsprotokoll (draft §3.3,
+    /// ALPN-artig); <c>null</c>, wenn keines angeboten oder vom Server keines gewählt wurde.
+    /// </summary>
+    public string? NegotiatedProtocol { get; internal set; }
+
+    /// <summary>
+    /// Session-gebundener Keying-Material-Exporter (draft §4.7): der TLS-Exporter (RFC 8446 §7.5) der
+    /// QUIC-Verbindung mit festem Label <c>EXPORTER-WebTransport</c> und dem „WebTransport Exporter
+    /// Context"-Struct (Session-ID ‖ Label ‖ Kontext) — dadurch erhalten verschiedene Sessions
+    /// derselben Verbindung getrenntes Material, beide Enden derselben Session aber identisches.
+    /// Das anwendungsgegebene Label muss 1–255 UTF-8-Bytes lang sein, der Kontext 0–255 Bytes.
+    /// </summary>
+    public byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
+    {
+        byte[] labelBytes = Encoding.UTF8.GetBytes(label);
+        if (labelBytes.Length is < 1 or > 255)
+            throw new ArgumentException("Das Exporter-Label muss 1–255 UTF-8-Bytes lang sein (draft §4.7).", nameof(label));
+        if (context.Length > 255)
+            throw new ArgumentException("Der Exporter-Kontext darf höchstens 255 Bytes lang sein (draft §4.7).", nameof(context));
+
+        // WebTransport Exporter Context { Session ID (64) ‖ LabelLen (8) ‖ Label ‖ ContextLen (8) ‖ Context }
+        byte[] exporterContext = new byte[8 + 1 + labelBytes.Length + 1 + context.Length];
+        BinaryPrimitives.WriteUInt64BigEndian(exporterContext, SessionId);
+        exporterContext[8] = (byte)labelBytes.Length;
+        labelBytes.CopyTo(exporterContext, 9);
+        exporterContext[9 + labelBytes.Length] = (byte)context.Length;
+        context.CopyTo(exporterContext.AsSpan(10 + labelBytes.Length));
+
+        return _host.ExportKeyingMaterial("EXPORTER-WebTransport", exporterContext, length);
+    }
 
     // ---- Streams (§4.1/§4.2) --------------------------------------------------------------
 

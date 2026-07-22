@@ -69,4 +69,12 @@ public interface ITlsHandshake : IDisposable
     /// <c>true</c>, wenn 0-RTT (early_data) tatsächlich akzeptiert wurde (Client: laut EncryptedExtensions).
     /// </summary>
     bool EarlyDataAccepted { get; }
+
+    /// <summary>
+    /// TLS-Keying-Material-Exporter (RFC 8446 §7.5): liefert beiden Seiten für gleiches Label und
+    /// gleichen Kontext identisches Schlüsselmaterial (z. B. für Channel Binding oder den
+    /// WebTransport-Exporter, draft-webtrans-http3 §4.7). Erst nach der Ableitung der Application
+    /// Secrets verfügbar — vorher <see cref="InvalidOperationException"/>.
+    /// </summary>
+    byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length);
 }

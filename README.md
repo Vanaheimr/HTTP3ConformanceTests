@@ -27,13 +27,16 @@ Der Implementierungsplan mit allen Phasen, Meilensteinen und der Krypto-Roadmap 
 | 5 | Loss Recovery (RFC 9002): RTT, Loss Detection, PTO, NewReno, Retransmission | ✅ fertig |
 | 8-S | HTTP/3-**Server** (TLS-Server-Handshake, self-signed Cert, QUIC/HTTP-3-Server) | ✅ fertig |
 | **M3** | **Eigener Server: `H3Get`-Client holt Status 200 + HTML über echtes localhost-UDP** | ✅ **erreicht** |
-| 8 | Robustheit: VN, Retry, Close/Draining, Idle/Keep-Alive, Key-Lifecycle & Key Update, 0-RTT + Resumption, CID-Rotation, Stateless Reset, Migration, RESET_STREAM/STOP_SENDING, PQ-Hybrid | ✅ im Kern fertig |
+| 8 | Robustheit: VN, Retry, Close/Draining, Idle/Keep-Alive, Key-Lifecycle & Key Update, 0-RTT + Resumption, CID-Rotation, Stateless Reset, Migration, RESET_STREAM/STOP_SENDING, PQ-Hybrid, ML-DSA-Zertifikate | ✅ im Kern fertig |
 | 7+ | **RFC-9114-Feature-Audit**: Request-Bodies, Cancellation, Frame-Zustandsmaschine + H3-Fehlercodes, GOAWAY, Trailer/1xx, MAX_FIELD_SECTION_SIZE, Malformed-Validierung | ✅ **komplett** |
 | 9218 | **Priorities**: priority-Header + PRIORITY_UPDATE, §10-Scheduler (Urgency/inkrementell) | ✅ fertig |
 | 9220 | **WebSockets über HTTP/3**: Extended CONNECT (RFC 8441) + Tunnel + RFC-6455-Framing (aus Hermod wiederverwendet) | ✅ fertig |
 | 9297/9221 | **HTTP-Datagramme** über QUIC-DATAGRAM-Frames | ✅ fertig |
-| webtrans | **WebTransport über HTTP/3** (draft-13): Sessions, uni/bidi-Streams, Datagramme, Flow-Control-Capsules | ✅ fertig |
-| 9 | Performance & Nice-to-have (Zero-Alloc, UDP-Batching, async API), Rest-Fehlercodes, curl-Interop | offen |
+| webtrans | **WebTransport über HTTP/3** (draft-13): Sessions, uni/bidi-Streams, Datagramme, Flow-Control-Capsules, Protokoll-Aushandlung (`WT-Available-Protocols`/`WT-Protocol`) | ✅ fertig |
+| reset-at | **RESET_STREAM_AT** (draft-ietf-quic-reliable-stream-reset): Stream-Reset mit garantierter Teilzustellung (`reset_stream_at`-TP + Frame 0x24) | ✅ fertig |
+| async | **async API**: `Http3Client`/`Http3Server` — Task-Fassaden mit eigenem UDP-Socket + Hintergrund-Pump (`ConnectAsync`/`GetAsync`/`SendAsync`, `Http3RequestException`, CID-Demux inkl. Migration) | ✅ fertig |
+| curl | **`curl --http3`-Interop (Server-Seite)**: ngtcp2/LibreSSL (Windows-curl 8.21) **und** OpenSSL-QUIC (WSL/Debian-curl 8.14) — GET/POST/300 KB/103+Trailer | ✅ fertig |
+| 9 | Performance & Nice-to-have (Zero-Alloc, UDP-Batching), Rest-Fehlercodes | offen |
 
 ### X25519 & HelloRetryRequest (Interop)
 
@@ -60,6 +63,12 @@ Der Implementierungsplan mit allen Phasen, Meilensteinen und der Krypto-Roadmap 
   (`Ed448Signature`), PureEdDSA mit leerem Kontext, 57-Byte-Key / 114-Byte-Signatur; `ServerCertificate`
   erzeugt bei Bedarf ein Ed448-Zertifikat. RFC 8032 §7.4 byte-genau; live über UDP: `H3Server --ed448` +
   `H3Get -k` → Signatur geprüft, Status 200
+- **ML-DSA** (FIPS 204, draft-ietf-tls-mldsa, `SignatureScheme` mldsa44/65/87 = 0x0904–0x0906):
+  Post-Quantum-Signaturen, komplett **BCL-nativ** (.NET 10 `MLDsa` + `CertificateRequest`) — pure
+  Signatur ohne Vor-Hash, FIPS-204-Kontext leer; der Client prüft zusätzlich, dass die
+  Parameterstärke des Zertifikatsschlüssels (id-ML-DSA-44/65/87) zum Scheme passt.
+  `ServerCertificate.CreateSelfSignedMLDsa()`. Live über UDP: `H3Server --mldsa` + `H3Get -k` →
+  Status 200 — und **voll post-quantum** mit `--mldsa --mlkem` (X25519MLKEM768-KEX + ML-DSA-65-Signatur)
 
 ### HTTP/3-Server (M3)
 
@@ -72,6 +81,11 @@ Der Implementierungsplan mit allen Phasen, Meilensteinen und der Krypto-Roadmap 
   Verbindungsklassen sind schlanke Subklassen mit Rollen-Hooks (Schlüsselrichtung/Stream-Perspektive über `IsServer`)
 - **M3 live:** `dotnet run --project samples/H3Server` + `dotnet run --project samples/H3Get -- localhost / --port=4433 -k`
   → Status 200 + selbstgebaute HTML-Seite über echtes UDP (beide Enden from scratch)
+- **`curl --http3`-Interop:** die Server-Seite besteht gegen zwei unabhängige fremde HTTP/3-Stacks —
+  das offizielle Windows-curl 8.21 (**ngtcp2 + nghttp3 + LibreSSL**) und das Debian-curl 8.14 unter
+  **WSL** (**OpenSSL-3.5-QUIC** + nghttp3, über die WSL2-NAT-Grenze): Handshake, `GET /` (200),
+  `POST /echo` (byte-genaues Echo), `GET /big` (300 000 B), `GET /hints` (103 Early Hints + finale
+  200 + Trailer), saubere Closes. Beispiel: `curl --http3-only -k https://127.0.0.1:4433/`
 
 ### Zertifikatsprüfung (Client)
 
@@ -309,10 +323,24 @@ Der Implementierungsplan mit allen Phasen, Meilensteinen und der Krypto-Roadmap 
   Datagramme; 404 für unbekannte Ressourcen, H3_REQUEST_REJECTED über dem Session-Limit); uni-Streams
   (Typ 0x54) und bidi-Streams (WT_STREAM 0x41), beide Seiten öffnend/empfangend; WebTransport-Datagramme;
   Flow Control über das Capsule-Protokoll (WT_MAX_STREAMS/WT_MAX_DATA/WT_*_BLOCKED); Session-Ende via
-  WT_CLOSE_SESSION-Capsule (Streams mit WT_SESSION_GONE abgebrochen); App-Fehlercode-Remapping (§4.3).
-  API: `ConnectWebTransport`/`webTransportHandler`, `WebTransportSession` (OpenUni/Bidi, Accept*,
-  SendDatagram, Close). **Live über UDP:** `H3Get --webtransport` — Session, Datagramm-Echo,
-  uni-/bidi-Stream (Echo), sauberes Ende
+  WT_CLOSE_SESSION-Capsule (Streams mit WT_SESSION_GONE abgebrochen); App-Fehlercode-Remapping (§4.3);
+  ALPN-artige Protokoll-Aushandlung (§3.3: Client bietet per `WT-Available-Protocols` — Structured-
+  Fields-List aus Strings, RFC 9651 — an, der Server wählt per `WT-Protocol` genau eines; ungültige
+  Werttypen ⇒ ganzes Feld ignoriert, Wahl außerhalb der Liste beidseitig verworfen).
+  API: `ConnectWebTransport(…, availableProtocols:)`/`webTransportHandler`+`webTransportProtocolSelector`,
+  `WebTransportSession` (OpenUni/Bidi, Accept*, SendDatagram, Close, `NegotiatedProtocol`).
+  **Live über UDP:** `H3Get --webtransport` — Session, Datagramm-Echo, uni-/bidi-Stream (Echo),
+  sauberes Ende, WT-Protocol `echo-v2` aus drei Angeboten ausgehandelt
+- **RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset):** Stream-Reset mit garantierter
+  Teilzustellung — der Grund, warum ein Empfänger den kritischen Stream-Präfix (z. B. den
+  WebTransport-Stream-Kopf) trotz Abbruch sieht. Transport-Parameter `reset_stream_at` (0x1d, leerer
+  Wert, Standard aktiv; nicht-leer ⇒ TRANSPORT_PARAMETER_ERROR) und Frame RESET_STREAM_AT (0x24 =
+  RESET_STREAM + Reliable Size; Reliable > Final ⇒ FRAME_ENCODING_ERROR). Empfangsseitig werden die
+  ersten Reliable-Size-Bytes weiter zugestellt (Flow-Control bucht dennoch die volle Final Size),
+  spätere Frames dürfen die Reliable Size nur senken (§5.2), ein geänderter Fehlercode ⇒
+  STREAM_STATE_ERROR. API: `QuicStream.ResetAt(code, reliableSize)` (garantiert bereits gesendete
+  Bytes; retransmittiert STREAM-Frames darunter weiter; degradiert ohne Peer-Support zu RESET_STREAM),
+  `QuicStream.PeerReliableSize`. **Live über UDP:** Cloudflare akzeptiert den TP 0x1d (Handshake + 200)
 - **HTTP-Datagramme (RFC 9297 / RFC 9221):** die Grundlage von MASQUE/WebTransport. QUIC-Schicht:
   Transport-Parameter `max_datagram_frame_size` (0x20) + `DatagramFrame` (0x30/0x31, unfragmentierbar,
   nicht retransmittiert, congestion-controlled); Empfang ohne Ankündigung/über Limit ⇒
@@ -475,13 +503,16 @@ src/Quic.Tls/      QUIC-TLS-Bindung: TLS 1.3 im QUIC-Profil (Messages, Key-Sched
                    Record-Layer — ohne Rückverweis auf Quic (referenziert nur Quic.Core)
 src/Quic/          QUIC-Transport (Crypto, Packets, Frames, Streams, Connection); nutzt Quic.Tls
 src/Http3.Qpack/   QPACK (Static Table, Huffman, Encoder/Decoder)
-src/Http3/         HTTP/3 (Frames, Client- und Server-Verbindung)
-tests/Http3.Tests/ Unit-Tests, u. a. mit RFC-Testvektoren
+src/Http3/         HTTP/3 (Frames, Client-/Server-Verbindung, Malformed-Validierung, Priorities,
+                   Extended-CONNECT-Tunnel) + WebSocket/ (RFC 6455) + WebTransport/ (draft-13)
+                   + async API (Http3Client/Http3Server: Task-Fassaden mit Socket + Hintergrund-Pump)
+tests/Http3.Tests/ NUnit-Tests (378), u. a. mit RFC-Testvektoren und „bösen" Roh-QUIC-Peers
 samples/H3Get/     HTTP/3-Client: GET/POST gegen cloudflare-quic.com oder den eigenen Server
                    (u. a. --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
                    --rotate-cid, --qpack-dynamic, --mlkem, --x448, --chacha20, --loss, --hold, -k)
-samples/H3Server/  HTTP/3-Server: self-signed Cert, Handler über UDP (Routen: /, POST /echo, /hints
-                   mit 103 + Trailer; Optionen u. a. --retry, --idle, --goaway, --ed25519/--ed448)
+samples/H3Server/  HTTP/3-Server: self-signed Cert, Handler über UDP (Routen: /, /big, POST /echo,
+                   /hints mit 103 + Trailer; CONNECT websocket/datagram-echo, WebTransport /wt;
+                   Optionen u. a. --retry, --idle, --goaway, --ed25519/--ed448/--mldsa)
 ```
 
 Namespaces: QUIC liegt unter `org.GraphDefined.Vanaheimr.Hermod.Quic` (+ `.Tls`, `.Core`, …) — als

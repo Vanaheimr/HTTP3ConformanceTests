@@ -22,6 +22,7 @@ using org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 using org.GraphDefined.Vanaheimr.Hermod.Quic;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
@@ -50,11 +51,10 @@ public class StreamCancellationTests
         Assert.That(send.IsReset, Is.True);
         Assert.That(send.HasPending, Is.False);                    // ungesendete Daten verworfen
         Assert.That(send.NextFrame(100), Is.Null);                 // §19.4: keine STREAM-Frames mehr
-        var frame = send.TakeResetFrame();
-        Assert.That(frame, Is.Not.Null);
-        Assert.That(frame!.FinalSize, Is.EqualTo(3UL));
+        var frame = Expect.Type<ResetStreamFrame>(send.TakeResetFrame(peerSupportsResetAt: false));
+        Assert.That(frame.FinalSize, Is.EqualTo(3UL));
         Assert.That(frame.ApplicationErrorCode, Is.EqualTo(0x0cUL));
-        Assert.That(send.TakeResetFrame(), Is.Null);               // nur einmal abholbar
+        Assert.That(send.TakeResetFrame(peerSupportsResetAt: false), Is.Null);   // nur einmal abholbar
         send.Write([9]);                                  // nach Reset ignoriert
         Assert.That(send.HasPending, Is.False);
     }

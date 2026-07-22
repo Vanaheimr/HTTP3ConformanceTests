@@ -61,6 +61,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
     private byte[]? _binderKey;
     private bool _pskAccepted;
     private byte[]? _resumptionMasterSecret;
+    private byte[]? _exporterMasterSecret; // exporter_master_secret (RFC 8446 §7.1) für §7.5-Exporte
     private readonly List<ResumptionTicket> _newSessionTickets = [];
 
     // 0-RTT (RFC 8446 §2.3): angebotenes/abgeleitetes Early-Traffic-Secret + ob der Server es akzeptierte.
@@ -107,6 +108,15 @@ public sealed class TlsClientHandshake : ITlsHandshake
     public CipherSuite? NegotiatedCipherSuite { get; private set; }
     public HandshakeTrafficSecrets? HandshakeSecrets { get; private set; }
     public ApplicationTrafficSecrets? ApplicationSecrets { get; private set; }
+
+    /// <summary>
+    /// TLS-Keying-Material-Exporter (RFC 8446 §7.5) auf Basis des <c>exporter_master_secret</c>;
+    /// verfügbar, sobald die Application Secrets abgeleitet sind (nach dem Server-Finished).
+    /// </summary>
+    public byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
+        => _exporterMasterSecret is { } secret && _ks is { } ks
+            ? ks.ExportKeyingMaterial(secret, label, context, length)
+            : throw new InvalidOperationException("Keying-Material-Export erst nach dem Server-Finished möglich (RFC 8446 §7.5).");
     public bool ServerFinishedValid { get; private set; }
     public bool IsComplete => _state == State.Complete;
     public byte[]? PeerQuicTransportParameters { get; private set; }
@@ -385,6 +395,8 @@ public sealed class TlsClientHandshake : ITlsHandshake
     {
         byte[] transcriptThroughServerFinished = _transcript!.CurrentHash();
         ApplicationSecrets = _ks!.DeriveApplicationSecrets(HandshakeSecrets!.HandshakeSecret, transcriptThroughServerFinished);
+        // exporter_master_secret (RFC 8446 §7.1) über CH…server-Finished — für §7.5-Keying-Material-Exporte.
+        _exporterMasterSecret = _ks.ExporterMasterSecret(ApplicationSecrets.MasterSecret, transcriptThroughServerFinished);
 
         byte[] verifyData = _ks.FinishedVerifyData(HandshakeSecrets.ClientHandshakeTrafficSecret, transcriptThroughServerFinished);
         byte[] clientFinished = Finished.BuildMessage(verifyData);

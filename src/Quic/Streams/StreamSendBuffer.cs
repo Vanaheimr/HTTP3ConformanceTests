@@ -68,6 +68,18 @@ public sealed class StreamSendBuffer(ulong streamId)
     public bool ResetPending { get; private set; }
 
     /// <summary>
+    /// Der Abbruch erfolgte per RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset) mit garantierter
+    /// Teilzustellung bis <see cref="ReliableSize"/>.
+    /// </summary>
+    public bool IsResetAt { get; private set; }
+
+    /// <summary>
+    /// Bei einem RESET_STREAM_AT die zuverlässig zuzustellende Byte-Menge; STREAM-Frames unterhalb dieses
+    /// Offsets werden bei Verlust weiterhin retransmittiert (draft §5).
+    /// </summary>
+    public ulong ReliableSize { get; private set; }
+
+    /// <summary>
     /// Es liegen noch nicht ausgegebene Daten oder ein ausstehendes FIN vor.
     /// </summary>
     public bool HasPending => !IsReset && (_pending.Count > 0 || (_finQueued && !_finSent));
@@ -106,15 +118,38 @@ public sealed class StreamSendBuffer(ulong streamId)
     }
 
     /// <summary>
-    /// Holt das zu sendende RESET_STREAM-Frame ab (einmalig; Verlust-Wiederholung übernimmt die Loss
-    /// Recovery, da RESET_STREAM als retransmittierbares Frame verfolgt wird).
+    /// Bricht die Sendeseite ab, garantiert aber die zuverlässige Zustellung der ersten
+    /// <paramref name="reliableSize"/> Bytes (draft-ietf-quic-reliable-stream-reset §5). Es können nur
+    /// bereits gesendete Bytes garantiert werden — die Reliable Size wird auf den aktuellen Sende-Offset
+    /// begrenzt; ungesendete Daten werden wie beim gewöhnlichen Reset verworfen. Idempotent.
     /// </summary>
-    public ResetStreamFrame? TakeResetFrame()
+    public void ResetAt(ulong errorCode, ulong reliableSize)
+    {
+        if (IsReset)
+            return;
+        IsReset = true;
+        IsResetAt = true;
+        ResetPending = true;
+        ResetErrorCode = errorCode;
+        ResetFinalSize = _sentOffset;
+        ReliableSize = Math.Min(reliableSize, _sentOffset); // nur bereits Gesendetes ist garantierbar
+        _pending.Clear();
+    }
+
+    /// <summary>
+    /// Holt das zu sendende RESET_STREAM- bzw. RESET_STREAM_AT-Frame ab (einmalig; Verlust-Wiederholung
+    /// übernimmt die Loss Recovery). Ein RESET_STREAM_AT wird nur erzeugt, wenn der Peer die Extension
+    /// angekündigt hat (<paramref name="peerSupportsResetAt"/>) — sonst degradiert der Abbruch zu einem
+    /// gewöhnlichen RESET_STREAM (ohne Zustellgarantie).
+    /// </summary>
+    public Frame? TakeResetFrame(bool peerSupportsResetAt)
     {
         if (!ResetPending)
             return null;
         ResetPending = false;
-        return new ResetStreamFrame(StreamId.Value, ResetErrorCode, ResetFinalSize);
+        return IsResetAt && peerSupportsResetAt
+            ? new ResetStreamAtFrame(StreamId.Value, ResetErrorCode, ResetFinalSize, ReliableSize)
+            : new ResetStreamFrame(StreamId.Value, ResetErrorCode, ResetFinalSize);
     }
 
     /// <summary>
