@@ -48,16 +48,41 @@ public sealed class StreamSendBuffer(ulong streamId)
     public ulong SentOffset => _sentOffset;
 
     /// <summary>
+    /// Die Sendeseite wurde per RESET_STREAM abgebrochen (RFC 9000 §19.4).
+    /// </summary>
+    public bool IsReset { get; private set; }
+
+    /// <summary>
+    /// Der Fehlercode des Abbruchs (gültig, wenn <see cref="IsReset"/>).
+    /// </summary>
+    public ulong ResetErrorCode { get; private set; }
+
+    /// <summary>
+    /// Die im RESET_STREAM mitgeteilte Final Size (RFC 9000 §4.5: Anzahl bereits gesendeter Bytes).
+    /// </summary>
+    public ulong ResetFinalSize { get; private set; }
+
+    /// <summary>
+    /// Ein RESET_STREAM-Frame wartet auf die Emission (wird vom Endpoint abgeholt).
+    /// </summary>
+    public bool ResetPending { get; private set; }
+
+    /// <summary>
     /// Es liegen noch nicht ausgegebene Daten oder ein ausstehendes FIN vor.
     /// </summary>
-    public bool HasPending => _pending.Count > 0 || (_finQueued && !_finSent);
+    public bool HasPending => !IsReset && (_pending.Count > 0 || (_finQueued && !_finSent));
 
     /// <summary>
     /// Der Sender ist durch das Flow-Control-Fenster blockiert (Daten da, aber kein Kredit).
     /// </summary>
-    public bool IsBlocked => _pending.Count > 0 && _sentOffset >= MaxData;
+    public bool IsBlocked => !IsReset && _pending.Count > 0 && _sentOffset >= MaxData;
 
-    public void Write(ReadOnlySpan<byte> data) => _pending.AddRange(data.ToArray());
+    public void Write(ReadOnlySpan<byte> data)
+    {
+        if (IsReset)
+            return; // nach dem Reset werden keine Daten mehr angenommen
+        _pending.AddRange(data.ToArray());
+    }
 
     /// <summary>
     /// Markiert das Stream-Ende; das nächste Frame, das die Restdaten leert, trägt das FIN.
@@ -65,12 +90,40 @@ public sealed class StreamSendBuffer(ulong streamId)
     public void Finish() => _finQueued = true;
 
     /// <summary>
+    /// Bricht die Sendeseite abrupt ab (RFC 9000 §19.4): verwirft ungesendete Daten, hält die Final
+    /// Size (= gesendete Bytes, §4.5) fest und lässt den Endpoint ein RESET_STREAM emittieren. Nach dem
+    /// Abbruch werden STREAM-Frames dieses Streams weder gesendet noch retransmittiert. Idempotent.
+    /// </summary>
+    public void Reset(ulong errorCode)
+    {
+        if (IsReset)
+            return;
+        IsReset = true;
+        ResetPending = true;
+        ResetErrorCode = errorCode;
+        ResetFinalSize = _sentOffset;
+        _pending.Clear();
+    }
+
+    /// <summary>
+    /// Holt das zu sendende RESET_STREAM-Frame ab (einmalig; Verlust-Wiederholung übernimmt die Loss
+    /// Recovery, da RESET_STREAM als retransmittierbares Frame verfolgt wird).
+    /// </summary>
+    public ResetStreamFrame? TakeResetFrame()
+    {
+        if (!ResetPending)
+            return null;
+        ResetPending = false;
+        return new ResetStreamFrame(StreamId.Value, ResetErrorCode, ResetFinalSize);
+    }
+
+    /// <summary>
     /// Erzeugt das nächste STREAM-Frame (bis zu <paramref name="maxPayload"/> Bytes, innerhalb des
     /// Flow-Control-Fensters) oder <c>null</c>, wenn nichts zu senden ist.
     /// </summary>
     public StreamFrame? NextFrame(int maxPayload)
     {
-        if (_finSent)
+        if (_finSent || IsReset)
             return null;
 
         ulong window = _sentOffset < MaxData ? MaxData - _sentOffset : 0;

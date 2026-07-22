@@ -28,6 +28,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Verifiziert den TLS-1.3-Key-Schedule byte-genau gegen die Beispiel-Traces aus RFC 8448
 /// ("Simple 1-RTT Handshake"). Das ist der Prüfstein aus Phase 2 des Plans.
 /// </summary>
+[TestFixture]
 public class KeyScheduleTests
 {
     // ClientHello (196 Byte) und ServerHello (90 Byte) aus RFC 8448 §3.
@@ -59,40 +60,38 @@ public class KeyScheduleTests
         return new KeySchedule(CipherSuite.Aes128GcmSha256).TranscriptHash(transcript);
     }
 
-    [Fact]
+    [Test]
     public void TranscriptHash_ClientHelloServerHello_MatchesRfc8448()
     {
-        Assert.Equal("860c06edc07858ee8e78f0e7428c58edd6b43f2ca3e6e95f02ed063cf0e1cad8", Hex.ToHex(TranscriptHash()));
+        Assert.That(Hex.ToHex(TranscriptHash()), Is.EqualTo("860c06edc07858ee8e78f0e7428c58edd6b43f2ca3e6e95f02ed063cf0e1cad8"));
     }
 
-    [Fact]
+    [Test]
     public void EarlySecret_NoPsk_MatchesRfc8448()
     {
         var ks = new KeySchedule(CipherSuite.Aes128GcmSha256);
-        Assert.Equal("33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a", Hex.ToHex(ks.EarlySecret()));
+        Assert.That(Hex.ToHex(ks.EarlySecret()), Is.EqualTo("33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a"));
     }
 
-    [Fact]
+    [Test]
     public void HandshakeSecret_MatchesRfc8448()
     {
         var ks = new KeySchedule(CipherSuite.Aes128GcmSha256);
         byte[] hs = ks.HandshakeSecret(ks.EarlySecret(), Hex.Parse(EcdheSharedSecret));
-        Assert.Equal("1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac", Hex.ToHex(hs));
+        Assert.That(Hex.ToHex(hs), Is.EqualTo("1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac"));
     }
 
-    [Fact]
+    [Test]
     public void HandshakeTrafficSecrets_MatchRfc8448()
     {
         var ks = new KeySchedule(CipherSuite.Aes128GcmSha256);
         HandshakeTrafficSecrets s = ks.DeriveHandshakeSecrets(Hex.Parse(EcdheSharedSecret), TranscriptHash());
 
-        Assert.Equal("b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21",
-            Hex.ToHex(s.ClientHandshakeTrafficSecret));
-        Assert.Equal("b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38",
-            Hex.ToHex(s.ServerHandshakeTrafficSecret));
+        Assert.That(Hex.ToHex(s.ClientHandshakeTrafficSecret), Is.EqualTo("b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21"));
+        Assert.That(Hex.ToHex(s.ServerHandshakeTrafficSecret), Is.EqualTo("b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38"));
     }
 
-    [Fact]
+    [Test]
     public void TrafficKeyDerivation_FromServerHsSecret_MatchesRfc8448()
     {
         // RFC 8448 nutzt die TLS-Labels "key"/"iv"; das prüft HKDF-Expand-Label direkt.
@@ -101,7 +100,7 @@ public class KeyScheduleTests
         byte[] key = TlsHkdf.ExpandLabel(System.Security.Cryptography.HashAlgorithmName.SHA256, sHsSecret, "key", 16);
         byte[] iv = TlsHkdf.ExpandLabel(System.Security.Cryptography.HashAlgorithmName.SHA256, sHsSecret, "iv", 12);
 
-        Assert.Equal("3fce516009c21727d0f2e4e86ee403bc", Hex.ToHex(key));
-        Assert.Equal("5d313eb2671276ee13000b30", Hex.ToHex(iv));
+        Assert.That(Hex.ToHex(key), Is.EqualTo("3fce516009c21727d0f2e4e86ee403bc"));
+        Assert.That(Hex.ToHex(iv), Is.EqualTo("5d313eb2671276ee13000b30"));
     }
 }

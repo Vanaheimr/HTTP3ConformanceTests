@@ -31,9 +31,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Integrationstest für Keep-Alive via PING (RFC 9000 §10.1.2): regelmäßige PINGs halten eine Verbindung
 /// über einen kurzen Idle-Timeout hinaus offen, wo sie sonst still geschlossen würde.
 /// </summary>
+[TestFixture]
 public class KeepAliveTests
 {
-    [Fact]
+    [Test]
     public void KeepAlivePings_KeepConnectionAlive_PastTheIdleTimeout()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -47,7 +48,7 @@ public class KeepAliveTests
 
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
-        Assert.True(client.HandshakeConfirmed, "Handshake muss zustande kommen.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
 
         client.KeepAliveInterval = TimeSpan.FromMilliseconds(60);
 
@@ -60,8 +61,8 @@ public class KeepAliveTests
             Thread.Sleep(30); // ~540 ms gesamt ⇒ > 250 ms Idle-Timeout
         }
 
-        Assert.False(server.IsIdleTimedOut, "Keep-Alive-PINGs müssen den Server-Idle-Timeout verhindern.");
-        Assert.False(client.IsIdleTimedOut, "Der Client bleibt durch die PINGs (und die ACKs des Servers) aktiv.");
+        Assert.That(server.IsIdleTimedOut, Is.False, "Keep-Alive-PINGs müssen den Server-Idle-Timeout verhindern.");
+        Assert.That(client.IsIdleTimedOut, Is.False, "Der Client bleibt durch die PINGs (und die ACKs des Servers) aktiv.");
     }
 
     private static void Pump(QuicClientConnection client, QuicServerConnection server)

@@ -30,6 +30,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// RFC 9001, Appendix A. Das ist das Fundament des gesamten Stacks – stimmt hier ein Bit nicht,
 /// scheitert später jeder echte Handshake.
 /// </summary>
+[TestFixture]
 public class Rfc9001VectorTests
 {
     // Von beiden Seiten genutzte Destination Connection ID (RFC 9001 A).
@@ -37,44 +38,42 @@ public class Rfc9001VectorTests
 
     // --- A.1: Key-Schedule ------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void A1_InitialSecret_Matches()
     {
         var secrets = InitialSecrets.DeriveV1(Dcid);
-        Assert.Equal(
-            "7db5df06e7a69e432496adedb00851923595221596ae2ae9fb8115c1e9ed0a44",
-            Hex.ToHex(secrets.InitialSecret));
+        Assert.That(Hex.ToHex(secrets.InitialSecret), Is.EqualTo("7db5df06e7a69e432496adedb00851923595221596ae2ae9fb8115c1e9ed0a44"));
     }
 
-    [Fact]
+    [Test]
     public void A1_ClientKeys_Match()
     {
         var s = InitialSecrets.DeriveV1(Dcid);
-        Assert.Equal("c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea", Hex.ToHex(s.Client.Secret));
-        Assert.Equal("1f369613dd76d5467730efcbe3b1a22d", Hex.ToHex(s.Client.Key));
-        Assert.Equal("fa044b2f42a3fd3b46fb255c", Hex.ToHex(s.Client.Iv));
-        Assert.Equal("9f50449e04a0e810283a1e9933adedd2", Hex.ToHex(s.Client.HeaderProtectionKey));
+        Assert.That(Hex.ToHex(s.Client.Secret), Is.EqualTo("c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea"));
+        Assert.That(Hex.ToHex(s.Client.Key), Is.EqualTo("1f369613dd76d5467730efcbe3b1a22d"));
+        Assert.That(Hex.ToHex(s.Client.Iv), Is.EqualTo("fa044b2f42a3fd3b46fb255c"));
+        Assert.That(Hex.ToHex(s.Client.HeaderProtectionKey), Is.EqualTo("9f50449e04a0e810283a1e9933adedd2"));
     }
 
-    [Fact]
+    [Test]
     public void A1_ServerKeys_Match()
     {
         var s = InitialSecrets.DeriveV1(Dcid);
-        Assert.Equal("3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b", Hex.ToHex(s.Server.Secret));
-        Assert.Equal("cf3a5331653c364c88f0f379b6067e37", Hex.ToHex(s.Server.Key));
-        Assert.Equal("0ac1493ca1905853b0bba03e", Hex.ToHex(s.Server.Iv));
-        Assert.Equal("c206b8d9b9f0f37644430b490eeaa314", Hex.ToHex(s.Server.HeaderProtectionKey));
+        Assert.That(Hex.ToHex(s.Server.Secret), Is.EqualTo("3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b"));
+        Assert.That(Hex.ToHex(s.Server.Key), Is.EqualTo("cf3a5331653c364c88f0f379b6067e37"));
+        Assert.That(Hex.ToHex(s.Server.Iv), Is.EqualTo("0ac1493ca1905853b0bba03e"));
+        Assert.That(Hex.ToHex(s.Server.HeaderProtectionKey), Is.EqualTo("c206b8d9b9f0f37644430b490eeaa314"));
     }
 
-    [Fact]
+    [Test]
     public void A1_HkdfLabel_Encoding_Matches()
     {
         // RFC 9001 A.1 zeigt die vollständige HkdfLabel-Kodierung.
-        Assert.Equal("00200f746c73313320636c69656e7420696e00", Hex.ToHex(TlsHkdf.BuildHkdfLabel("client in", default, 32)));
-        Assert.Equal("00200f746c7331332073657276657220696e00", Hex.ToHex(TlsHkdf.BuildHkdfLabel("server in", default, 32)));
-        Assert.Equal("00100e746c7331332071756963206b657900", Hex.ToHex(TlsHkdf.BuildHkdfLabel("quic key", default, 16)));
-        Assert.Equal("000c0d746c733133207175696320697600", Hex.ToHex(TlsHkdf.BuildHkdfLabel("quic iv", default, 12)));
-        Assert.Equal("00100d746c733133207175696320687000", Hex.ToHex(TlsHkdf.BuildHkdfLabel("quic hp", default, 16)));
+        Assert.That(Hex.ToHex(TlsHkdf.BuildHkdfLabel("client in", default, 32)), Is.EqualTo("00200f746c73313320636c69656e7420696e00"));
+        Assert.That(Hex.ToHex(TlsHkdf.BuildHkdfLabel("server in", default, 32)), Is.EqualTo("00200f746c7331332073657276657220696e00"));
+        Assert.That(Hex.ToHex(TlsHkdf.BuildHkdfLabel("quic key", default, 16)), Is.EqualTo("00100e746c7331332071756963206b657900"));
+        Assert.That(Hex.ToHex(TlsHkdf.BuildHkdfLabel("quic iv", default, 12)), Is.EqualTo("000c0d746c733133207175696320697600"));
+        Assert.That(Hex.ToHex(TlsHkdf.BuildHkdfLabel("quic hp", default, 16)), Is.EqualTo("00100d746c733133207175696320687000"));
     }
 
     // --- A.2: Client Initial ----------------------------------------------------------------
@@ -90,7 +89,7 @@ public class Rfc9001VectorTests
         75300901100f088394c8f03e51570806 048000ffff
         """;
 
-    [Fact]
+    [Test]
     public void A2_ClientInitial_ProtectedPacket_Matches()
     {
         var s = InitialSecrets.DeriveV1(Dcid);
@@ -102,10 +101,10 @@ public class Rfc9001VectorTests
 
         byte[] packet = prot.ProtectPacket(header, packetNumberLength: 4, packetNumber: 2, payload, longHeader: true);
 
-        Assert.Equal(ExpectedClientInitial, Hex.ToHex(packet));
+        Assert.That(Hex.ToHex(packet), Is.EqualTo(ExpectedClientInitial));
     }
 
-    [Fact]
+    [Test]
     public void A2_ClientHeaderProtectionMask_Matches()
     {
         var s = InitialSecrets.DeriveV1(Dcid);
@@ -113,7 +112,7 @@ public class Rfc9001VectorTests
 
         Span<byte> mask = stackalloc byte[5];
         prot.HeaderProtectionMask(Hex.Parse("d1b1c98dd7689fb8ec11d242b123dc9b"), mask);
-        Assert.Equal("437b9aec36", Hex.ToHex(mask));
+        Assert.That(Hex.ToHex(mask), Is.EqualTo("437b9aec36"));
     }
 
     // --- A.3: Server Initial ----------------------------------------------------------------
@@ -135,7 +134,7 @@ public class Rfc9001VectorTests
         2158407dd074ee
         """;
 
-    [Fact]
+    [Test]
     public void A3_ServerInitial_ProtectedPacket_Matches()
     {
         var s = InitialSecrets.DeriveV1(Dcid);
@@ -146,10 +145,10 @@ public class Rfc9001VectorTests
 
         byte[] packet = prot.ProtectPacket(header, packetNumberLength: 2, packetNumber: 1, payload, longHeader: true);
 
-        Assert.Equal(Hex.ToHex(Hex.Parse(ExpectedServerInitial)), Hex.ToHex(packet));
+        Assert.That(Hex.ToHex(packet), Is.EqualTo(Hex.ToHex(Hex.Parse(ExpectedServerInitial))));
     }
 
-    [Fact]
+    [Test]
     public void A3_ServerHeaderProtectionMask_Matches()
     {
         var s = InitialSecrets.DeriveV1(Dcid);
@@ -157,10 +156,10 @@ public class Rfc9001VectorTests
 
         Span<byte> mask = stackalloc byte[5];
         prot.HeaderProtectionMask(Hex.Parse("2cd0991cd25b0aac406a5816b6394100"), mask);
-        Assert.Equal("2ec0d8356a", Hex.ToHex(mask));
+        Assert.That(Hex.ToHex(mask), Is.EqualTo("2ec0d8356a"));
     }
 
-    [Fact]
+    [Test]
     public void A3_ServerInitial_RoundTrip_Unprotect()
     {
         var s = InitialSecrets.DeriveV1(Dcid);
@@ -174,14 +173,14 @@ public class Rfc9001VectorTests
             packet, packetNumberOffset: 18, largestAckedPacketNumber: -1, longHeader: true,
             plaintext, out ulong pn, out int len);
 
-        Assert.True(ok);
-        Assert.Equal(1UL, pn);
-        Assert.Equal(Hex.ToHex(Hex.Parse(ServerPayloadHex)), Hex.ToHex(plaintext.AsSpan(0, len)));
+        Assert.That(ok, Is.True);
+        Assert.That(pn, Is.EqualTo(1UL));
+        Assert.That(Hex.ToHex(plaintext.AsSpan(0, len)), Is.EqualTo(Hex.ToHex(Hex.Parse(ServerPayloadHex))));
     }
 
     // --- A.4: Retry -------------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void A4_RetryIntegrityTag_Matches()
     {
         // Retry-Paket inkl. Tag; die letzten 16 Bytes sind der Tag.
@@ -191,8 +190,8 @@ public class Rfc9001VectorTests
 
         byte[] tag = RetryIntegrity.ComputeTag(Dcid, retryWithoutTag);
 
-        Assert.Equal("04a265ba2eff4d829058fb3f0f2496ba", Hex.ToHex(tag));
-        Assert.True(RetryIntegrity.Verify(Dcid, retryWithoutTag, expectedTag));
+        Assert.That(Hex.ToHex(tag), Is.EqualTo("04a265ba2eff4d829058fb3f0f2496ba"));
+        Assert.That(RetryIntegrity.Verify(Dcid, retryWithoutTag, expectedTag), Is.True);
     }
 
     // --- Erwarteter Client-Initial (1200 Bytes) ---------------------------------------------

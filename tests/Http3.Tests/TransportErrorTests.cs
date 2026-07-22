@@ -33,48 +33,49 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// passenden Fehlercode via CONNECTION_CLOSE beantwortet werden. Plus Frame-Parser-Fehler und die neuen
 /// PATH_CHALLENGE/PATH_RESPONSE-Frames.
 /// </summary>
+[TestFixture]
 public class TransportErrorTests
 {
-    [Fact]
+    [Test]
     public void FrameParser_UnknownFrameType_IsAnError()
     {
-        Assert.Equal(FrameParseResult.UnknownFrameType, FrameParser.TryParseAll([0x1f], out _));
+        Assert.That(FrameParser.TryParseAll([0x1f], out _), Is.EqualTo(FrameParseResult.UnknownFrameType));
     }
 
-    [Fact]
+    [Test]
     public void FrameParser_TruncatedFrame_IsAnEncodingError()
     {
         // CRYPTO-Frame-Typ (0x06) ohne Offset/Länge/Daten ⇒ unvollständig.
-        Assert.Equal(FrameParseResult.EncodingError, FrameParser.TryParseAll([0x06], out _));
+        Assert.That(FrameParser.TryParseAll([0x06], out _), Is.EqualTo(FrameParseResult.EncodingError));
     }
 
-    [Fact]
+    [Test]
     public void PathChallengeAndResponse_RoundTrip()
     {
         byte[] bytes = FrameParser.Serialize([new PathChallengeFrame(0x0123456789abcdef), new PathResponseFrame(0x00ff00ff00ff00ff)]);
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(bytes, out List<Frame> parsed));
-        Assert.Equal(0x0123456789abcdefUL, Assert.IsType<PathChallengeFrame>(parsed[0]).Data);
-        Assert.Equal(0x00ff00ff00ff00ffUL, Assert.IsType<PathResponseFrame>(parsed[1]).Data);
+        Assert.That(FrameParser.TryParseAll(bytes, out List<Frame> parsed), Is.EqualTo(FrameParseResult.Ok));
+        Assert.That(Expect.Type<PathChallengeFrame>(parsed[0]).Data, Is.EqualTo(0x0123456789abcdefUL));
+        Assert.That(Expect.Type<PathResponseFrame>(parsed[1]).Data, Is.EqualTo(0x00ff00ff00ff00ffUL));
     }
 
-    [Fact]
+    [Test]
     public void StreamReceiveBuffer_DataBeyondFlowControlWindow_IsFlowControlError()
     {
         var buffer = new StreamReceiveBuffer { MaxData = 4 };
-        Assert.Equal(StreamReceiveResult.FlowControlError, buffer.Receive(0, new byte[5], fin: false));
+        Assert.That(buffer.Receive(0, new byte[5], fin: false), Is.EqualTo(StreamReceiveResult.FlowControlError));
     }
 
-    [Fact]
+    [Test]
     public void StreamReceiveBuffer_InconsistentFinalSize_IsFinalSizeError()
     {
         var buffer = new StreamReceiveBuffer();
-        Assert.Equal(StreamReceiveResult.Ok, buffer.Receive(0, new byte[4], fin: true));       // Final Size = 4
-        Assert.Equal(StreamReceiveResult.FinalSizeError, buffer.Receive(4, new byte[2], fin: false)); // darüber hinaus
+        Assert.That(buffer.Receive(0, new byte[4], fin: true), Is.EqualTo(StreamReceiveResult.Ok));       // Final Size = 4
+        Assert.That(buffer.Receive(4, new byte[2], fin: false), Is.EqualTo(StreamReceiveResult.FinalSizeError)); // darüber hinaus
     }
 
     // ---- Integration: STREAM_LIMIT_ERROR end-to-end --------------------------------------
 
-    [Fact]
+    [Test]
     public void PeerExceedingStreamLimit_IsClosedWithStreamLimitError()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -87,7 +88,7 @@ public class TransportErrorTests
         client.Start();
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
-        Assert.True(client.HandshakeConfirmed);
+        Assert.That(client.HandshakeConfirmed, Is.True);
 
         // Der Client eröffnet ZWEI Streams (0 und 1) und sendet auf beiden – Stream 1 verletzt das Limit.
         client.OpenBidirectionalStream().Write([1]);
@@ -96,10 +97,10 @@ public class TransportErrorTests
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.True(server.IsClosing, "Der Server muss die Verbindung wegen Stream-Limit-Verstoßes schließen.");
+        Assert.That(server.IsClosing, Is.True, "Der Server muss die Verbindung wegen Stream-Limit-Verstoßes schließen.");
         // Der Client empfängt das CONNECTION_CLOSE mit dem korrekten Fehlercode.
-        Assert.NotNull(client.PeerCloseFrame);
-        Assert.Equal((ulong)TransportError.StreamLimitError, client.PeerCloseFrame!.ErrorCode);
+        Assert.That(client.PeerCloseFrame, Is.Not.Null);
+        Assert.That(client.PeerCloseFrame!.ErrorCode, Is.EqualTo((ulong)TransportError.StreamLimitError));
     }
 
     private static void Pump(QuicClientConnection client, QuicServerConnection server)

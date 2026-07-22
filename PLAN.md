@@ -55,35 +55,33 @@ also eine TLS-1.3-**Handshake-Engine**, aber keinen kompletten TLS-Stack.
 ```
 HTTP3FromScratch.slnx
 src/
-  Quic.Core/             # Gemeinsame Primitive (VarInt aus RFC 9000 §16, Span-Buffer) – von allen Schichten genutzt
+  Quic.Core/             # Gemeinsame Primitive – von allen Schichten genutzt
     VarInt.cs            # QUIC Variable-Length Integers (RFC 9000 §16)
-    Buffers/             # Pooling, Reader/Writer über Span<byte>
+    Buffers/             # BufferReader/BufferWriter über Span<byte>
   Quic.Tls/              # QUIC-TLS-Handshake-Bindung (RFC 8446 + 9001) – TLS 1.3 im QUIC-Profil,
-                         # ohne Record-Layer; liefert Handshake-Nachrichten + Secrets an Quic
-    Messages/            # ClientHello, ServerHello, EncryptedExtensions, ...
-    Extensions/          # SNI, ALPN, KeyShare, SupportedVersions, quic_transport_parameters
-    KeySchedule.cs       # HKDF-Expand-Label, Secrets, Transcript-Hash
-    HandshakeMachine.cs  # Client- & Server-Zustandsautomat
-  Quic/                  # QUIC Transport (RFC 9000/9001/9002); referenziert Quic.Tls (Einweg)
-    Packets/             # Long/Short Header, Packet Number Codec
-    Crypto/              # Initial Secrets, Packet/Header Protection, Key Update
-    Frames/              # Alle Frame-Typen
-    QuicConnection.cs    # Verbindungs-Zustandsautomat
-    QuicStream.cs        # Streams + Flow Control
-    Recovery/            # RTT, Loss Detection, PTO, NewReno (RFC 9002)
-    Udp/                 # Socket-Loop, Demultiplexing per Connection-ID
-  Http3.Qpack/           # QPACK (RFC 9204)
-    StaticTable.cs
-    Huffman.cs           # Tabelle aus RFC 7541 Appendix B
-    Encoder.cs / Decoder.cs
+                         # ohne Record-Layer; referenziert nur Quic.Core (kein Rückverweis auf Quic)
+    Messages/            # ClientHello, ServerHello (+HRR), EE, Certificate(Verify), Finished, NST
+    Crypto/              # KeySchedule, TlsHkdf, Transcript, IKeyExchange (ECDHE/X25519/X448/Hybrid-PQ), Ed25519/Ed448
+    Handshake/           # TlsClientHandshake / TlsServerHandshake hinter ITlsHandshake, Zertifikatsprüfung
+  Quic/                  # QUIC Transport (RFC 9000/9001/9002); referenziert Quic.Tls
+    Packets/             # Long/Short Header, PN-Codec, Retry, VN, Stateless Reset, Connection ID
+    Crypto/              # Initial Secrets, Packet/Header Protection (inkl. ChaCha20-HP), Key Update
+    Frames/              # Alle Frame-Typen + FrameParser
+    Connection/          # QuicEndpoint (gemeinsame Logik) + QuicClient-/QuicServerConnection, CID-Manager, Idle
+    Streams/             # QuicStream, Send-/ReceiveBuffer, StreamId (inkl. Reset/AbortRead)
+    Recovery/            # RTT, Loss Detection, PTO, NewReno, Pacer (RFC 9002)
+  Http3.Qpack/           # QPACK (RFC 9204): Static Table, Huffman (RFC 7541 App. B, generiert),
+                         # statischer + dynamischer Encoder/Decoder
   Http3/                 # HTTP/3 (RFC 9114) + öffentliche API
-    Http3Connection.cs   # Control Streams, SETTINGS
-    Http3Client.cs / Http3Server.cs
+    Http3ClientConnection.cs / Http3ServerConnection.cs
+    Http3Frame.cs / Http3Constants.cs / Http3Message.cs   # Frames, Fehlercodes, Request/Response
+    Http3Qpack.cs        # QPACK-Anbindung + Uni-Stream-/Control-Stream-Zustandsmaschine
+    Http3MessageValidator.cs  # Malformed-Erkennung (§4.1.2/§4.2/§4.3)
 tests/
-  Http3.Tests/           # Unit-Tests mit RFC-Testvektoren
+  Http3.Tests/           # 315 Tests, u. a. mit RFC-Testvektoren und „bösen" Roh-QUIC-Peers
 samples/
-  H3Get/                 # CLI: GET gegen öffentliche HTTP/3-Server
-  H3Server/              # Minimaler Demo-Server
+  H3Get/                 # HTTP/3-Client-CLI (GET/POST, Cancel, GOAWAY, 0-RTT, … — s. README)
+  H3Server/              # Demo-Server über UDP (CID-Demux, Retry, Stateless Reset, GOAWAY, …)
 
 Namespaces: org.GraphDefined.Vanaheimr.Hermod.Quic (+ .Tls/.Core/…) für den QUIC-Transport —
 NEBEN, nicht unter HTTP/3; org.GraphDefined.Vanaheimr.Hermod.HTTP3 (+ .Qpack/.Tests) für die
@@ -94,7 +92,7 @@ HTTP/3-Schicht. Projekt-/Assemblynamen bleiben die kurzen. Usings in #region Usi
 
 ## Phasen
 
-**Status-Legende:** ✅ fertig · 🔶 teilweise · ⬜ offen. Stand: 263 Tests grün, Meilensteine M1–M3
+**Status-Legende:** ✅ fertig · 🔶 teilweise · ⬜ offen. Stand: 346 Tests grün, Meilensteine M1–M3
 erreicht (M1: Live-Handshake gegen cloudflare-quic.com · M2: echtes `GET` → Status 200 + 126 KB HTML ·
 M3: eigener HTTP/3-Server, `H3Get`-Client holt Status 200 über echtes localhost-UDP).
 
@@ -119,7 +117,7 @@ Ziel: Ein selbst gebautes Initial-Paket, das Wireshark korrekt dekodiert.
   wertvollste Einzeltest des ganzen Projekts. **A.5 (ChaCha20 HP-Maske) inzwischen ebenfalls
   byte-genau** (`aefefe7d03`), plus RFC-8439-Blockvektor und ein Live-GET mit erzwungenem ChaCha20.
 
-### 🔶 Phase 2 — TLS-1.3-Handshake-Engine (RFC 8446, nur was QUIC braucht)
+### ✅ Phase 2 — TLS-1.3-Handshake-Engine (RFC 8446, nur was QUIC braucht)
 Ziel: Handshake-Nachrichten erzeugen/verarbeiten und den Key Schedule treiben.
 - ✅ Nachrichten: ClientHello, ServerHello (+ HelloRetryRequest), EncryptedExtensions, Certificate,
   CertificateVerify, Finished — bauen und parsen. (Kein ChangeCipherSpec, keine Records — QUIC braucht das nicht.)
@@ -141,37 +139,37 @@ Ziel: Handshake-Nachrichten erzeugen/verarbeiten und den Key Schedule treiben.
   Finished berechnet und live gesendet (`KeySchedule.FinishedVerifyData`, `Finished.BuildMessage`).
 - ✅ Client-Application (1-RTT) Secrets abgeleitet (`DeriveApplicationSecrets`); 1-RTT-Pakete des
   Servers (inkl. HANDSHAKE_DONE) live entschlüsselt.
-- ⬜ Client- und Server-Seite als expliziter Zustandsautomat; Interface zum QUIC-Layer:
-  „hier sind CRYPTO-Bytes auf Level X rein" / „hier sind CRYPTO-Bytes für Level Y raus" /
-  „neue Schlüssel für Level Z verfügbar" (analog zum ngtcp2/quiche-Modell).
+- ✅ Client- und Server-Seite als expliziter Zustandsautomat (`TlsClientHandshake`/`TlsServerHandshake`
+  hinter `ITlsHandshake`); Interface zum QUIC-Layer: „CRYPTO-Bytes auf Level X rein" / „CRYPTO-Bytes
+  für Level Y raus" / „neue Schlüssel für Level Z verfügbar" (analog zum ngtcp2/quiche-Modell).
 - ✅ **Prüfstein bestanden:** Key-Schedule-Testvektoren aus **RFC 8448** (TLS 1.3 Traces) werden
   byte-genau nachgerechnet (Early/Handshake Secret, c/s hs traffic, Traffic-Key-Ableitung).
 
-### 🔶 Phase 3 — QUIC-Verbindungsaufbau (RFC 9000 §5–§7, §12–§14)
+### ✅ Phase 3 — QUIC-Verbindungsaufbau (RFC 9000 §5–§7, §12–§14)
 Ziel: Vollständiger Handshake gegen einen echten Server (z. B. `cloudflare-quic.com`).
 - ✅ Frames der ersten Stunde: `PADDING`, `PING`, `ACK`, `CRYPTO`, `CONNECTION_CLOSE` (+ STREAM,
   HANDSHAKE_DONE). Parsen/Serialisieren gegen RFC-9001-A.3-Payload verifiziert.
-- 🔶 Encryption Levels: ✅ Initial (Schlüssel + Pakete); ⬜ Handshake/1-RTT-Schlüssel (aus Phase 2b).
+- ✅ Encryption Levels: Initial, Handshake, 1-RTT (+ 0-RTT) — Schlüssel + Pakete aller Levels.
   ✅ Coalesced Packets (mehrere QUIC-Pakete pro UDP-Datagramm) werden geparst.
-- 🔶 Verbindungs-Zustandsautomat: ✅ wiederverwendbare `QuicClientConnection` (Client-seitig) mit
+- ✅ Verbindungs-Zustandsautomat: wiederverwendbare `QuicClientConnection` mit
   Encryption-Levels, Packet-Number-Spaces (`PacketNumberSpace`), CRYPTO-Reassemblierung und
   TLS-Engine (`TlsClientHandshake`, „CRYPTO rein / CRYPTO + Keys raus"-Modell) — treibt den
-  Handshake bis HANDSHAKE_DONE; ✅ expliziter Zustand Closing/Draining/Closed, Idle-Timeout und
+  Handshake bis HANDSHAKE_DONE; expliziter Zustand Closing/Draining/Closed, Idle-Timeout und
   Server-Seite (siehe Phase 8 / M3).
-- 🔶 ACK-Erzeugung: ✅ Ranges aus empfangenen Paketnummern (`AckFrame.FromPacketNumbers`),
-  im Handshake live gesendet; ⬜ ack_delay, ACK-Verarbeitung/Loss-Detection, dauerhaftes ACKen.
-- 🔶 Transport-Parameter: ✅ Encode/Decode (`TransportParameters`); ⬜ echtes Aushandeln/Anwenden
-  der Limits im Verbindungszustand.
+- ✅ ACK-Erzeugung: Ranges aus empfangenen Paketnummern (`AckFrame.FromPacketNumbers`), dauerhaft;
+  ack_delay und ACK-Verarbeitung/Loss-Detection in Phase 5 umgesetzt.
+- ✅ Transport-Parameter: Encode/Decode (`TransportParameters`) und Anwenden der ausgehandelten
+  Limits (Flow Control, Stream-Limits, Idle-Timeout, active_connection_id_limit, …).
 - ✅ **CRYPTO-Daten paketübergreifend**: Empfang (`CryptoStreamAssembler`, offset-basiert,
   ungeordnet/überlappend — Cloudflare-Zertifikatskette über 5 Handshake-Pakete reassembliert) **und
   Senden** (`AppendLevelPackets` verteilt ausgehende CRYPTO offset-korrekt auf mehrere Initial-/Handshake-
   Pakete, je ≤ MTU, `MaxCryptoDataPerPacket = 1000`). Der PQ-Hybrid-ClientHello (X25519MLKEM768,
   ~1450 Byte) geht so als **zwei** ≤1252-Byte-Initials raus (statt eines Übergroßdatagramms); Regressionstest
   über den Datagramm-Pfad + live gegen Cloudflare bestätigt (normal **und** `--mlkem`, je Status 200).
-- 🔶 UDP-Loop: ✅ einfaches Senden/Empfangen (Sample `H3Get`); ⬜ Demultiplexing per Destination
-  Connection ID, Single-Writer-Prinzip pro Verbindung (Channel/Lock-freie Queue).
-- ✅ Client-Initial auf ≥ 1200 Bytes padden (`InitialPacketFactory`); ⬜ Anti-Amplification-Limit
-  (3×) serverseitig.
+- ✅ UDP-Loop: Senden/Empfangen (Samples `H3Get`/`H3Server`) inkl. **Demultiplexing per Destination
+  Connection ID** (migrationstauglich, siehe Phase 8); Single-Writer-/Channel-Architektur → Phase 9.
+- ✅ Client-Initial auf ≥ 1200 Bytes padden (`InitialPacketFactory`); ✅ Anti-Amplification-Limit
+  (3×) serverseitig (siehe Phase 8, in-process getestet).
 - ✅ **Meilenstein M1 erreicht:** **Vollständiger** Handshake mit cloudflare-quic.com — ClientHello
   → ServerHello → Server-Flight entschlüsselt & Finished verifiziert → eigener Finished + ACKs
   gesendet → **HANDSHAKE_DONE** in einem 1-RTT-Paket empfangen. Handshake abgeschlossen, 1-RTT-Keys
@@ -179,19 +177,23 @@ Ziel: Vollständiger Handshake gegen einen echten Server (z. B. `cloudflare-quic
 - ✅ ACK-Erzeugung aus empfangenen Paketnummern (`AckFrame.FromPacketNumbers`); NEW_TOKEN /
   NEW_CONNECTION_ID / RETIRE_CONNECTION_ID parsen (1-RTT-Flight).
 
-### 🔶 Phase 4 — Streams & Flow Control (RFC 9000 §2–§4, §19)
+### ✅ Phase 4 — Streams & Flow Control (RFC 9000 §2–§4, §19)
 - ✅ `STREAM`-Frames (Offset/FIN/Length-Varianten), Reassemblierung out-of-order Daten
   (`StreamReceiveBuffer` mit Final-Size/Flow-Control-Prüfung; `StreamSendBuffer`).
 - ✅ Bidirektionale + unidirektionale Streams, Stream-ID-Vergabe (`StreamId`, Bit-Kodierung).
   Server-Streams (HTTP/3-Control + QPACK) von cloudflare-quic.com live reassembliert.
-- 🔶 Flow Control: ✅ Frames `MAX_DATA`/`MAX_STREAM_DATA`/`MAX_STREAMS`/`DATA_BLOCKED`/
-  `STREAM_DATA_BLOCKED`/`STREAMS_BLOCKED`; ✅ Sende-Fensterbeachtung (Stream + Verbindung),
-  Peer-Limits aus EncryptedExtensions dekodiert; ⬜ Empfangs-seitiges MAX_*-Nachführen (Window-Auto-Tuning).
-- ✅ `RESET_STREAM` / `STOP_SENDING` (parse/write); ⬜ vollständige Stream-Zustandsautomaten (§3).
-- 🔶 Stream-API: `QuicStream` (`Write`/`Finish`/`Read`); ⬜ async/Backpressure-API.
+- ✅ Flow Control: Frames `MAX_DATA`/`MAX_STREAM_DATA`/`MAX_STREAMS`/`DATA_BLOCKED`/
+  `STREAM_DATA_BLOCKED`/`STREAMS_BLOCKED`; Sende-Fensterbeachtung (Stream + Verbindung),
+  Peer-Limits aus EncryptedExtensions dekodiert; empfangsseitiges MAX_*-Nachführen
+  (`CollectFlowControlFrames`: ab halb verbrauchtem Fenster wird nachgewährt);
+  dynamisches Window-Auto-Tuning → Phase 9.
+- ✅ `RESET_STREAM` / `STOP_SENDING` **vollständig** (Senden/Empfangen/Retransmission,
+  §3.5-Solicited-Reset, Final-Size-/Zustandsvalidierung — Details in Phase 8).
+- ✅ Stream-API: `QuicStream` (`Write`/`Finish`/`Read`/`Reset`/`AbortRead`);
+  async/Backpressure-API → Phase 9.
 - ✅ 1-RTT-Sendepfad (`ShortHeader.Build`) — App-Pakete mit ACK + STREAM-Frames.
 
-### 🔶 Phase 5 — Loss Detection & Congestion Control (RFC 9002)
+### ✅ Phase 5 — Loss Detection & Congestion Control (RFC 9002)
 Ohne diese Phase funktioniert alles nur im Labor; mit Paketverlust bricht sonst der Handshake ab.
 - ✅ RTT-Schätzung (`RttEstimator`: smoothed_rtt, rttvar, min_rtt; ack_delay berücksichtigt).
 - ✅ Loss Detection (`LossRecovery`): Packet-Threshold (3) + Time-Threshold; Probe Timeout (PTO)
@@ -222,14 +224,15 @@ Ohne diese Phase funktioniert alles nur im Labor; mit Paketverlust bricht sonst 
   ein 150-KB-In-Process-Transfer beweist, dass der gepacte, cwnd-begrenzte Sendepfad byte-genau und
   MTU-konform überträgt.
 
-### 🔶 Phase 6 — QPACK (RFC 9204), minimal aber korrekt
+### ✅ Phase 6 — QPACK (RFC 9204), minimal aber korrekt
 - ✅ **Stufe 1 (reicht für volle Interop):** Encoder/Decoder ohne dynamische Tabelle —
   statische Tabelle (99 Einträge, `QpackStaticTable`) + Literale, Huffman (`Huffman`, Tabelle aus
   RFC 7541 App. B, per Skript generiert), N-Bit-Integer und String-Codec (`QpackPrimitives`).
   Verifiziert: RFC-9204-B.1-Beispiel (Decode), RFC-7541-Huffman-Vektoren, Round-Trips typischer
   Request-Header. `SETTINGS_QPACK_MAX_TABLE_CAPACITY = 0` wird angesagt → Peer bleibt auch statisch;
   Verweise auf die dynamische Tabelle werden abgelehnt (`QpackResult.DynamicTableReference`).
-- ⬜ Encoder-/Decoder-Streams (Pflicht in HTTP/3, bleiben bei Kapazität 0 praktisch leer) — mit Phase 7.
+- ✅ Encoder-/Decoder-Streams (Pflicht in HTTP/3): beidseitig geöffnet und verdrahtet (Stufe 2 unten +
+  Phase 7); bei Kapazität 0 bleiben sie praktisch leer.
 - ✅ **Stufe 2 (dynamische Tabelle):** `QpackDynamicTable` (FIFO, Byte-Kapazität, Eviction, absolute
   Indizierung), `QpackDynamicEncoder` (erzeugt Insert-Instruktionen + Field Section, Base = RIC → pre-base),
   `QpackDynamicDecoder` (Encoder-Stream: Set Capacity / Insert Name-Ref static+dynamic / Insert Literal /
@@ -247,20 +250,176 @@ Ohne diese Phase funktioniert alles nur im Labor; mit Paketverlust bricht sonst 
   sich Referenzen und Inserts fallen auf Literale zurück; mit Acks bleibt die Tabelle nutzbar. In-process
   getestet (Ack gibt Referenz frei → Eviction wieder möglich) und live (Server erhält die Client-Acks).
 
-### 🔶 Phase 7 — HTTP/3 (RFC 9114)
+### ✅ Phase 7 — HTTP/3 (RFC 9114) — Feature-Audit komplett
+Bewusst offen bleiben nur noch: Server-Push (MAY), klassisches CONNECT-Proxying.
+- ✅ **WebTransport über HTTP/3** (draft-ietf-webtrans-http3-13) — der komplette Draft inkl. Flow Control:
+  - **Session-Aufbau** (§3): Extended CONNECT mit `:protocol = webtransport`; Gating über
+    SETTINGS_WT_MAX_SESSIONS (0x14e9cd29) + ENABLE_CONNECT_PROTOCOL + H3-/QUIC-Datagramme (§3.1); ohne
+    Datagramme ⇒ malformed; unbekannte Ressource ⇒ 404; über WT_MAX_SESSIONS ⇒ H3_REQUEST_REJECTED (§5.2).
+    `Http3ClientConnection.ConnectWebTransport`/`TryGetWebTransportSession`, Server `webTransportHandler`.
+  - **Streams** (§4.1/§4.2): unidirektional (Typ 0x54 ‖ Session-ID), bidirektional (WT_STREAM 0x41 ‖
+    Session-ID); beide Seiten öffnen/empfangen; Routing über `WebTransportManager` (client- und
+    server-initiiert), früh eingetroffene Streams gepuffert (§4.5, Überlauf ⇒ WT_BUFFERED_STREAM_REJECTED).
+    Reset/StopSending bilden 32-Bit-App-Codes byte-genau in den WT_APPLICATION_ERROR-Bereich ab (§4.3);
+    richtungsabhängig (send-only-Uni ⇒ nur RESET, receive-only-Uni ⇒ nur STOP_SENDING).
+  - **Datagramme** (§4.4): über die HTTP-Datagram-Infra (Quarter Stream ID = CONNECT-Stream).
+  - **Flow Control** (§5): Capsule-Protokoll (RFC 9297 §3.2) auf dem CONNECT-Stream; WT_MAX_STREAMS
+    (0x190B4D3F/40), WT_MAX_DATA (0x190B4D3D), WT_STREAMS_BLOCKED/WT_DATA_BLOCKED — Limits aus
+    SETTINGS_WT_INITIAL_MAX_* + proaktives Nachführen; aktiv nur bei WT_MAX_SESSIONS > 1 (§5.1).
+  - **Session-Ende** (§6): WT_CLOSE_SESSION-Capsule (0x2843, 32-Bit-Code + UTF-8-Grund) + FIN; sauberes
+    FIN = Code 0; alle zugehörigen Streams mit WT_SESSION_GONE abgebrochen.
+  - 7 Tests (Error-Mapping, Capsule-Reader, Support-Gating, Session/404, Datagramm+uni+bidi-Echo
+    end-to-end, Close mit Code/Grund, Session-Limit). **Live über UDP:** `H3Get --webtransport` gegen
+    `H3Server` — Session, Datagramm-Echo, uni-/bidi-Stream (Echo), sauberes Ende; alle anderen
+    Sample-Modi + Cloudflare regressionsfrei. Deferred: RESET_STREAM_AT (eigene Extension),
+    WT-Available-Protocols-Negotiation, Keying-Material-Exporter.
+- ✅ **HTTP-Datagramme (RFC 9297) über QUIC-DATAGRAM (RFC 9221)** — die Grundlage von MASQUE/WebTransport:
+  - **QUIC-Schicht (RFC 9221):** Transport-Parameter `max_datagram_frame_size` (0x20, senden/parsen),
+    `DatagramFrame` (Typ 0x30 ohne / 0x31 mit Length), Emission im 1-RTT-Sendepfad (unfragmentierbar
+    ⇒ ein Frame pro Paket, congestion-controlled, NICHT retransmittiert), Empfang mit
+    PROTOCOL_VIOLATION bei fehlender Ankündigung bzw. Übergröße (§3). API: `TrySendDatagram`
+    (verweigert ohne Peer-TP / über MTU) + `TakeReceivedDatagrams`.
+  - **HTTP/3-Schicht (RFC 9297):** Setting `SETTINGS_H3_DATAGRAM` (0x33, Wert 0/1 sonst H3_SETTINGS_
+    ERROR), beidseitige Aushandlung (`DatagramsNegotiated` = Setting gesendet+empfangen UND
+    max_datagram_frame_size > 0). HTTP/3-Datagram-Format = Quarter Stream ID (Stream-ID / 4) + Payload;
+    Zuordnung zum Request-Stream/Tunnel. Fehler: unparsbare/zu große Quarter Stream ID ⇒
+    H3_DATAGRAM_ERROR (0x33, Verbindungsfehler); Datagramm zu einem Request ohne Datagram-Semantik
+    (z. B. GET) ⇒ Request abbrechen mit H3_DATAGRAM_ERROR (Stream-Fehler); unbekannter Stream ⇒ still
+    verwerfen. `Http3Tunnel.TrySendDatagram/TryReceiveDatagram` (unzuverlässig: Überlauf verwirft ältestes).
+  - 7 Tests (Frame-Round-Trip beide Varianten, keine Aushandlung ⇒ kein Senden, **Echo end-to-end über
+    Tunnel**, GET+Datagramm ⇒ Stream-Reset, malformed ⇒ Verbindungsfehler, unbekannter Stream verworfen,
+    ungültiger Setting-Wert). **Live über UDP:** `H3Get --datagrams` gegen `H3Server` (Route
+    `datagram-echo`) — Aushandlung, CONNECT 200, 3/3 Datagramme in DATAGRAM-Frames geecht;
+    Cloudflare-GET regressionsfrei.
+- ✅ **WebSockets über HTTP/3 (RFC 9220 / RFC 8441 / RFC 6455)**:
+  - **RFC-6455-Framing wiederverwendet:** die WebSocket-Dateien aus Hermod (`Hermod.HTTP2.WebSocket*`
+    + `IHTTP2Tunnel`) sind als **byte-identische Kopien** (einzige Änderung: Namespace-Zeile →
+    `…Hermod.HTTP3`) unter `src/Http3/WebSocket/` übernommen — das Framing ist transport-agnostisch
+    gegen das 2-Methoden-Tunnel-Interface geschrieben; Dedup-Plan im dortigen README.
+  - **Extended CONNECT (RFC 8441)**: SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08, Wert MUSS 0/1 sein sonst
+    H3_SETTINGS_ERROR); `:protocol`-Pseudo-Header im Validator (nur auf CONNECT; mit :protocol MÜSSEN
+    :scheme/:path da sein, :authority nach normalen Regeln; klassischer CONNECT unverändert). Client
+    `SendExtendedConnect` (wirft ohne Server-Setting, §3 MUST NOT) + `TryGetConnectResponse`; Server
+    `connectHandler` (kündigt das Setting an; unbekanntes :protocol ⇒ **501**, RFC 9220 §3; Extended
+    CONNECT ohne Setting ⇒ malformed/400).
+  - **Tunnel-Modus** (`Http3Tunnel : IHTTP2Tunnel`): CONNECT wird SOFORT bei den HEADERS behandelt
+    (kein FIN-Warten); nach 2xx reisen die Tunnel-Bytes in DATA-Frames (RFC 9114 §4.4 — andere
+    bekannte Frames ⇒ H3_FRAME_UNEXPECTED); FIN ≙ geordnetes TCP-Close, Reset ≙ RST mit
+    H3_REQUEST_CANCELLED (RFC 9220 §3). Async-Brücke single-threaded: ausstehende `ReadAsync` werden
+    inline im Pump vollendet (race-frei ohne Locks).
+  - 7 Tests (Setting-Gate beidseitig, 501, **Text-/Binär-Echo + Close-Handshake end-to-end**,
+    permessage-deflate ausgehandelt + Round-Trip, DATA-only-MUST, :protocol-Validator).
+    **Live über UDP:** `H3Get --websocket` — Setting → CONNECT 200 → RFC-6455-Text-Echo →
+    Close-Handshake → geordnetes Tunnel-Ende; Cloudflare-GET regressionsfrei.
+- ✅ **Priorities (RFC 9218)** — die einzige „wichtige" Extension, jetzt umgesetzt:
+  - **Signale**: `priority`-Header (Structured-Fields-Dictionary, fehlertolerant geparst:
+    unbekannte/typfremde/außer-Bereich-Parameter werden ignoriert — MUST; `u` 0–7 Default 3,
+    `i` Boolean Default false; `Http3Priority.Parse/ToHeaderValue`) und **PRIORITY_UPDATE**-Frame
+    (0xF0700, Payload = Element-ID-VarInt + ASCII-Field-Value) — `Http3Request.Priority` und
+    `Http3ClientConnection.SendPriorityUpdate(streamId, priority)`.
+  - **MUSTs (§7.2)**: PRIORITY_UPDATE nur auf dem Client-Control-Stream (sonst H3_FRAME_UNEXPECTED,
+    auch beim Client als Empfänger — Server senden NIE); Nicht-Request-Stream-ID ⇒ H3_ID_ERROR;
+    Push-Variante 0xF0701 ⇒ H3_ID_ERROR (nie versprochen); Layout ⇒ H3_FRAME_ERROR. Updates für noch
+    nicht geöffnete Streams werden gepuffert (letztes gewinnt, begrenzt auf 32) und beim Öffnen
+    angewandt; ein Update **überschreibt** den Header (§7).
+  - **Server-Scheduling (§10)**: `QuicStream.SendUrgency/SendIncremental` + priorisierte Stream-Wahl
+    im QUIC-Sendepfad (`PickSendStream`): aufsteigende Urgency; gleiche Urgency nicht-inkrementell ⇒
+    exklusiv in aufsteigender Stream-ID (Request-Reihenfolge), inkrementell ⇒ Round-Robin
+    (Bandbreite teilen). Control-/QPACK-Streams laufen mit Urgency 0 (nie verhungern).
+  - 10 Tests (Parser, Urgency-Ordnung, FIFO, inkrementelles Teilen, Header-Override, Buffering vor
+    Stream-Öffnung, 4 Zustandsmaschinen-MUSTs). **Live über UDP**: `H3Get --priorities` gegen
+    `H3Server` (Route `/big`) — der u=0-Download überholt den früher angefragten Default-Download,
+    und ein PRIORITY_UPDATE (u=7) stuft einen u=0-„Prefetch" nachträglich hinter u=3 zurück.
+    Cloudflare-GET regressionsfrei.
 - ✅ Unidirektionale Streams mit Typ-Präfix: Control (0x00), QPACK Encoder (0x02) /
   Decoder (0x03); Control-Stream geöffnet, `SETTINGS` als erstes Frame.
 - ✅ Frames: `DATA`, `HEADERS`, `SETTINGS` (inkrementelles Parsen, unbekannte Frames ignoriert –
-  Greasing). ⬜ `GOAWAY`, `MAX_PUSH_ID`, CANCEL_PUSH.
+  Greasing). `MAX_PUSH_ID`/`CANCEL_PUSH` bewusst nur validierend (kein Push).
+- ✅ **MAX_FIELD_SECTION_SIZE** (RFC 9114 §4.2.2): Größenformel Σ(Name + Wert + 32) je Feld,
+  unkomprimiert (`Http3Qpack.FieldSectionSize`). Beide Seiten können ein Limit ankündigen
+  (`maxFieldSectionSize`-Parameter ⇒ SETTINGS 0x06) und parsen das des Peers. **Sender (SHOULD NOT):**
+  Client wirft bei zu großen Request-Headern/-Trailern (`ArgumentException`); Server stuft zu große
+  Antwort-Header auf ein minimales **500** herab, lässt zu große Interim-/Trailer-Sektionen weg.
+  **Empfänger (MAY):** Server beantwortet zu große Request-Header mit **431** (RFC 6585) ohne
+  Handler-Aufruf + STOP_SENDING H3_NO_ERROR (§4.1); Client verwirft zu große Antworten
+  (`IsResponseTooLarge`, Stream-Abbruch, Verbindung lebt). 5 Tests (Formel, Client-Verweigerung,
+  431 via Roh-Client, 500-Herabstufung, Client-Verwerfen via Roh-Server). **Live:** Cloudflare kündigt
+  **131072** an (geparst, respektiert); eigener H3Server kündigt 16384 an — GET je Status 200.
+- ✅ **Trailer-Sektionen + Interim-Responses (1xx)** (RFC 9114 §4.1): `Http3Request.Trailers`/
+  `Http3Response.Trailers` werden als abschließendes HEADERS-Frame nach dem Content gesendet und beim
+  Empfang getrennt von der Header-Sektion abgelegt (beide Richtungen). `Http3Response.InterimResponses`
+  (z. B. **103 Early Hints**): der Server sendet je Interim eine eigene 1xx-HEADERS-Sektion VOR der
+  finalen Antwort; der Client trennt sie anhand von `:status` (100–199) sauber ab — die finale
+  Header-Sektion bleibt rein. Verstoß „Content nach Interim" (Interims tragen keinen Content) ⇒
+  **malformed** ⇒ STREAM-Fehler `H3_MESSAGE_ERROR` (§4.1.2, `IsResponseMalformed`; Verbindung lebt
+  weiter). 5 Tests (Trailer beidseitig, Trailer ohne Content, 2× 103 + finale Antwort, Malformed via
+  Roh-Server). **Live über UDP:** `H3Get localhost /hints` — „HTTP/3 103 (Interim) — link: …preload…" →
+  200 → „Trailer: checksum: …"; Cloudflare-GET regressionsfrei.
+- ✅ **GOAWAY / Graceful Shutdown** (RFC 9114 §5.2): Server `InitiateGracefulShutdown()` sendet GOAWAY
+  mit der ersten NICHT mehr angenommenen Request-Stream-ID (`GoAwaySent`), bedient Laufendes zu Ende
+  (`HasPendingRequests`), weist spätere Request-Streams mit RESET_STREAM/STOP_SENDING
+  `H3_REQUEST_REJECTED` zurück (kein Handler-Aufruf, kein Verbindungsfehler) und schließt danach per
+  `CloseGracefully()` mit **H3_NO_ERROR** (Typ 0x1d). Client: `GoAwayStreamId`, `SendRequest` wirft
+  nach GOAWAY (MUST NOT), In-Flight-Requests ≥ der Grenze werden als `IsRequestRejected` markiert
+  (gefahrlos wiederholbar) und transportseitig aufgeräumt; anwachsende GOAWAY-IDs ⇒ H3_ID_ERROR.
+  4 Tests (End-to-End, später Request via Roh-Client, In-Flight-Rejection, ID-Anwachsen);
+  **live über UDP:** `H3Server --goaway` + `H3Get --goaway` — GET 200 → GOAWAY (Grenze 4) → neuer
+  Request korrekt verweigert → CONNECTION_CLOSE 0x100 (H3_NO_ERROR).
 - ✅ Request/Response: Pseudo-Header (`:method`/`:scheme`/`:authority`/`:path`/`:status`),
-  Mapping Request ↔ bidirektionaler Stream; ⬜ strikte Pseudo-Header-Validierung.
-- ⬜ Fehlerbehandlung: H3-Fehlercodes auf QUIC-Fehler mappen (Stream- vs. Connection-Error).
-- 🔶 Öffentliche API: ✅ `Http3ClientConnection` (`InitializeHttp3`/`SendRequest`/`TryGetResponse`,
-  transport-agnostisch); ⬜ ergonomischer `Http3Client.GetAsync(uri)`; ⬜ Server-Seite.
-- ✅ Server-Push weggelassen.
+  Mapping Request ↔ bidirektionaler Stream.
+- ✅ **Malformed-Erkennung** (RFC 9114 §4.1.2/§4.2/§4.3, `Http3MessageValidator` — bewusst strikt):
+  Pseudo-Header-Pflichten (genau ein `:method`/`:scheme`/`:path`; `:authority` ODER `Host`, nicht leer,
+  konsistent, ohne userinfo; genau ein numerischer `:status` 100–599), undefinierte/kontextfremde
+  Pseudo-Header, Pseudo-Header nach regulären Feldern oder in Trailern, Großbuchstaben/ungültige
+  Zeichen in Feldnamen, NUL/CR/LF in Werten (Smuggling-Schutz), verbindungsspezifische Felder
+  (`connection`/`keep-alive`/`transfer-encoding`/`upgrade`/…; `te` nur „trailers"), Content-Length-
+  Konsistenz (= Σ DATA-Längen; Ausnahme rumpflose Antworten: HEAD/204/304). **Reaktion:** Server
+  ⇒ **400** (MAY) + Leseabbruch mit Stream-Fehler `H3_MESSAGE_ERROR`, kein Handler-Aufruf; Client
+  ⇒ Antwort verwerfen (MUST NOT accept, `IsResponseMalformed`); eigene malformed Requests wirft
+  `SendRequest` lokal (`ArgumentException`, MUST NOT generate). Gültiger **CONNECT** (§4.4) wird
+  erkannt und mit **501** beantwortet (nicht unterstützt). 15 Tests (Validator-Units + Wire-Level
+  mit Roh-Peers; Großbuchstaben via Literal-Literal-QPACK nachgestellt, da unsere Encoder Namen
+  konventionsgemäß kleinschreiben). **Live:** Cloudflare-GET (deren `content-length` besteht die
+  Konsistenzprüfung real), lokal `/hints` + POST-Echo — je Status 200.
+- ✅ **Request-Bodies** (RFC 9114 §4.1): `Http3Request.Body`/`Post(...)` — der Client sendet den Rumpf
+  als DATA-Frame nach dem HEADERS-Frame (mit automatischem `content-length`, §4.1.2: Wert = Summe der
+  DATA-Längen); der Server sammelt DATA-Frames ein und antwortet erst bei vollständiger Nachricht (FIN).
+  Eine Trailer-Sektion (zweites HEADERS) wird QPACK-korrekt dekodiert (Section-Acks), inhaltlich noch
+  verworfen. Tests: POST-Echo (Header + Rumpf byte-genau) und **120-KB-Upload** — treibt erstmals den
+  Client-Sendepfad (cwnd/Pacing/MTU) unter Last, SHA-256-verifiziert. **Live:** POST `/echo` gegen den
+  eigenen H3Server über UDP (Echo byte-genau) und POST gegen cloudflare-quic.com (Status 200) —
+  `H3Get --post=<Text>`.
+- ✅ Fehlerbehandlung: H3-Fehlercodes (RFC 9114 §8.1) als `Http3Error`-Konstanten; **Request-
+  Cancellation** (§4.1.1): `CancelRequest` setzt die Sendeseite zurück und bricht das Lesen ab (beides
+  H3_REQUEST_CANCELLED); der Server erkennt Client-Abbrüche (RESET_STREAM ⇒ eigene Antwortseite
+  H3_REQUEST_REJECTED/CANCELLED zurücksetzen, STOP_SENDING ⇒ automatischer Reset via RFC 9000 §3.5);
+  `IsRequestCancelled`/`RequestResetErrorCode`; eine bereits vollständige Antwort bleibt nutzbar.
+  **Live:** `H3Get --cancel` gegen cloudflare-quic.com — Abbruch mitten im Download, Cloudflare
+  resettet mit 0x10c (kopierter Code), zweites GET über dieselbe Verbindung Status 200.
+- ✅ **Frame-/Stream-Zustandsmaschine** (§4.1, §6.2, §7.2) — Verstöße ⇒ CONNECTION_CLOSE **Typ 0x1d**
+  (`CloseApplication` im QUIC-Layer) mit H3-Fehlercode:
+  - Control-Stream: erstes Frame MUSS SETTINGS sein (H3_MISSING_SETTINGS), zweites SETTINGS/DATA/
+    HEADERS/PUSH_PROMISE ⇒ H3_FRAME_UNEXPECTED; zweiter Control-/QPACK-Stream ⇒ H3_STREAM_CREATION_
+    ERROR; Schließen/Reset kritischer Streams ⇒ H3_CLOSED_CRITICAL_STREAM (§6.2.1, RFC 9204 §4.2).
+  - Request-Streams: DATA vor HEADERS / Frames nach der Trailer-Sektion, SETTINGS/GOAWAY/MAX_PUSH_ID/
+    CANCEL_PUSH ⇒ H3_FRAME_UNEXPECTED; PUSH_PROMISE: vom Client ⇒ H3_FRAME_UNEXPECTED (Server), ohne
+    MAX_PUSH_ID ⇒ H3_ID_ERROR (Client); Push-Stream: client-initiiert ⇒ H3_STREAM_CREATION_ERROR,
+    ohne MAX_PUSH_ID ⇒ H3_ID_ERROR.
+  - Reservierte HTTP/2-Frame-Typen (0x02/0x06/0x08/0x09) ⇒ H3_FRAME_UNEXPECTED (§7.2.8); reservierte/
+    doppelte SETTINGS-IDs ⇒ H3_SETTINGS_ERROR; Layout-Fehler (GOAWAY/CANCEL_PUSH/MAX_PUSH_ID ≠ genau
+    ein VarInt, SETTINGS-Reste, abgeschnittenes letztes Frame bei FIN) ⇒ H3_FRAME_ERROR (§7.1).
+  - GOAWAY mit Nicht-Request-Stream-ID beim Client ⇒ H3_ID_ERROR (§7.2.6; `GoAwayId` gemerkt — Semantik
+    folgt mit dem GOAWAY-Schritt). Grease-Frames/-Settings (0x1f·N+0x21) werden ignoriert; eigene
+    SETTINGS enthalten jetzt ein Grease-Setting (§7.2.4.1 SHOULD). 14 Tests mit „bösem" Roh-QUIC-Peer
+    in beide Richtungen; **live:** GET + 0-RTT gegen Cloudflare und eigener Server (dyn. QPACK) laufen
+    unverändert — die strengere Validierung bricht keine Interop.
+- ✅ Öffentliche API: `Http3ClientConnection` (`InitializeHttp3`/`SendRequest`/`TryGetResponse`/
+  `CancelRequest`, transport-agnostisch) **und** `Http3ServerConnection` (Handler-Modell,
+  `InitiateGracefulShutdown`); ergonomischer `Http3Client.GetAsync(uri)`-Wrapper → Phase 9.
+- ✅ Server-Push weggelassen (MAY; PUSH-bezogene Frames/Streams werden validierend abgewiesen).
 - ✅ **Meilenstein M2 erreicht:** `GET https://cloudflare-quic.com/` liefert Status 200 + 126 KB
   HTML über den eigenen Stack (QPACK-dekodierte Header, Rumpf reassembliert).
-- 🔶 **Meilenstein M3 erreicht (über eigenen Client):** Server-Seite gebaut — `TlsServerHandshake`
+- ✅ **Meilenstein M3 erreicht (über eigenen Client):** Server-Seite gebaut — `TlsServerHandshake`
   (ServerHello/EE/Certificate/CertificateVerify-Signatur/Finished, Client-Finished-Prüfung),
   `ServerCertificate` (self-signed ECDSA P-256 via `CertificateRequest`), `QuicServerConnection`,
   `Http3ServerConnection`. Sample `H3Server` (UDP): unser `H3Get`-Client holt darüber Status 200 +
@@ -344,11 +503,24 @@ Ohne diese Phase funktioniert alles nur im Labor; mit Paketverlust bricht sonst 
   beim Frame-Parsen), STREAM_LIMIT_ERROR (Stream-Index jenseits des gewährten Limits), FLOW_CONTROL_ERROR
   und FINAL_SIZE_ERROR (aus `StreamReceiveBuffer` verdrahtet). Nebenbei **PATH_CHALLENGE/PATH_RESPONSE**
   (RFC 9000 §19.17/§19.18) ergänzt und beantwortet — nötig, damit „unbekanntes Frame = fatal" Cloudflare
-  nicht bricht (live bestätigt). In-process getestet (u. a. STREAM_LIMIT_ERROR end-to-end). ⬜ verbleibende
-  Codes (STREAM_STATE_ERROR, connection-level FLOW_CONTROL, TRANSPORT_PARAMETER_ERROR) + Parser-Fuzzer.
+  nicht bricht (live bestätigt). In-process getestet (u. a. STREAM_LIMIT_ERROR end-to-end).
+  ✅ **STREAM_STATE_ERROR** für RESET_STREAM/STOP_SENDING auf falschen Stream-Arten (§19.4/§19.5:
+  send-/receive-only, nie geöffnete lokal-initiierte Streams) — in-process end-to-end getestet.
+  ⬜ verbleibende Codes (connection-level FLOW_CONTROL, TRANSPORT_PARAMETER_ERROR) + Parser-Fuzzer.
+- ✅ **RESET_STREAM / STOP_SENDING** (RFC 9000 §2.4, §3.5, §19.4/§19.5): `QuicStream.Reset(code)` bricht
+  die Sendeseite ab (ungesendete Daten verworfen, Final Size = gesendete Bytes nach §4.5, danach keine
+  STREAM-(Re)Transmissionen mehr); `AbortRead(code)` sendet STOP_SENDING. Empfang: RESET_STREAM validiert
+  die Final Size (§4.5, unveränderlich; zählt voll als Flow-Control-Kredit) und markiert die Empfangsseite
+  (`IsResetByPeer`/`PeerResetErrorCode`, nie „complete"); STOP_SENDING resettet die eigene Sendeseite
+  automatisch mit kopiertem Fehlercode (§3.5 MUST). Beide Frame-Typen laufen zuverlässig über die Loss
+  Recovery (retransmittierbar verfolgt; Verlust-Test per verworfenem Flight + PTO). In-process getestet
+  (7 Tests: Puffer-Units, kopierter Code end-to-end, State-Fehler, HTTP/3-Cancellation, Loss).
 - Grease: reservierte Frame-/Stream-Typen der Gegenseite tolerieren.
 
-### ⬜ Phase 9 — Performance & Nice-to-have (offenes Ende)
+### 🔶 Phase 9 — Performance & Nice-to-have (offenes Ende)
+*(0-RTT und die PQ-/Krypto-Kür sind hier historisch einsortiert und längst ✅; wirklich offen sind
+die Performance-Punkte: Zero-Allocation-Pfad, UDP-Batching, async API, `Http3Client.GetAsync`,
+Window-Auto-Tuning.)*
 - Zero-Allocation-Pfad: `SocketAddress`-basierte Sende-/Empfangsschleife, Buffer-Pooling,
   `IBufferWriter<byte>`-Pipeline.
 - UDP-Batching: mehrere Datagramme pro Syscall; GSO/GRO (Linux) hinter Abstraktion.
@@ -462,10 +634,11 @@ Bibliotheks-Optionen für die Primitive-Lücken (v2), pragmatisch abgewogen:
 - **libsodium/NSec** — nativ, sehr schnell und breit auditiert; für X25519/Ed25519/ChaCha20.
 - Bleibt Test-Orakel-tauglich: gegen die Primitive lassen sich RFC-Vektoren gegenprüfen.
 
-**Stufe 1 — v1, Pflicht (reine BCL):** 🔶 (Kern steht, Signaturprüfung folgt mit Phase 2b)
-- ✅ AEAD: AES-128-GCM (`AesGcm`); AES-256-GCM vorbereitet (`TrafficKeys` parametrisiert)
+**Stufe 1 — v1, Pflicht (reine BCL):** ✅ komplett
+- ✅ AEAD: AES-128-GCM (`AesGcm`); AES-256-GCM (`TrafficKeys` parametrisiert)
 - ✅ Key Exchange: `secp256r1` (P-256) via `ECDiffieHellman` (`EcdheKeyExchange`)
-- ⬜ Signaturen: RSA-PSS, ECDSA P-256/P-384 (für CertificateVerify — Phase 2b)
+- ✅ Signaturen: RSA-PSS, ECDSA P-256/P-384 — CertificateVerify wird IMMER geprüft (Phase 2),
+  Kette + Hostname gemäß `CertificateValidationOptions`
 - → deckt 100 % der realen HTTP/3-Server ab
 
 **Stufe 2 — v2, Kür (Primitive aus Bibliothek + BCL-PQ):**
@@ -523,10 +696,13 @@ neue Suiten/Gruppen ohne Änderungen am Transport-Code einsteckbar sind.
 
 ## Bewusste Auslassungen (Scope-Kontrolle)
 
-- **Kein** ChaCha20 / X25519 in v1 (AES-GCM + P-256 reichen für Interop mit allen relevanten
-  Servern; Ausbau siehe Krypto-Roadmap).
-- **Kein** 0-RTT, **kein** Server-Push, **kein** CUBIC/BBR, **keine** Multipath-Erweiterung in v1.
-- QPACK zunächst ohne dynamische Tabelle (spec-konform und interop-fähig).
+*(Historische v1-Auslassungen inzwischen nachgerüstet: ChaCha20-Poly1305, X25519/X448/Hybrid-PQ,
+0-RTT und die dynamische QPACK-Tabelle sind längst umgesetzt — siehe Krypto-Roadmap und Phasen 6/9.)*
+
+- **Kein** Server-Push (MAY; PUSH-Frames/-Streams werden validierend abgewiesen), **kein**
+  CONNECT-Proxying (gültiger CONNECT ⇒ 501), **keine** Extensions RFC 9297/9220
+  (Priorities nach **RFC 9218 sind umgesetzt** — siehe Phase 7).
+- **Kein** CUBIC/BBR (NewReno reicht), **keine** Multipath-Erweiterung.
 - Kein HTTP/1.1/2-Fallback, kein Alt-Svc-Handling — reines HTTP/3.
 
 ## Empfohlene Reihenfolge der ersten Schritte
@@ -537,9 +713,11 @@ neue Suiten/Gruppen ohne Änderungen am Transport-Code einsteckbar sind.
 3. ✅ ClientHello bauen, Initial-Paket an cloudflare-quic.com senden, ServerHello zurückparsen —
    ab hier gibt es bei jedem Schritt echtes Server-Feedback statt Trockenübungen.
 
-**Als Nächstes (Phase 2b):** Aus dem ECDHE-Shared-Secret + Transcript-Hash (ClientHello‖ServerHello)
-die Handshake-Secrets ableiten (RFC 8446 §7.1) → Handshake-Pakete entschlüsseln
-(EncryptedExtensions/Certificate/Finished). Danach ACK-Erzeugung + Verbindungs-State-Machine (Phase 3).
+**Als Nächstes (Stand 2026-07-22):** Die Phasen 0–7 sind komplett (RFC-9114-Feature-Audit
+abgeschlossen). Offen sind nur noch der Rest der Transport-Error-Matrix in Phase 8
+(connection-level FLOW_CONTROL_ERROR, TRANSPORT_PARAMETER_ERROR, Parser-Fuzzer), ein
+`curl --http3`-Interop-Test sowie Phase 9 (Performance & Nice-to-have: Zero-Allocation-Pfad,
+UDP-Batching, async API, `Http3Client.GetAsync`, Window-Auto-Tuning).
 
 ## Referenzen
 

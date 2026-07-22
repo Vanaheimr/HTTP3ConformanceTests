@@ -66,9 +66,89 @@ public sealed class StreamReceiveBuffer
     public bool FinReceived => _finalSize.HasValue;
 
     /// <summary>
-    /// Alle Daten bis zum FIN wurden gelesen.
+    /// Der Peer hat diese Empfangsseite per RESET_STREAM abgebrochen (RFC 9000 §19.4).
     /// </summary>
-    public bool IsComplete => _finalSize == _readOffset && _fragments.Count == 0;
+    public bool ResetReceived { get; private set; }
+
+    /// <summary>
+    /// Der Fehlercode aus dem RESET_STREAM des Peers (gültig, wenn <see cref="ResetReceived"/>).
+    /// </summary>
+    public ulong ResetErrorCode { get; private set; }
+
+    /// <summary>
+    /// Wir haben das Lesen abgebrochen (RFC 9000 §3.5); ein STOP_SENDING wartet ggf. auf Emission.
+    /// </summary>
+    public bool ReadingAborted { get; private set; }
+
+    /// <summary>
+    /// Der Fehlercode unseres Leseabbruchs (gültig, wenn <see cref="ReadingAborted"/>).
+    /// </summary>
+    public ulong AbortErrorCode { get; private set; }
+
+    /// <summary>
+    /// Ein STOP_SENDING-Frame wartet auf die Emission (wird vom Endpoint abgeholt).
+    /// </summary>
+    public bool StopSendingPending { get; private set; }
+
+    /// <summary>
+    /// Alle Daten bis zum FIN wurden gelesen. Ein per RESET abgebrochener Stream gilt NIE als
+    /// vollständig – die Anwendung erkennt den Abbruch über <see cref="ResetReceived"/>.
+    /// </summary>
+    public bool IsComplete => !ResetReceived && _finalSize == _readOffset && _fragments.Count == 0;
+
+    /// <summary>
+    /// Bricht das Lesen ab (RFC 9000 §3.5): der Endpoint sendet ein STOP_SENDING mit
+    /// <paramref name="errorCode"/>; bereits gepufferte Daten werden verworfen. Idempotent.
+    /// </summary>
+    public void AbortReading(ulong errorCode)
+    {
+        if (ReadingAborted || ResetReceived)
+            return; // §3.5: STOP_SENDING nur für Streams, die der Peer nicht schon zurückgesetzt hat
+        ReadingAborted = true;
+        StopSendingPending = true;
+        AbortErrorCode = errorCode;
+        _fragments.Clear();
+    }
+
+    /// <summary>
+    /// Holt das zu sendende STOP_SENDING-Frame ab (einmalig; Verlust-Wiederholung übernimmt die
+    /// Loss Recovery). Gibt die Stream-ID nicht mit – der Aufrufer kennt sie.
+    /// </summary>
+    public ulong? TakeStopSendingErrorCode()
+    {
+        if (!StopSendingPending)
+            return null;
+        StopSendingPending = false;
+        return AbortErrorCode;
+    }
+
+    /// <summary>
+    /// Verarbeitet ein empfangenes RESET_STREAM (RFC 9000 §19.4/§4.5): prüft die Final Size gegen
+    /// Flow Control und bereits Gesehenes, übernimmt sie (verbindliche Flow-Control-Abrechnung) und
+    /// verwirft gepufferte Daten (§19.4: „can discard any data").
+    /// </summary>
+    public StreamReceiveResult Reset(ulong errorCode, ulong finalSize)
+    {
+        if (finalSize > MaxData)
+            return StreamReceiveResult.FlowControlError;   // §4.1: Final Size verbraucht Kredit
+        if (_finalSize is { } known && known != finalSize)
+            return StreamReceiveResult.FinalSizeError;     // §4.5: bekannte Final Size ist unveränderlich
+        if (HighestReceivedOffset > finalSize)
+            return StreamReceiveResult.FinalSizeError;     // §4.5: Daten jenseits der Final Size gesehen
+
+        if (ResetReceived)
+            return StreamReceiveResult.Ok; // idempotent (Retransmission des RESET_STREAM)
+
+        ResetReceived = true;
+        ResetErrorCode = errorCode;
+        _finalSize = finalSize;
+        HighestReceivedOffset = finalSize;
+        // §4.5: die Final Size zählt vollständig als verbrauchter Flow-Control-Kredit — als „konsumiert"
+        // verbuchen, damit die MAX_DATA-Fensterrechnung der Verbindung stimmig bleibt.
+        _readOffset = finalSize;
+        _fragments.Clear();
+        return StreamReceiveResult.Ok;
+    }
 
     /// <summary>
     /// Nimmt ein STREAM-Fragment auf.

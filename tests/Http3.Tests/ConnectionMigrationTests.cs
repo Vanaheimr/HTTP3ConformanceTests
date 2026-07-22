@@ -30,6 +30,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Tests der Pfadvalidierung (RFC 9000 §8.2) – dem Kern-Primitiv der Connection Migration (§9):
 /// PATH_CHALLENGE senden, passendes PATH_RESPONSE erwarten.
 /// </summary>
+[TestFixture]
 public class ConnectionMigrationTests
 {
     private static (QuicClientConnection client, QuicServerConnection server) Handshaken(ServerCertificate cert)
@@ -40,7 +41,7 @@ public class ConnectionMigrationTests
         client.Start();
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
-        Assert.True(client.HandshakeConfirmed);
+        Assert.That(client.HandshakeConfirmed, Is.True);
         Pump(client, server);
         return (client, server);
     }
@@ -53,7 +54,7 @@ public class ConnectionMigrationTests
             client.ProcessDatagram(dg);
     }
 
-    [Fact]
+    [Test]
     public void PathValidation_ClientInitiates_ServerResponds_IsValidated()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -61,19 +62,19 @@ public class ConnectionMigrationTests
         using var _ = client;
         using var __ = server;
 
-        Assert.False(client.PathValidated);
+        Assert.That(client.PathValidated, Is.False);
 
         client.InitiatePathValidation(); // sendet PATH_CHALLENGE
-        Assert.True(client.PathValidationPending);
+        Assert.That(client.PathValidationPending, Is.True);
 
         for (int round = 0; round < 5; round++)
             Pump(client, server); // Server spiegelt via PATH_RESPONSE zurück
 
-        Assert.True(client.PathValidated, "Ein passendes PATH_RESPONSE muss den Pfad validieren.");
-        Assert.False(client.PathValidationPending);
+        Assert.That(client.PathValidated, Is.True, "Ein passendes PATH_RESPONSE muss den Pfad validieren.");
+        Assert.That(client.PathValidationPending, Is.False);
     }
 
-    [Fact]
+    [Test]
     public void PathValidation_ServerInitiates_ClientResponds_IsValidated()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -82,15 +83,15 @@ public class ConnectionMigrationTests
         using var __ = server;
 
         server.InitiatePathValidation();
-        Assert.True(server.PathValidationPending);
+        Assert.That(server.PathValidationPending, Is.True);
 
         for (int round = 0; round < 5; round++)
             Pump(client, server);
 
-        Assert.True(server.PathValidated);
+        Assert.That(server.PathValidated, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void PathValidation_WithoutResponse_Expires_AndDoesNotValidate()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -99,13 +100,13 @@ public class ConnectionMigrationTests
         using var __ = server;
 
         client.InitiatePathValidation();
-        Assert.True(client.PathValidationPending);
+        Assert.That(client.PathValidationPending, Is.True);
 
         // Ohne Austausch verstreicht die Validierungsfrist (3·PTO, in-process winzig).
         Thread.Sleep(300);
         client.CheckIdleTimeout(); // treibt den Ablauf
 
-        Assert.False(client.PathValidationPending, "Ohne PATH_RESPONSE muss die Validierung verfallen.");
-        Assert.False(client.PathValidated);
+        Assert.That(client.PathValidationPending, Is.False, "Ohne PATH_RESPONSE muss die Validierung verfallen.");
+        Assert.That(client.PathValidated, Is.False);
     }
 }

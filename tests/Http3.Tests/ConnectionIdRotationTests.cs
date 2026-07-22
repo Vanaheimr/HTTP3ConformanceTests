@@ -34,31 +34,32 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// isoliert sowie einen vollständigen Umlauf, bei dem der Server eine CID ausgibt und der Client seine DCID
 /// darauf umstellt.
 /// </summary>
+[TestFixture]
 public class ConnectionIdRotationTests
 {
     private static ConnectionId Cid(params byte[] bytes) => new(bytes);
     private static byte[] Token() => new byte[16];
 
-    [Fact]
+    [Test]
     public void Issue_RespectsActiveConnectionIdLimit()
     {
         var m = new ConnectionIdManager(Cid(1, 1));
-        Assert.NotNull(m.Issue(Cid(2, 2), Token(), activeLimit: 2)); // Sequenz 0 + eine weitere
-        Assert.Null(m.Issue(Cid(3, 3), Token(), activeLimit: 2));    // Limit erreicht
-        Assert.Equal(2, m.LocalCount);
+        Assert.That(m.Issue(Cid(2, 2), Token(), activeLimit: 2), Is.Not.Null); // Sequenz 0 + eine weitere
+        Assert.That(m.Issue(Cid(3, 3), Token(), activeLimit: 2), Is.Null);    // Limit erreicht
+        Assert.That(m.LocalCount, Is.EqualTo(2));
     }
 
-    [Fact]
+    [Test]
     public void RetireLocal_RemovesIssuedConnectionId()
     {
         var m = new ConnectionIdManager(Cid(1, 1));
         m.Issue(Cid(2, 2), Token(), activeLimit: 5);
-        Assert.Equal(2, m.LocalCount);
+        Assert.That(m.LocalCount, Is.EqualTo(2));
         m.RetireLocal(1);
-        Assert.Equal(1, m.LocalCount);
+        Assert.That(m.LocalCount, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public void OnNewConnectionId_AddsRemote_AndRetirePriorTo_SwitchesDcid()
     {
         var m = new ConnectionIdManager(Cid(1, 1));
@@ -67,14 +68,14 @@ public class ConnectionIdRotationTests
         var frame = new NewConnectionIdFrame(SequenceNumber: 1, RetirePriorTo: 1, Cid(0x11, 0x11).ToArray(), Token());
         List<RetireConnectionIdFrame> retires = m.OnNewConnectionId(frame, out bool changed, out ConnectionId newDcid);
 
-        Assert.Single(retires);
-        Assert.Equal(0ul, retires[0].SequenceNumber); // seq 0 zurückgezogen
-        Assert.True(changed);
-        Assert.Equal(Cid(0x11, 0x11), newDcid);        // DCID auf seq 1 gewechselt
-        Assert.Equal(1ul, m.CurrentRemoteSequence);
+        Expect.Single(retires);
+        Assert.That(retires[0].SequenceNumber, Is.EqualTo(0ul)); // seq 0 zurückgezogen
+        Assert.That(changed, Is.True);
+        Assert.That(newDcid, Is.EqualTo(Cid(0x11, 0x11)));        // DCID auf seq 1 gewechselt
+        Assert.That(m.CurrentRemoteSequence, Is.EqualTo(1ul));
     }
 
-    [Fact]
+    [Test]
     public void Rotate_SwitchesToHigherRemote_AndRetiresOld()
     {
         var m = new ConnectionIdManager(Cid(1, 1));
@@ -82,11 +83,11 @@ public class ConnectionIdRotationTests
         m.OnNewConnectionId(new NewConnectionIdFrame(1, 0, Cid(0x11, 0x11).ToArray(), Token()), out _, out _);
 
         (RetireConnectionIdFrame Retire, ConnectionId NewDcid)? rotation = m.Rotate();
-        Assert.NotNull(rotation);
-        Assert.Equal(Cid(0x11, 0x11), rotation!.Value.NewDcid);
-        Assert.Equal(0ul, rotation.Value.Retire.SequenceNumber);
-        Assert.Equal(1ul, m.CurrentRemoteSequence);
-        Assert.Null(m.Rotate()); // keine weitere ID verfügbar
+        Assert.That(rotation, Is.Not.Null);
+        Assert.That(rotation!.Value.NewDcid, Is.EqualTo(Cid(0x11, 0x11)));
+        Assert.That(rotation.Value.Retire.SequenceNumber, Is.EqualTo(0ul));
+        Assert.That(m.CurrentRemoteSequence, Is.EqualTo(1ul));
+        Assert.That(m.Rotate(), Is.Null); // keine weitere ID verfügbar
     }
 
     // ---- Integration ----------------------------------------------------------------------
@@ -99,7 +100,7 @@ public class ConnectionIdRotationTests
             client.ProcessDatagram(dg);
     }
 
-    [Fact]
+    [Test]
     public void ServerIssuesConnectionId_ClientRotatesDcid_AndDataStillFlows()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -109,22 +110,22 @@ public class ConnectionIdRotationTests
         client.Start();
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
-        Assert.True(client.HandshakeConfirmed);
+        Assert.That(client.HandshakeConfirmed, Is.True);
         Pump(client, server); // Restdaten abfließen lassen
 
         // Server gibt eine zusätzliche Connection ID aus (NEW_CONNECTION_ID).
         ConnectionId? issued = server.IssueConnectionId();
-        Assert.NotNull(issued);
-        Assert.Equal(2, server.LocalConnectionIdCount); // seq 0 + neue
+        Assert.That(issued, Is.Not.Null);
+        Assert.That(server.LocalConnectionIdCount, Is.EqualTo(2)); // seq 0 + neue
 
         // Frame zum Client bringen; der Client lernt die entfernte CID.
         for (int round = 0; round < 3; round++)
             Pump(client, server);
-        Assert.Equal(2, client.RemoteConnectionIdCount);
+        Assert.That(client.RemoteConnectionIdCount, Is.EqualTo(2));
 
         // Client stellt seine DCID auf die neue ID um (und zieht die alte per RETIRE_CONNECTION_ID zurück).
-        Assert.True(client.RotateDestinationConnectionId());
-        Assert.Equal(issued!.Value, client.DestinationConnectionId);
+        Assert.That(client.RotateDestinationConnectionId(), Is.True);
+        Assert.That(client.DestinationConnectionId, Is.EqualTo(issued!.Value));
 
         // Ab jetzt tragen die Pakete des Clients die neue DCID – der Server muss sie weiterhin annehmen.
         QuicStream stream = client.OpenBidirectionalStream();
@@ -133,10 +134,10 @@ public class ConnectionIdRotationTests
             Pump(client, server);
 
         // Daten kamen unter der neuen Connection ID an.
-        Assert.True(server.Streams.ContainsKey(stream.Id.Value));
-        Assert.Equal([9, 8, 7, 6], server.Streams[stream.Id.Value].Read());
+        Assert.That(server.Streams.ContainsKey(stream.Id.Value), Is.True);
+        Assert.That(server.Streams[stream.Id.Value].Read(), Is.EqualTo([9, 8, 7, 6]));
 
         // Der Server hat seine ursprüngliche (seq 0) Connection ID auf RETIRE_CONNECTION_ID zurückgezogen.
-        Assert.Equal(1, server.LocalConnectionIdCount);
+        Assert.That(server.LocalConnectionIdCount, Is.EqualTo(1));
     }
 }

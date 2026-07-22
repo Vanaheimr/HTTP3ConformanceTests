@@ -34,6 +34,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// (Long Header 0x01, Application-PN-Space) rausgeht. Der Server akzeptiert die Early Data, verarbeitet die
 /// Anfrage und antwortet — über den vollen QUIC/HTTP-3-Datagramm-Pfad, beide Enden from scratch.
 /// </summary>
+[TestFixture]
 public class ZeroRttTests
 {
     private const uint MaxEarly = 0xffffffff; // QUIC nutzt 0xFFFFFFFF (RFC 9001 §4.6.1)
@@ -45,7 +46,7 @@ public class ZeroRttTests
         Body = System.Text.Encoding.UTF8.GetBytes($"0-RTT-Antwort auf {request.Path}"),
     };
 
-    [Fact]
+    [Test]
     public void ClientSendsEarlyGet_ServerAcceptsEarlyData_AndResponds()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -74,9 +75,9 @@ public class ZeroRttTests
                 }
                 if (sent) client1.TryGetResponse(stream1, out r);
             }
-            Assert.NotEmpty(client1.NewSessionTickets);
+            Assert.That(client1.NewSessionTickets, Is.Not.Empty);
             ticket = client1.NewSessionTickets[0];
-            Assert.True(ticket.AllowsEarlyData, "Das Ticket muss 0-RTT erlauben (max_early_data_size > 0).");
+            Assert.That(ticket.AllowsEarlyData, Is.True, "Das Ticket muss 0-RTT erlauben (max_early_data_size > 0).");
         }
 
         // --- Verbindung 2: 0-RTT — die Anfrage VOR dem Handshake queuen ---
@@ -95,11 +96,11 @@ public class ZeroRttTests
             client2.TryGetResponse(stream, out response);
         }
 
-        Assert.True(client2.EarlyDataAccepted, "Der Server muss 0-RTT akzeptiert haben (EncryptedExtensions).");
-        Assert.True(server2.EarlyDataAccepted, "Serverseitig muss early_data akzeptiert sein.");
-        Assert.NotNull(response);
-        Assert.Equal(200, response!.Status);
-        Assert.Contains("/zero", response.BodyText);
+        Assert.That(client2.EarlyDataAccepted, Is.True, "Der Server muss 0-RTT akzeptiert haben (EncryptedExtensions).");
+        Assert.That(server2.EarlyDataAccepted, Is.True, "Serverseitig muss early_data akzeptiert sein.");
+        Assert.That(response, Is.Not.Null);
+        Assert.That(response!.Status, Is.EqualTo(200));
+        Assert.That(response.BodyText, Does.Contain("/zero"));
     }
 
     /// <summary>
@@ -110,7 +111,7 @@ public class ZeroRttTests
     /// der Beleg, dass es beim Client – anders als beim Server – KEIN Reordering-Fenster gibt (er hat keinen
     /// 0-RTT-Read-Pfad, reorderte Pakete nutzen nie 0-RTT-Keys).
     /// </summary>
-    [Fact]
+    [Test]
     public void Client_DiscardsZeroRttKeys_OnInstallingOneRttKeys()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -146,7 +147,7 @@ public class ZeroRttTests
 
         // Erster Sende-Schub: 0-RTT geht raus, die 0-RTT-Keys müssen jetzt installiert sein (1-RTT noch nicht).
         byte[][] firstFlight = client2.GetDatagramsToSend().ToArray();
-        Assert.True(client2.Quic.HasZeroRttKeysForTest, "Vor dem 1-RTT-Install müssen die 0-RTT-Keys installiert sein.");
+        Assert.That(client2.Quic.HasZeroRttKeysForTest, Is.True, "Vor dem 1-RTT-Install müssen die 0-RTT-Keys installiert sein.");
         foreach (byte[] dg in firstFlight) server2.ProcessDatagram(dg);
 
         // Handshake zu Ende pumpen; mit dem 1-RTT-Install müssen die 0-RTT-Keys verschwinden.
@@ -156,12 +157,11 @@ public class ZeroRttTests
             foreach (byte[] dg in client2.GetDatagramsToSend()) server2.ProcessDatagram(dg);
         }
 
-        Assert.True(client2.HandshakeConfirmed);
-        Assert.False(client2.Quic.HasZeroRttKeysForTest,
-            "Mit dem Installieren der 1-RTT-Keys muss der Client seine 0-RTT-Keys verworfen haben (RFC 9001 §4.9.3).");
+        Assert.That(client2.HandshakeConfirmed, Is.True);
+        Assert.That(client2.Quic.HasZeroRttKeysForTest, Is.False, "Mit dem Installieren der 1-RTT-Keys muss der Client seine 0-RTT-Keys verworfen haben (RFC 9001 §4.9.3).");
     }
 
-    [Fact]
+    [Test]
     public void RejectedEarlyData_IsRetriedOver1Rtt_AndStillSucceeds()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -205,10 +205,10 @@ public class ZeroRttTests
             client2.TryGetResponse(stream, out response);
         }
 
-        Assert.False(client2.EarlyDataAccepted, "Der Server hat 0-RTT abgelehnt.");
-        Assert.NotNull(response); // trotzdem beantwortet – die Anfrage lief über 1-RTT
-        Assert.Equal(200, response!.Status);
-        Assert.Contains("/rejected", response.BodyText);
+        Assert.That(client2.EarlyDataAccepted, Is.False, "Der Server hat 0-RTT abgelehnt.");
+        Assert.That(response, Is.Not.Null); // trotzdem beantwortet – die Anfrage lief über 1-RTT
+        Assert.That(response!.Status, Is.EqualTo(200));
+        Assert.That(response.BodyText, Does.Contain("/rejected"));
     }
 
     /// <summary>
@@ -218,7 +218,7 @@ public class ZeroRttTests
     /// Pakets zählen. Hier wird HANDSHAKE_DONE unterdrückt, sodass die Bestätigung ausschließlich über den 1-RTT-
     /// ACK der über 1-RTT wiederholten Anfrage läuft – und der Client dann seine Handshake-Keys verwirft.
     /// </summary>
-    [Fact]
+    [Test]
     public void RejectedEarlyData_HandshakeStillConfirmsAndDiscardsHandshakeKeys_ViaOneRttAck()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -262,13 +262,11 @@ public class ZeroRttTests
             client2.TryGetResponse(stream, out response);
         }
 
-        Assert.False(client2.EarlyDataAccepted, "Der Server hat 0-RTT abgelehnt.");
-        Assert.NotNull(response);
-        Assert.Equal(200, response!.Status); // über 1-RTT wiederholt und beantwortet
-        Assert.True(client2.HandshakeConfirmed,
-            "Trotz 0-RTT-Ablehnung UND fehlendem HANDSHAKE_DONE muss der Client per 1-RTT-ACK bestätigen (§4.1.2) – nicht durch ein 0-RTT-Paket.");
-        Assert.False(client2.Quic.HasHandshakeKeysForTest,
-            "Mit der Bestätigung müssen die Handshake-Keys verworfen sein (RFC 9001 §4.9.2) – auch auf dem 0-RTT-Ablehnungspfad.");
+        Assert.That(client2.EarlyDataAccepted, Is.False, "Der Server hat 0-RTT abgelehnt.");
+        Assert.That(response, Is.Not.Null);
+        Assert.That(response!.Status, Is.EqualTo(200)); // über 1-RTT wiederholt und beantwortet
+        Assert.That(client2.HandshakeConfirmed, Is.True, "Trotz 0-RTT-Ablehnung UND fehlendem HANDSHAKE_DONE muss der Client per 1-RTT-ACK bestätigen (§4.1.2) – nicht durch ein 0-RTT-Paket.");
+        Assert.That(client2.Quic.HasHandshakeKeysForTest, Is.False, "Mit der Bestätigung müssen die Handshake-Keys verworfen sein (RFC 9001 §4.9.2) – auch auf dem 0-RTT-Ablehnungspfad.");
     }
 
     private static ResumptionTicket AcquireTicket(ServerCertificate cert, ServerResumptionCache cache, CertificateValidationOptions validation)
@@ -296,7 +294,7 @@ public class ZeroRttTests
     /// Application-Space ab 0 lückenlos, sobald das erste 1-RTT-Paket ankommt ⇒ die Keys müssen weg sein, obwohl
     /// die 3×PTO-Frist (hier absichtlich auf 5 min gesetzt) noch lange nicht abgelaufen ist.
     /// </summary>
-    [Fact]
+    [Test]
     public void Server_DiscardsZeroRttKeysEarly_WhenAllPacketsReceived_NoGap()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -320,13 +318,12 @@ public class ZeroRttTests
             client2.TryGetResponse(stream, out response);
         }
 
-        Assert.True(server2.EarlyDataAccepted, "Der Server muss 0-RTT akzeptiert haben.");
-        Assert.NotNull(response);
-        Assert.Equal(200, response!.Status);
+        Assert.That(server2.EarlyDataAccepted, Is.True, "Der Server muss 0-RTT akzeptiert haben.");
+        Assert.That(response, Is.Not.Null);
+        Assert.That(response!.Status, Is.EqualTo(200));
         // Kein Verlust ⇒ lückenlos ⇒ der Server verwirft die 0-RTT-Read-Keys sofort mit dem ersten 1-RTT-Paket,
         // ohne die (5-Minuten-)Frist abzuwarten.
-        Assert.False(server2.Quic.HasZeroRttKeysForTest,
-            "Bei lückenlos empfangenen 0-RTT-Paketen MUSS der Server die 0-RTT-Read-Keys früh verwerfen (RFC 9001 §4.9.3).");
+        Assert.That(server2.Quic.HasZeroRttKeysForTest, Is.False, "Bei lückenlos empfangenen 0-RTT-Paketen MUSS der Server die 0-RTT-Read-Keys früh verwerfen (RFC 9001 §4.9.3).");
     }
 
     /// <summary>
@@ -336,7 +333,7 @@ public class ZeroRttTests
     /// (RECOMMENDED 3×PTO) und verwirft sie dann zeitgesteuert. (0-RTT-Pakete selbst sind hier mit dem Initial
     /// koalesziert und daher nicht einzeln droppbar; für die Lücken-Logik zählt jede fehlende PN gleich.)
     /// </summary>
-    [Fact]
+    [Test]
     public void Server_RetainsZeroRttKeys_UntilTimeout_WhenPacketNumberGapPersists()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -366,18 +363,16 @@ public class ZeroRttTests
             foreach (byte[] dg in server2.GetDatagramsToSend()) client2.ProcessDatagram(dg);
         }
 
-        Assert.True(droppedOneRtt, "Es muss ein 1-RTT-Paket zum Verwerfen gegeben haben.");
-        Assert.True(server2.EarlyDataAccepted, "Der Server akzeptiert early_data anhand des ClientHello (unabhängig vom Paketverlust).");
-        Assert.True(client2.HandshakeConfirmed);
+        Assert.That(droppedOneRtt, Is.True, "Es muss ein 1-RTT-Paket zum Verwerfen gegeben haben.");
+        Assert.That(server2.EarlyDataAccepted, Is.True, "Der Server akzeptiert early_data anhand des ClientHello (unabhängig vom Paketverlust).");
+        Assert.That(client2.HandshakeConfirmed, Is.True);
         // Persistente Lücke ⇒ keine Frühverwerfung; innerhalb der 300-ms-Frist sind die Keys noch da.
-        Assert.True(server2.Quic.HasZeroRttKeysForTest,
-            "Bei einer PN-Lücke behält der Server die 0-RTT-Read-Keys bis zum Fristablauf (RFC 9001 §4.9.3).");
+        Assert.That(server2.Quic.HasZeroRttKeysForTest, Is.True, "Bei einer PN-Lücke behält der Server die 0-RTT-Read-Keys bis zum Fristablauf (RFC 9001 §4.9.3).");
 
         // Frist zeitlich ablaufen lassen ⇒ zeitgesteuerte Verwerfung.
         Thread.Sleep(360);
         server2.Quic.CheckLossDetectionTimeout();
-        Assert.False(server2.Quic.HasZeroRttKeysForTest,
-            "Nach Ablauf der Frist MUSS der Server die 0-RTT-Read-Keys verwerfen (RFC 9001 §4.9.3).");
+        Assert.That(server2.Quic.HasZeroRttKeysForTest, Is.False, "Nach Ablauf der Frist MUSS der Server die 0-RTT-Read-Keys verwerfen (RFC 9001 §4.9.3).");
     }
 
     /// <summary>
@@ -386,7 +381,7 @@ public class ZeroRttTests
     /// werden — sonst läge Schlüsselmaterial bis zum GdC undisposed vor. Test ohne <c>using</c> für den Server, um
     /// den Zustand direkt vor und nach dem manuellen Dispose zu prüfen.
     /// </summary>
-    [Fact]
+    [Test]
     public void Server_DiscardsZeroRttKeys_OnDispose()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -414,13 +409,11 @@ public class ZeroRttTests
             foreach (byte[] dg in server3.GetDatagramsToSend()) client3.ProcessDatagram(dg);
         }
 
-        Assert.True(server3.EarlyDataAccepted, "Der Server muss 0-RTT akzeptiert und die Read-Keys installiert haben.");
-        Assert.True(server3.Quic.HasZeroRttKeysForTest,
-            "Vorbedingung: die 0-RTT-Read-Keys sind noch da (Lücke ⇒ kein Früh-Discard, lange Frist ⇒ kein Timer).");
+        Assert.That(server3.EarlyDataAccepted, Is.True, "Der Server muss 0-RTT akzeptiert und die Read-Keys installiert haben.");
+        Assert.That(server3.Quic.HasZeroRttKeysForTest, Is.True, "Vorbedingung: die 0-RTT-Read-Keys sind noch da (Lücke ⇒ kein Früh-Discard, lange Frist ⇒ kein Timer).");
 
         server3.Dispose(); // Verbindungsende
 
-        Assert.False(server3.Quic.HasZeroRttKeysForTest,
-            "Beim Verbindungsende (Dispose) müssen die 0-RTT-Read-Keys freigegeben werden.");
+        Assert.That(server3.Quic.HasZeroRttKeysForTest, Is.False, "Beim Verbindungsende (Dispose) müssen die 0-RTT-Read-Keys freigegeben werden.");
     }
 }

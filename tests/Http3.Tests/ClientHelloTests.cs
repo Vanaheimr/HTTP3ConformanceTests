@@ -28,6 +28,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class ClientHelloTests
 {
     private static ClientHelloOptions BuildOptions(out byte[] transportParams)
@@ -49,60 +50,60 @@ public class ClientHelloTests
         };
     }
 
-    [Fact]
+    [Test]
     public void Build_ClientHello_HasWellFormedStructureAndRequiredExtensions()
     {
         ClientHelloOptions options = BuildOptions(out _);
         byte[] ch = ClientHello.Build(options);
 
         var reader = new BufferReader(ch);
-        Assert.Equal((byte)HandshakeType.ClientHello, reader.ReadByte());
+        Assert.That(reader.ReadByte(), Is.EqualTo((byte)HandshakeType.ClientHello));
 
         int length = (reader.ReadByte() << 16) | (reader.ReadByte() << 8) | reader.ReadByte();
-        Assert.Equal(length, reader.Remaining); // 3-Byte-Handshake-Länge deckt exakt den Rest
+        Assert.That(reader.Remaining, Is.EqualTo(length)); // 3-Byte-Handshake-Länge deckt exakt den Rest
 
-        Assert.Equal(TlsVersions.Tls12, reader.ReadUInt16()); // legacy_version
+        Assert.That(reader.ReadUInt16(), Is.EqualTo(TlsVersions.Tls12)); // legacy_version
         reader.ReadBytes(32);                                 // Random
-        Assert.Equal(0, reader.ReadByte());                   // leere legacy_session_id
+        Assert.That(reader.ReadByte(), Is.EqualTo(0));                   // leere legacy_session_id
 
         ushort csLen = reader.ReadUInt16();
         List<ushort> suites = ReadUInt16List(ref reader, csLen);
-        Assert.Contains((ushort)CipherSuite.Aes128GcmSha256, suites);
+        Assert.That(suites, Does.Contain((ushort)CipherSuite.Aes128GcmSha256));
 
-        Assert.Equal(1, reader.ReadByte()); // compression methods length
-        Assert.Equal(0, reader.ReadByte()); // null compression
+        Assert.That(reader.ReadByte(), Is.EqualTo(1)); // compression methods length
+        Assert.That(reader.ReadByte(), Is.EqualTo(0)); // null compression
 
         ushort extsLen = reader.ReadUInt16();
-        Assert.Equal(extsLen, reader.Remaining);
+        Assert.That(reader.Remaining, Is.EqualTo(extsLen));
         Dictionary<ushort, byte[]> exts = ReadExtensions(ref reader);
 
         // supported_versions enthält TLS 1.3
-        Assert.True(exts.ContainsKey((ushort)ExtensionType.SupportedVersions));
+        Assert.That(exts.ContainsKey((ushort)ExtensionType.SupportedVersions), Is.True);
         byte[] sv = exts[(ushort)ExtensionType.SupportedVersions];
-        Assert.Equal(0x0304, (sv[1] << 8) | sv[2]); // [listLen(1)][0x03,0x04]
+        Assert.That((sv[1] << 8) | sv[2], Is.EqualTo(0x0304)); // [listLen(1)][0x03,0x04]
 
         // ALPN enthält "h3"
         byte[] alpn = exts[(ushort)ExtensionType.Alpn];
-        Assert.Contains("h3", DecodeAlpn(alpn));
+        Assert.That(DecodeAlpn(alpn), Does.Contain("h3"));
 
         // key_share: secp256r1 mit 65-Byte-Punkt
         byte[] ks = exts[(ushort)ExtensionType.KeyShare];
         int group = (ks[2] << 8) | ks[3];
         int keyLen = (ks[4] << 8) | ks[5];
-        Assert.Equal((int)NamedGroup.Secp256r1, group);
-        Assert.Equal(65, keyLen);
-        Assert.Equal(0x04, ks[6]); // unkomprimierter Punkt
+        Assert.That(group, Is.EqualTo((int)NamedGroup.Secp256r1));
+        Assert.That(keyLen, Is.EqualTo(65));
+        Assert.That(ks[6], Is.EqualTo(0x04)); // unkomprimierter Punkt
 
         // SNI enthält den Hostnamen
         byte[] sni = exts[(ushort)ExtensionType.ServerName];
-        Assert.Contains("cloudflare-quic.com", System.Text.Encoding.ASCII.GetString(sni));
+        Assert.That(System.Text.Encoding.ASCII.GetString(sni), Does.Contain("cloudflare-quic.com"));
 
         // quic_transport_parameters vorhanden und nicht leer
-        Assert.True(exts.TryGetValue((ushort)ExtensionType.QuicTransportParameters, out byte[]? qtp));
-        Assert.NotEmpty(qtp!);
+        Assert.That(exts.TryGetValue((ushort)ExtensionType.QuicTransportParameters, out byte[]? qtp), Is.True);
+        Assert.That(qtp!, Is.Not.Empty);
     }
 
-    [Fact]
+    [Test]
     public void Ecdhe_BothParties_DeriveSameSecret()
     {
         using var client = EcdheKeyExchange.Create(NamedGroup.Secp256r1);
@@ -111,11 +112,11 @@ public class ClientHelloTests
         byte[] clientView = client.DeriveSharedSecret(server.PublicKey);
         byte[] serverView = server.DeriveSharedSecret(client.PublicKey);
 
-        Assert.Equal(clientView, serverView);
-        Assert.Equal(32, clientView.Length); // P-256: X-Koordinate = 32 Byte
+        Assert.That(serverView, Is.EqualTo(clientView));
+        Assert.That(clientView.Length, Is.EqualTo(32)); // P-256: X-Koordinate = 32 Byte
     }
 
-    [Fact]
+    [Test]
     public void TransportParameters_RoundTrip_PreservesValues()
     {
         var tp = new TransportParameters
@@ -126,21 +127,21 @@ public class ClientHelloTests
             InitialSourceConnectionIdValue = ConnectionId.Parse("cafebabe"),
         };
 
-        Assert.True(TransportParameters.TryDecode(tp.Encode(), out TransportParameters? decoded));
-        Assert.Equal(15_000UL, decoded!.MaxIdleTimeoutMs);
-        Assert.Equal(500_000UL, decoded.InitialMaxDataValue);
-        Assert.Equal(42UL, decoded.InitialMaxStreamsBidiValue);
-        Assert.Equal(ConnectionId.Parse("cafebabe"), decoded.InitialSourceConnectionIdValue);
+        Assert.That(TransportParameters.TryDecode(tp.Encode(), out TransportParameters? decoded), Is.True);
+        Assert.That(decoded!.MaxIdleTimeoutMs, Is.EqualTo(15_000UL));
+        Assert.That(decoded.InitialMaxDataValue, Is.EqualTo(500_000UL));
+        Assert.That(decoded.InitialMaxStreamsBidiValue, Is.EqualTo(42UL));
+        Assert.That(decoded.InitialSourceConnectionIdValue, Is.EqualTo(ConnectionId.Parse("cafebabe")));
     }
 
-    [Fact]
+    [Test]
     public void TransportParameters_Decode_IgnoresUnknownParameters()
     {
         // Bekannter Parameter (max_idle_timeout id=01, len=01, wert=05)
         // + unbekannte ID 16383 (2-Byte-VarInt 7fff), len=02, Wert aabb -> muss ignoriert werden.
         byte[] wire = Hex.Parse("010105" + "7fff02aabb");
-        Assert.True(TransportParameters.TryDecode(wire, out TransportParameters? tp));
-        Assert.Equal(5UL, tp!.MaxIdleTimeoutMs);
+        Assert.That(TransportParameters.TryDecode(wire, out TransportParameters? tp), Is.True);
+        Assert.That(tp!.MaxIdleTimeoutMs, Is.EqualTo(5UL));
     }
 
     // --- Hilfsfunktionen ----------------------------------------------------------------------

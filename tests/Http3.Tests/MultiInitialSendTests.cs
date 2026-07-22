@@ -31,9 +31,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// 1200-Byte-Initial und muss offset-korrekt auf mehrere Initials verteilt werden. Die Server-Seite
 /// reassembliert sie und der Handshake läuft durch – über den echten Datagramm-Pfad (nicht in-process).
 /// </summary>
+[TestFixture]
 public class MultiInitialSendTests
 {
-    [Fact]
+    [Test]
     public void LargePqClientHello_IsSplitAcrossMultipleMtuSizedInitials_AndHandshakeCompletes()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -47,10 +48,9 @@ public class MultiInitialSendTests
         // Erste Flight des Clients: der große ClientHello muss auf ≥2 Initials aufgeteilt sein, und KEIN
         // Datagramm darf die QUIC-sichere MTU überschreiten (sonst droht Fragmentierung/Drop im Netz).
         IReadOnlyList<byte[]> firstFlight = client.GetDatagramsToSend();
-        Assert.True(firstFlight.Count >= 2,
-            $"Der PQ-ClientHello sollte über ≥2 Initials verteilt sein, waren {firstFlight.Count}.");
-        Assert.All(firstFlight, dg => Assert.True(dg.Length <= 1252,
-            $"Initial-Datagramm mit {dg.Length} Byte überschreitet die MTU (1252)."));
+        Assert.That(firstFlight.Count >= 2, Is.True, $"Der PQ-ClientHello sollte über ≥2 Initials verteilt sein, waren {firstFlight.Count}.");
+        foreach (byte[] datagram in firstFlight)
+            Assert.That(datagram.Length <= 1252, Is.True, $"Initial-Datagramm mit {datagram.Length} Byte überschreitet die MTU (1252).");
 
         foreach (byte[] dg in firstFlight)
             server.ProcessDatagram(dg);
@@ -63,7 +63,7 @@ public class MultiInitialSendTests
                 server.ProcessDatagram(dg);
         }
 
-        Assert.True(client.HandshakeConfirmed, "Handshake muss trotz aufgeteiltem ClientHello abschließen.");
-        Assert.Equal(NamedGroup.X25519MlKem768, client.NegotiatedGroup);
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss trotz aufgeteiltem ClientHello abschließen.");
+        Assert.That(client.NegotiatedGroup, Is.EqualTo(NamedGroup.X25519MlKem768));
     }
 }

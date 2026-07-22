@@ -23,9 +23,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class BufferTests
 {
-    [Fact]
+    [Test]
     public void WriteThenRead_RoundTripsAllPrimitives()
     {
         byte[] snapshot;
@@ -41,37 +42,37 @@ public class BufferTests
         }
 
         var reader = new BufferReader(snapshot);
-        Assert.Equal(0xAB, reader.ReadByte());
-        Assert.Equal(0x1234, reader.ReadUInt16());
-        Assert.Equal(0xDEADBEEF, reader.ReadUInt32());
-        Assert.Equal(0x0102030405060708UL, reader.ReadUInt64());
-        Assert.Equal(151288809941952652UL, reader.ReadVarInt());
-        Assert.Equal(new byte[] { 0x11, 0x22, 0x33 }, reader.ReadBytes(3).ToArray());
-        Assert.True(reader.IsEmpty);
+        Assert.That(reader.ReadByte(), Is.EqualTo(0xAB));
+        Assert.That(reader.ReadUInt16(), Is.EqualTo(0x1234));
+        Assert.That(reader.ReadUInt32(), Is.EqualTo(0xDEADBEEF));
+        Assert.That(reader.ReadUInt64(), Is.EqualTo(0x0102030405060708UL));
+        Assert.That(reader.ReadVarInt(), Is.EqualTo(151288809941952652UL));
+        Assert.That(reader.ReadBytes(3).ToArray(), Is.EqualTo(new byte[] { 0x11, 0x22, 0x33 }));
+        Assert.That(reader.IsEmpty, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void Writer_GrowsBeyondInitialCapacity()
     {
         using var writer = new BufferWriter(4);
         for (int i = 0; i < 1000; i++)
             writer.WriteByte((byte)i);
 
-        Assert.Equal(1000, writer.Length);
-        Assert.Equal(unchecked((byte)999), writer.WrittenSpan[999]);
+        Assert.That(writer.Length, Is.EqualTo(1000));
+        Assert.That(writer.WrittenSpan[999], Is.EqualTo(unchecked((byte)999)));
     }
 
-    [Fact]
+    [Test]
     public void WriteRepeated_FillsPadding()
     {
         using var writer = new BufferWriter();
         writer.WriteRepeated(0x00, 1200);
 
-        Assert.Equal(1200, writer.Length);
-        Assert.True(writer.WrittenSpan.ToArray().All(b => b == 0x00));
+        Assert.That(writer.Length, Is.EqualTo(1200));
+        Assert.That(writer.WrittenSpan.ToArray().All(b => b == 0x00), Is.True);
     }
 
-    [Fact]
+    [Test]
     public void GetSpan_AllowsBackpatching()
     {
         using var writer = new BufferWriter();
@@ -81,32 +82,32 @@ public class BufferTests
         // Länge nachträglich eintragen.
         System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(lengthSlot, 3);
 
-        Assert.Equal([0x00, 0x03, 0xAA, 0xBB, 0xCC], writer.WrittenSpan.ToArray());
+        Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo([0x00, 0x03, 0xAA, 0xBB, 0xCC]));
     }
 
-    [Fact]
+    [Test]
     public void Reader_TrackksPositionAndRemaining()
     {
         var reader = new BufferReader([0x01, 0x02, 0x03, 0x04]);
 
-        Assert.Equal(4, reader.Remaining);
+        Assert.That(reader.Remaining, Is.EqualTo(4));
         reader.ReadUInt16();
-        Assert.Equal(2, reader.Position);
-        Assert.Equal(2, reader.Remaining);
-        Assert.Equal(new byte[] { 0x03, 0x04 }, reader.RemainingSpan.ToArray());
+        Assert.That(reader.Position, Is.EqualTo(2));
+        Assert.That(reader.Remaining, Is.EqualTo(2));
+        Assert.That(reader.RemainingSpan.ToArray(), Is.EqualTo(new byte[] { 0x03, 0x04 }));
     }
 
-    [Fact]
+    [Test]
     public void Reader_TryMethods_ReturnFalseWhenExhausted()
     {
         var reader = new BufferReader([0x01]);
 
-        Assert.True(reader.TryReadByte(out _));
-        Assert.False(reader.TryReadByte(out _));
-        Assert.False(reader.TryReadUInt16(out _));
+        Assert.That(reader.TryReadByte(out _), Is.True);
+        Assert.That(reader.TryReadByte(out _), Is.False);
+        Assert.That(reader.TryReadUInt16(out _), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void Reader_ThrowsOnOverread()
     {
         // BufferReader ist ein ref struct und kann nicht in ein Lambda (Assert.Throws) kapseln.
@@ -120,6 +121,6 @@ public class BufferTests
         {
             threw = true;
         }
-        Assert.True(threw);
+        Assert.That(threw, Is.True);
     }
 }

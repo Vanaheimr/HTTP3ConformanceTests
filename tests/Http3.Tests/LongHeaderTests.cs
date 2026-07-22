@@ -28,6 +28,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Verifiziert das Serialisieren/Parsen der Long-Header-Pakete – gekoppelt an die RFC-9001-Vektoren:
 /// Aus strukturierten Feldern gebaute Pakete müssen byte-genau den Appendix-A-Paketen entsprechen.
 /// </summary>
+[TestFixture]
 public class LongHeaderTests
 {
     private const uint Version1 = 0x0000_0001;
@@ -44,7 +45,7 @@ public class LongHeaderTests
         75300901100f088394c8f03e51570806 048000ffff
         """;
 
-    [Fact]
+    [Test]
     public void Build_ClientInitial_FromFields_MatchesRfcVector()
     {
         var s = InitialSecrets.DeriveV1(Dcid.Span);
@@ -62,11 +63,11 @@ public class LongHeaderTests
             payload);
 
         // Nur die ersten 22 Bytes sind der (geschützte) Header; genügt, um die Feldkodierung zu prüfen.
-        Assert.Equal("c000000001088394c8f03e5157080000449e7b9aec34", Hex.ToHex(packet.AsSpan(0, 22)));
-        Assert.Equal(1200, packet.Length);
+        Assert.That(Hex.ToHex(packet.AsSpan(0, 22)), Is.EqualTo("c000000001088394c8f03e5157080000449e7b9aec34"));
+        Assert.That(packet.Length, Is.EqualTo(1200));
     }
 
-    [Fact]
+    [Test]
     public void Build_ServerInitial_FromFields_MatchesRfcVector()
     {
         var s = InitialSecrets.DeriveV1(Dcid.Span);
@@ -87,10 +88,10 @@ public class LongHeaderTests
             packetNumber: 1, packetNumberLength: 2,
             payload);
 
-        Assert.Equal("cf000000010008f067a5502a4262b500 4075c0d9".Replace(" ", ""), Hex.ToHex(packet.AsSpan(0, 20)));
+        Assert.That(Hex.ToHex(packet.AsSpan(0, 20)), Is.EqualTo("cf000000010008f067a5502a4262b500 4075c0d9".Replace(" ", "")));
     }
 
-    [Fact]
+    [Test]
     public void TryParse_ClientInitial_RecoversFields()
     {
         var s = InitialSecrets.DeriveV1(Dcid.Span);
@@ -103,17 +104,17 @@ public class LongHeaderTests
 
         bool ok = LongHeader.TryParse(packet, out LongHeaderPrefix? prefix);
 
-        Assert.True(ok);
-        Assert.NotNull(prefix);
-        Assert.Equal(LongPacketType.Initial, prefix!.Type);
-        Assert.Equal(Version1, prefix.Version);
-        Assert.Equal(Dcid, prefix.DestinationConnectionId);
-        Assert.Equal(ConnectionId.Empty, prefix.SourceConnectionId);
-        Assert.Empty(prefix.Token);
-        Assert.Equal(1200, prefix.PacketEndOffset); // Initial füllt das Datagramm exakt
+        Assert.That(ok, Is.True);
+        Assert.That(prefix, Is.Not.Null);
+        Assert.That(prefix!.Type, Is.EqualTo(LongPacketType.Initial));
+        Assert.That(prefix.Version, Is.EqualTo(Version1));
+        Assert.That(prefix.DestinationConnectionId, Is.EqualTo(Dcid));
+        Assert.That(prefix.SourceConnectionId, Is.EqualTo(ConnectionId.Empty));
+        Assert.That(prefix.Token, Is.Empty);
+        Assert.That(prefix.PacketEndOffset, Is.EqualTo(1200)); // Initial füllt das Datagramm exakt
     }
 
-    [Fact]
+    [Test]
     public void BuildThenParseThenUnprotect_ClientInitial_FullRoundTrip()
     {
         var s = InitialSecrets.DeriveV1(Dcid.Span);
@@ -125,18 +126,18 @@ public class LongHeaderTests
             prot, LongPacketType.Initial, Version1, Dcid, ConnectionId.Empty, default, 2, 4, payload);
 
         // Empfängerpfad: parsen -> pnOffset -> entschützen.
-        Assert.True(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix));
+        Assert.That(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix), Is.True);
         byte[] plaintext = new byte[packet.Length];
         bool ok = prot.UnprotectPacket(
             packet, prefix!.PacketNumberOffset, largestAckedPacketNumber: -1, longHeader: true,
             plaintext, out ulong pn, out int len);
 
-        Assert.True(ok);
-        Assert.Equal(2UL, pn);
-        Assert.Equal(Hex.ToHex(payload), Hex.ToHex(plaintext.AsSpan(0, len)));
+        Assert.That(ok, Is.True);
+        Assert.That(pn, Is.EqualTo(2UL));
+        Assert.That(Hex.ToHex(plaintext.AsSpan(0, len)), Is.EqualTo(Hex.ToHex(payload)));
     }
 
-    [Fact]
+    [Test]
     public void Build_Handshake_HasNoToken_AndParsesBack()
     {
         // Handshake nutzt hier zu Testzwecken dieselben Initial-Schlüssel (echte HS-Keys kommen aus TLS).
@@ -151,37 +152,37 @@ public class LongHeaderTests
             ConnectionId.Parse("0102030405"), ConnectionId.Parse("aabb"),
             token: default, packetNumber: 7, packetNumberLength: 1, payload);
 
-        Assert.True(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix));
-        Assert.Equal(LongPacketType.Handshake, prefix!.Type);
-        Assert.Empty(prefix.Token); // Handshake-Pakete tragen kein Token-Feld
-        Assert.Equal(ConnectionId.Parse("0102030405"), prefix.DestinationConnectionId);
-        Assert.Equal(ConnectionId.Parse("aabb"), prefix.SourceConnectionId);
+        Assert.That(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix), Is.True);
+        Assert.That(prefix!.Type, Is.EqualTo(LongPacketType.Handshake));
+        Assert.That(prefix.Token, Is.Empty); // Handshake-Pakete tragen kein Token-Feld
+        Assert.That(prefix.DestinationConnectionId, Is.EqualTo(ConnectionId.Parse("0102030405")));
+        Assert.That(prefix.SourceConnectionId, Is.EqualTo(ConnectionId.Parse("aabb")));
     }
 
-    [Fact]
+    [Test]
     public void TryParse_RejectsOversizedConnectionId()
     {
         // DCID-Länge 21 (> 20) muss verworfen werden.
         byte[] bad = Hex.Parse("c000000001" + "15" + new string('a', 42) + "00");
-        Assert.False(LongHeader.TryParse(bad, out _));
+        Assert.That(LongHeader.TryParse(bad, out _), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void TryParse_RejectsShortHeader()
     {
         byte[] shortHeader = [0x40, 0x01, 0x02, 0x03];
-        Assert.False(LongHeader.TryParse(shortHeader, out _));
+        Assert.That(LongHeader.TryParse(shortHeader, out _), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void ShortHeader_LocatesPacketNumber_WithKnownCidLength()
     {
         // Short Header: erstes Byte 0x40 (Form=0, Fixed=1), dann 4-Byte-DCID, dann PN.
         byte[] packet = Hex.Parse("41" + "deadbeef" + "aabbccdd");
         bool ok = ShortHeader.TryLocatePacketNumber(packet, localConnectionIdLength: 4, out ConnectionId dcid, out int pnOffset);
 
-        Assert.True(ok);
-        Assert.Equal(ConnectionId.Parse("deadbeef"), dcid);
-        Assert.Equal(5, pnOffset);
+        Assert.That(ok, Is.True);
+        Assert.That(dcid, Is.EqualTo(ConnectionId.Parse("deadbeef")));
+        Assert.That(pnOffset, Is.EqualTo(5));
     }
 }

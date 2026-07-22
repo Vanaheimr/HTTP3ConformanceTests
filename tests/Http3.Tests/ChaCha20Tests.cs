@@ -32,9 +32,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Tests der ChaCha20-Poly1305-Suite: der ChaCha20-Block (RFC 8439 §2.3.2), die Header-Protection-Maske
 /// (RFC 9001 §5.4.4/§A.5) und ein Paket-Round-Trip über <see cref="PacketProtection"/>.
 /// </summary>
+[TestFixture]
 public class ChaCha20Tests
 {
-    [Fact]
+    [Test]
     public void ChaCha20Block_MatchesRfc8439Vector()
     {
         byte[] key = Convert.FromHexString("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
@@ -44,13 +45,11 @@ public class ChaCha20Tests
         ChaCha20.Block(key, counter: 1, nonce, keystream);
 
         // RFC 8439 §2.3.2: serialisierter Keystream-Block.
-        Assert.Equal(
-            "10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4e" +
-            "d2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e",
-            Convert.ToHexString(keystream).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(keystream).ToLowerInvariant(), Is.EqualTo("10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4e" +
+            "d2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e"));
     }
 
-    [Fact]
+    [Test]
     public void HeaderProtectionMask_MatchesRfc9001AppendixA5()
     {
         // RFC 9001 §A.5 (ChaCha20-Poly1305 Short Header): hp-Schlüssel + Sample ⇒ Maske aefefe7d03.
@@ -60,10 +59,10 @@ public class ChaCha20Tests
 
         ChaCha20.HeaderProtectionMask(hp, sample, mask);
 
-        Assert.Equal("aefefe7d03", Convert.ToHexString(mask).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(mask).ToLowerInvariant(), Is.EqualTo("aefefe7d03"));
     }
 
-    [Fact]
+    [Test]
     public void PacketProtection_ChaCha20_RoundTripsAShortHeaderPacket()
     {
         byte[] secret = new byte[32];
@@ -77,13 +76,13 @@ public class ChaCha20Tests
         byte[] packet = ShortHeader.Build(protection, dcid, packetNumber: 42, packetNumberLength: 2, payload);
 
         byte[] plaintext = new byte[packet.Length];
-        Assert.True(protection.UnprotectPacket(packet, packetNumberOffset: 1 + dcid.Length,
-            largestAckedPacketNumber: 0, longHeader: false, plaintext, out ulong pn, out int len));
-        Assert.Equal(42ul, pn);
-        Assert.Equal(payload, plaintext[..len]);
+        Assert.That(protection.UnprotectPacket(packet, packetNumberOffset: 1 + dcid.Length,
+            largestAckedPacketNumber: 0, longHeader: false, plaintext, out ulong pn, out int len), Is.True);
+        Assert.That(pn, Is.EqualTo(42ul));
+        Assert.That(plaintext[..len], Is.EqualTo(payload));
     }
 
-    [Fact]
+    [Test]
     public void ChaCha20Poly1305_IsNegotiated_AndCompletesTheQuicHandshake()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -104,7 +103,7 @@ public class ChaCha20Tests
         }
 
         // Der Handshake schließt ab ⇒ die Handshake-/1-RTT-Pakete sind mit ChaCha20-Poly1305 geschützt.
-        Assert.True(client.HandshakeConfirmed);
-        Assert.Equal(CipherSuite.ChaCha20Poly1305Sha256, client.NegotiatedCipherSuite);
+        Assert.That(client.HandshakeConfirmed, Is.True);
+        Assert.That(client.NegotiatedCipherSuite, Is.EqualTo(CipherSuite.ChaCha20Poly1305Sha256));
     }
 }

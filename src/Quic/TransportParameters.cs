@@ -46,6 +46,7 @@ public sealed class TransportParameters
     private const ulong InitialMaxStreamsUni = 0x09;
     private const ulong ActiveConnectionIdLimit = 0x0e;
     private const ulong InitialSourceConnectionId = 0x0f;
+    private const ulong MaxDatagramFrameSize = 0x20; // RFC 9221 §3
     private const ulong RetrySourceConnectionId = 0x10;
 
     /// <summary>
@@ -85,6 +86,13 @@ public sealed class TransportParameters
     public byte[]? StatelessResetTokenValue { get; set; }
 
     /// <summary>
+    /// max_datagram_frame_size (RFC 9221 §3): maximale Größe eines DATAGRAM-Frames (inkl. Typ/Länge),
+    /// die wir zu EMPFANGEN bereit sind. 0 (Standard) = DATAGRAM-Frames werden nicht unterstützt;
+    /// empfohlen ist 65535 („alles, was in ein QUIC-Paket passt").
+    /// </summary>
+    public ulong MaxDatagramFrameSizeValue { get; set; }
+
+    /// <summary>
     /// Serialisiert die Parameter zu den opaken Extension-Bytes.
     /// </summary>
     public byte[] Encode()
@@ -103,6 +111,8 @@ public sealed class TransportParameters
             WriteInteger(ref writer, InitialMaxStreamsBidi, InitialMaxStreamsBidiValue);
             WriteInteger(ref writer, InitialMaxStreamsUni, InitialMaxStreamsUniValue);
             WriteInteger(ref writer, ActiveConnectionIdLimit, ActiveConnectionIdLimitValue);
+            if (MaxDatagramFrameSizeValue > 0)
+                WriteInteger(ref writer, MaxDatagramFrameSize, MaxDatagramFrameSizeValue); // RFC 9221 §3
             WriteBytes(ref writer, InitialSourceConnectionId, InitialSourceConnectionIdValue.Span);
             if (OriginalDestinationConnectionIdValue is { } odcid)
                 WriteBytes(ref writer, OriginalDestinationConnectionId, odcid.Span);
@@ -150,6 +160,7 @@ public sealed class TransportParameters
                 case InitialMaxStreamsBidi: result.InitialMaxStreamsBidiValue = ReadVarIntValue(value); break;
                 case InitialMaxStreamsUni: result.InitialMaxStreamsUniValue = ReadVarIntValue(value); break;
                 case ActiveConnectionIdLimit: result.ActiveConnectionIdLimitValue = ReadVarIntValue(value); break;
+                case MaxDatagramFrameSize: result.MaxDatagramFrameSizeValue = ReadVarIntValue(value); break;
                 case InitialSourceConnectionId: result.InitialSourceConnectionIdValue = new ConnectionId(value); break;
                 case OriginalDestinationConnectionId: result.OriginalDestinationConnectionIdValue = new ConnectionId(value); break;
                 case RetrySourceConnectionId: result.RetrySourceConnectionIdValue = new ConnectionId(value); break;

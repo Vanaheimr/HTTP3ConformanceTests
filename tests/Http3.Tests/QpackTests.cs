@@ -23,28 +23,28 @@ using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class QpackTests
 {
     // --- Huffman (RFC 7541 Anhang B/C) ---------------------------------------------------------
 
-    [Theory]
-    [InlineData("www.example.com", "f1e3c2e5f23a6ba0ab90f4ff")]
-    [InlineData("/index.html", "60d5485f2bce9a68")] // wird vom Encoder nur genutzt, wenn kürzer
-    [InlineData("no-cache", "a8eb10649cbf")]
+        [TestCase("www.example.com", "f1e3c2e5f23a6ba0ab90f4ff")]
+    [TestCase("/index.html", "60d5485f2bce9a68")] // wird vom Encoder nur genutzt, wenn kürzer
+    [TestCase("no-cache", "a8eb10649cbf")]
     public void Huffman_Encode_MatchesKnownVectors(string text, string expectedHex)
     {
         byte[] encoded = HuffmanEncode(text);
-        Assert.Equal(expectedHex, Hex.ToHex(encoded));
+        Assert.That(Hex.ToHex(encoded), Is.EqualTo(expectedHex));
 
-        Assert.True(Huffman.TryDecode(encoded, out byte[] decoded));
-        Assert.Equal(text, System.Text.Encoding.ASCII.GetString(decoded));
+        Assert.That(Huffman.TryDecode(encoded, out byte[] decoded), Is.True);
+        Assert.That(System.Text.Encoding.ASCII.GetString(decoded), Is.EqualTo(text));
     }
 
-    [Fact]
+    [Test]
     public void Huffman_RejectsInvalidPadding()
     {
         // Ein Byte 0x00 ist kein gültiger Huffman-String (kein Symbol, ungültiges Padding).
-        Assert.False(Huffman.TryDecode([0x00], out _));
+        Assert.That(Huffman.TryDecode([0x00], out _), Is.False);
     }
 
     private static byte[] HuffmanEncode(string text)
@@ -60,33 +60,33 @@ public class QpackTests
 
     // --- Encoder/Decoder (RFC 9204) ------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void Encode_LiteralWithNameReference_UsesHuffmanWhenShorter()
     {
         // RFC 9204 B.1 kodiert :path=/index.html als Name-Referenz (Static Index 1) + Wert.
         // Das RFC-Beispiel nutzt die Rohform (0b + 11 Byte); unser Encoder bevorzugt Huffman
         // (8 Byte, 0x88) — beides spec-konform. Interop mit der Rohform prüft der Decode-Test unten.
         byte[] encoded = QpackEncoder.Encode([new HeaderField(":path", "/index.html")]);
-        Assert.Equal("0000518860d5485f2bce9a68", Hex.ToHex(encoded));
+        Assert.That(Hex.ToHex(encoded), Is.EqualTo("0000518860d5485f2bce9a68"));
     }
 
-    [Fact]
+    [Test]
     public void Encode_ExactPair_ProducesIndexedFieldLine()
     {
         // :method=GET ist Static-Table-Index 17 -> Indexed: 0b1100_0000 | 17 = 0xd1.
         byte[] encoded = QpackEncoder.Encode([new HeaderField(":method", "GET")]);
-        Assert.Equal("0000d1", Hex.ToHex(encoded));
+        Assert.That(Hex.ToHex(encoded), Is.EqualTo("0000d1"));
     }
 
-    [Fact]
+    [Test]
     public void Decode_Rfc9204ExampleB1_YieldsPath()
     {
         QpackResult result = QpackDecoder.Decode(Hex.Parse("0000510b2f696e6465782e68746d6c"), out var headers);
-        Assert.Equal(QpackResult.Ok, result);
-        Assert.Equal(new HeaderField(":path", "/index.html"), Assert.Single(headers));
+        Assert.That(result, Is.EqualTo(QpackResult.Ok));
+        Assert.That(Expect.Single(headers), Is.EqualTo(new HeaderField(":path", "/index.html")));
     }
 
-    [Fact]
+    [Test]
     public void RoundTrip_TypicalRequestHeaders()
     {
         List<HeaderField> headers =
@@ -100,37 +100,37 @@ public class QpackTests
         ];
 
         byte[] encoded = QpackEncoder.Encode(headers);
-        Assert.Equal(QpackResult.Ok, QpackDecoder.Decode(encoded, out var decoded));
-        Assert.Equal(headers, decoded);
+        Assert.That(QpackDecoder.Decode(encoded, out var decoded), Is.EqualTo(QpackResult.Ok));
+        Assert.That(decoded, Is.EqualTo(headers));
     }
 
-    [Fact]
+    [Test]
     public void RoundTrip_LiteralNameAndValue_WithHuffman()
     {
         // Ein Header, dessen Name nicht in der Static Table steht -> Literal Name + Literal Value.
         var headers = new List<HeaderField> { new("x-custom-header", "some-longer-value-that-huffman-compresses") };
 
         byte[] encoded = QpackEncoder.Encode(headers);
-        Assert.Equal(QpackResult.Ok, QpackDecoder.Decode(encoded, out var decoded));
-        Assert.Equal(headers, decoded);
+        Assert.That(QpackDecoder.Decode(encoded, out var decoded), Is.EqualTo(QpackResult.Ok));
+        Assert.That(decoded, Is.EqualTo(headers));
     }
 
-    [Fact]
+    [Test]
     public void Decode_DynamicTableReference_IsRejected()
     {
         // Required Insert Count != 0 signalisiert eine dynamische Tabelle, die wir nicht führen.
         QpackResult result = QpackDecoder.Decode(Hex.Parse("0200d1"), out _);
-        Assert.Equal(QpackResult.DynamicTableReference, result);
+        Assert.That(result, Is.EqualTo(QpackResult.DynamicTableReference));
     }
 
-    [Fact]
+    [Test]
     public void StaticTable_HasExpectedAnchors()
     {
         // Stichproben gegen RFC 9204 Anhang A.
-        Assert.Equal((":authority", ""), GetStatic(0));
-        Assert.Equal((":path", "/"), GetStatic(1));
-        Assert.Equal((":method", "GET"), GetStatic(17));
-        Assert.Equal(("x-frame-options", "sameorigin"), GetStatic(98));
+        Assert.That(GetStatic(0), Is.EqualTo((":authority", "")));
+        Assert.That(GetStatic(1), Is.EqualTo((":path", "/")));
+        Assert.That(GetStatic(17), Is.EqualTo((":method", "GET")));
+        Assert.That(GetStatic(98), Is.EqualTo(("x-frame-options", "sameorigin")));
     }
 
     private static (string, string) GetStatic(int index)

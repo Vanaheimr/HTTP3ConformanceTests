@@ -52,7 +52,49 @@ public sealed class QuicStream
     public byte[] Read() => Receive.ReadAvailable();
 
     /// <summary>
-    /// Der empfangene Stream ist vollständig gelesen (FIN erreicht).
+    /// Der empfangene Stream ist vollständig gelesen (FIN erreicht). Nach einem Peer-Reset nie <c>true</c>.
     /// </summary>
     public bool IsReceiveComplete => Receive.IsComplete;
+
+    /// <summary>
+    /// Bricht die Sendeseite abrupt ab (RFC 9000 §2.4/§19.4): ungesendete Daten werden verworfen, der
+    /// Endpoint sendet ein RESET_STREAM mit <paramref name="errorCode"/> (zuverlässig, via Loss Recovery).
+    /// </summary>
+    public void Reset(ulong errorCode) => Send.Reset(errorCode);
+
+    /// <summary>
+    /// Bricht das Lesen ab (RFC 9000 §2.4/§3.5): der Endpoint sendet ein STOP_SENDING mit
+    /// <paramref name="errorCode"/> und bittet den Peer so um ein RESET_STREAM seiner Sendeseite.
+    /// </summary>
+    public void AbortRead(ulong errorCode) => Receive.AbortReading(errorCode);
+
+    /// <summary>
+    /// Der Peer hat seine Sendeseite per RESET_STREAM abgebrochen (Fehlercode in
+    /// <see cref="PeerResetErrorCode"/>).
+    /// </summary>
+    public bool IsResetByPeer => Receive.ResetReceived;
+
+    /// <summary>
+    /// Der Fehlercode aus dem RESET_STREAM des Peers, falls empfangen.
+    /// </summary>
+    public ulong? PeerResetErrorCode => Receive.ResetReceived ? Receive.ResetErrorCode : null;
+
+    /// <summary>
+    /// Der Fehlercode aus einem empfangenen STOP_SENDING des Peers, falls empfangen (unsere Sendeseite
+    /// wurde daraufhin automatisch zurückgesetzt, RFC 9000 §3.5).
+    /// </summary>
+    public ulong? PeerStopSendingErrorCode { get; internal set; }
+
+    /// <summary>
+    /// Sende-Dringlichkeit nach RFC 9218 §4.1: 0 (höchste) … 7 (Hintergrund), Standard 3.
+    /// Der Sende-Scheduler bedient Streams in aufsteigender Dringlichkeit; die Anwendungsschicht
+    /// (HTTP/3) setzt den Wert aus `priority`-Header bzw. PRIORITY_UPDATE-Frames.
+    /// </summary>
+    public int SendUrgency { get; set; } = 3;
+
+    /// <summary>
+    /// Inkrementell nach RFC 9218 §4.2: <c>true</c> ⇒ gleich dringliche inkrementelle Streams teilen
+    /// sich die Bandbreite (Round-Robin); <c>false</c> (Standard) ⇒ nacheinander in Stream-ID-Reihenfolge.
+    /// </summary>
+    public bool SendIncremental { get; set; }
 }

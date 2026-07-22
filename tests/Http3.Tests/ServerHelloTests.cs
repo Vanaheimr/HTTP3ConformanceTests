@@ -24,9 +24,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class ServerHelloTests
 {
-    [Fact]
+    [Test]
     public void Parse_MinimalServerHello_ExtractsKeyScheduleFields()
     {
         // Handgebauter ServerHello: cipher=0x1301, supported_versions=0x0304,
@@ -44,16 +45,16 @@ public class ServerHelloTests
 
         bool ok = ServerHello.TryParse(Hex.Parse(hex), out ServerHelloInfo? info);
 
-        Assert.True(ok);
-        Assert.NotNull(info);
-        Assert.False(info!.IsHelloRetryRequest);
-        Assert.Equal(CipherSuite.Aes128GcmSha256, info.CipherSuite);
-        Assert.Equal((ushort?)0x0304, info.SelectedVersion);
-        Assert.Equal(NamedGroup.Secp256r1, info.KeyShareGroup);
-        Assert.Equal("aabb", Hex.ToHex(info.KeySharePublicKey!));
+        Assert.That(ok, Is.True);
+        Assert.That(info, Is.Not.Null);
+        Assert.That(info!.IsHelloRetryRequest, Is.False);
+        Assert.That(info.CipherSuite, Is.EqualTo(CipherSuite.Aes128GcmSha256));
+        Assert.That(info.SelectedVersion, Is.EqualTo((ushort?)0x0304));
+        Assert.That(info.KeyShareGroup, Is.EqualTo(NamedGroup.Secp256r1));
+        Assert.That(Hex.ToHex(info.KeySharePublicKey!), Is.EqualTo("aabb"));
     }
 
-    [Fact]
+    [Test]
     public void Parse_DetectsHelloRetryRequest()
     {
         // Random == SHA-256("HelloRetryRequest"); minimaler Rest mit leeren Extensions.
@@ -62,13 +63,13 @@ public class ServerHelloTests
         int bodyLen = body.Length / 2;
         string hex = "02" + bodyLen.ToString("x6") + body;
 
-        Assert.True(ServerHello.TryParse(Hex.Parse(hex), out ServerHelloInfo? info));
-        Assert.True(info!.IsHelloRetryRequest);
+        Assert.That(ServerHello.TryParse(Hex.Parse(hex), out ServerHelloInfo? info), Is.True);
+        Assert.That(info!.IsHelloRetryRequest, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void Parse_RejectsWrongHandshakeType()
     {
-        Assert.False(ServerHello.TryParse(Hex.Parse("01000000"), out _)); // 01 = ClientHello
+        Assert.That(ServerHello.TryParse(Hex.Parse("01000000"), out _), Is.False); // 01 = ClientHello
     }
 }

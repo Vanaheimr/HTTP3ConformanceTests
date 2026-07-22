@@ -17,6 +17,7 @@
 
 #region Usings
 
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Core;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
@@ -314,10 +315,20 @@ public abstract class QuicEndpoint : IDisposable
     /// Danach werden nur noch CONNECTION_CLOSE-Pakete gesendet, bis nach 3·PTO der Closed-Zustand folgt.
     /// </summary>
     public void Close(TransportError error = TransportError.NoError, string reason = "")
+        => EnterClosing(ConnectionCloseFrame.Transport(error, reason));
+
+    /// <summary>
+    /// Schließt die Verbindung mit einem ANWENDUNGS-Fehlercode (CONNECTION_CLOSE Typ 0x1d,
+    /// RFC 9000 §19.19) — z. B. einem HTTP/3-Fehlercode aus RFC 9114 §8.1.
+    /// </summary>
+    public void CloseApplication(ulong errorCode, string reason = "")
+        => EnterClosing(new ConnectionCloseFrame(errorCode, IsApplicationError: true, 0, reason));
+
+    private void EnterClosing(ConnectionCloseFrame closeFrame)
     {
         if (_state != ConnectionState.Active)
             return;
-        _closeFrame = ConnectionCloseFrame.Transport(error, reason);
+        _closeFrame = closeFrame;
         _state = ConnectionState.Closing;
         _closePacketPending = true;
         _closeDeadlineTicks = _clock.Elapsed.Ticks + CloseTimeout().Ticks;
@@ -660,6 +671,7 @@ public abstract class QuicEndpoint : IDisposable
                 if (Spaces[i].AckPending && Spaces[i].BuildAck() is { } ack)
                     frames.Add(ack);
                 CollectFlowControlFrames(frames);
+                CollectStreamCancellationFrames(frames); // RESET_STREAM / STOP_SENDING (RFC 9000 §2.4)
 
                 // Post-Handshake-CRYPTO auf Application-Level (z. B. NewSessionTicket, RFC 8446 §4.6.1).
                 int appCryptoChunk = Math.Min(_outgoingCrypto[i].Count, MaxCryptoDataPerPacket);
@@ -671,8 +683,19 @@ public abstract class QuicEndpoint : IDisposable
                 }
             }
 
+            // DATAGRAM-Frames (RFC 9221 §5): so früh wie möglich, ein Frame pro Paket (unfragmentierbar,
+            // MTU!), congestion-controlled — reicht das Budget nicht, bleiben sie in der Queue (§5.4).
+            bool sentDatagram = false;
+            if (sendBudget > 0 && _outgoingDatagrams.Count > 0)
+            {
+                byte[] datagramPayload = _outgoingDatagrams.Dequeue();
+                frames.Add(new DatagramFrame(datagramPayload));
+                sendBudget -= datagramPayload.Length + 4;
+                sentDatagram = true;
+            }
+
             // Höchstens ein Stream-Chunk (~MTU) pro Paket, begrenzt durch Flow Control und Sende-Budget.
-            if (sendBudget > 0)
+            if (!sentDatagram && sendBudget > 0)
                 AppendOneStreamChunk(frames, ref sendBudget);
 
             if (frames.Count == 0)
@@ -693,21 +716,69 @@ public abstract class QuicEndpoint : IDisposable
             datagrams.Add(packet);
             firstPacket = false;
 
-            // Weiter nur, solange Budget übrig ist UND noch Stream-Daten anstehen.
-            if (sendBudget <= 0 || !StreamMap.Values.Any(s => s.Send.HasPending))
+            // Weiter nur, solange Budget übrig ist UND noch Stream-Daten oder Datagramme anstehen.
+            if (sendBudget <= 0 ||
+                (!StreamMap.Values.Any(s => s.Send.HasPending) && _outgoingDatagrams.Count == 0))
                 break;
         }
     }
 
+    private readonly Queue<byte[]> _outgoingDatagrams = new(); // wartende DATAGRAM-Nutzlasten (RFC 9221)
+    private List<byte[]> _receivedDatagrams = [];
+
+    /// <summary>
+    /// Das vom Peer angekündigte max_datagram_frame_size (RFC 9221 §3); 0 = Peer nimmt keine
+    /// DATAGRAM-Frames an.
+    /// </summary>
+    public ulong PeerMaxDatagramFrameSize => PeerParams?.MaxDatagramFrameSizeValue ?? 0;
+
+    /// <summary>
+    /// Reiht ein QUIC-DATAGRAM (RFC 9221) zum Senden ein — unzuverlässig: bei Verlust KEINE
+    /// Retransmission; unter Congestion-Druck wird verzögert (§5.4). <c>false</c>, wenn der Peer keine
+    /// DATAGRAM-Frames angekündigt hat (§3 MUST NOT) oder das Frame sein Limit/die MTU sprengt.
+    /// </summary>
+    public bool TrySendDatagram(ReadOnlySpan<byte> payload)
+    {
+        MaybeDecodePeerParameters();
+        ulong frameSize = 1UL + (ulong)VarInt.GetLength((ulong)payload.Length) + (ulong)payload.Length;
+        if (PeerMaxDatagramFrameSize == 0 || frameSize > PeerMaxDatagramFrameSize)
+            return false; // §3: ohne (bzw. über) Peer-Ankündigung MUST NOT senden
+        if (payload.Length > MaxStreamDataPerPacket)
+            return false; // §5: DATAGRAM-Frames sind unfragmentierbar — MTU-Deckel wie Stream-Chunks
+        _outgoingDatagrams.Enqueue(payload.ToArray());
+        return true;
+    }
+
+    /// <summary>
+    /// Holt alle bisher empfangenen QUIC-DATAGRAM-Nutzlasten ab (RFC 9221 §5: sofortige Zustellung).
+    /// </summary>
+    public IReadOnlyList<byte[]> TakeReceivedDatagrams()
+    {
+        if (_receivedDatagrams.Count == 0)
+            return [];
+        List<byte[]> taken = _receivedDatagrams;
+        _receivedDatagrams = [];
+        return taken;
+    }
+
+    private ulong _incrementalCursor = ulong.MaxValue; // zuletzt bedienter inkrementeller Stream (Round-Robin)
+
     /// <summary>
     /// Hängt einen einzelnen Stream-Datenchunk an (ein Frame), sofern Flow Control/Budget es erlauben.
+    /// Die Stream-Auswahl folgt RFC 9218 §10: aufsteigende Urgency; bei gleicher Urgency werden
+    /// NICHT-inkrementelle Streams nacheinander in aufsteigender Stream-ID bedient (Request-Reihenfolge),
+    /// inkrementelle teilen sich die Bandbreite per Round-Robin.
     /// </summary>
     private void AppendOneStreamChunk(List<Frame> frames, ref long sendBudget)
     {
-        foreach (QuicStream stream in StreamMap.Values)
+        // Priorisierten Kandidaten wählen — ggf. mehrfach versuchen, falls ein Stream trotz
+        // HasPending gerade kein Frame liefert (z. B. Stream-Flow-Control erschöpft).
+        var skip = new HashSet<ulong>();
+        while (true)
         {
-            if (!stream.Send.HasPending)
-                continue;
+            QuicStream? stream = PickSendStream(skip);
+            if (stream is null)
+                return;
             ulong connWindow = _connSendLimit > _connSendUsed ? _connSendLimit - _connSendUsed : 0;
             if (connWindow == 0)
                 return; // Verbindungsfenster erschöpft
@@ -716,12 +787,55 @@ public abstract class QuicEndpoint : IDisposable
                 return;
             StreamFrame? sf = stream.Send.NextFrame(chunk);
             if (sf is null)
+            {
+                skip.Add(stream.Id.Value);
                 continue;
+            }
             frames.Add(sf);
             _connSendUsed += (ulong)sf.Data.Length;
             sendBudget -= sf.Data.Length;
+            if (stream.SendIncremental)
+                _incrementalCursor = stream.Id.Value; // Round-Robin-Zeiger weiterrücken
             return; // ein Chunk pro Paket
         }
+    }
+
+    /// <summary>
+    /// Wählt den nächsten zu bedienenden Stream nach RFC 9218 §10 (siehe
+    /// <see cref="AppendOneStreamChunk"/>). <paramref name="skip"/> enthält in diesem Aufruf bereits
+    /// erfolglos versuchte Streams.
+    /// </summary>
+    private QuicStream? PickSendStream(HashSet<ulong> skip)
+    {
+        // 1) Höchste anstehende Dringlichkeit (kleinste Urgency) bestimmen.
+        int bestUrgency = int.MaxValue;
+        foreach (QuicStream s in StreamMap.Values)
+            if (s.Send.HasPending && !skip.Contains(s.Id.Value) && s.SendUrgency < bestUrgency)
+                bestUrgency = s.SendUrgency;
+        if (bestUrgency == int.MaxValue)
+            return null;
+
+        // 2) Nicht-inkrementell zuerst: kleinste Stream-ID exklusiv bedienen (Request-Reihenfolge, §10).
+        QuicStream? nonIncremental = null;
+        foreach (QuicStream s in StreamMap.Values)
+            if (s.Send.HasPending && !skip.Contains(s.Id.Value) && s.SendUrgency == bestUrgency &&
+                !s.SendIncremental && (nonIncremental is null || s.Id.Value < nonIncremental.Id.Value))
+                nonIncremental = s;
+        if (nonIncremental is not null)
+            return nonIncremental;
+
+        // 3) Nur inkrementelle: Round-Robin — kleinste ID oberhalb des Cursors, sonst von vorn.
+        QuicStream? next = null, first = null;
+        foreach (QuicStream s in StreamMap.Values)
+        {
+            if (!s.Send.HasPending || skip.Contains(s.Id.Value) || s.SendUrgency != bestUrgency)
+                continue;
+            if (first is null || s.Id.Value < first.Id.Value)
+                first = s;
+            if (s.Id.Value > _incrementalCursor && (next is null || s.Id.Value < next.Id.Value))
+                next = s;
+        }
+        return next ?? first;
     }
 
     /// <summary>
@@ -786,11 +900,37 @@ public abstract class QuicEndpoint : IDisposable
         _retransmitQueue[i].AddRange(_recovery.OnZeroRttRejected(i, _zeroRttMaxPacketNumber));
     }
 
+    /// <summary>
+    /// Holt ausstehende RESET_STREAM-/STOP_SENDING-Frames der Streams ab (RFC 9000 §19.4/§19.5).
+    /// Zuverlässigkeit entsteht über die Loss Recovery: beide Frame-Typen werden als retransmittierbar
+    /// verfolgt und bei Verlust erneut eingereiht.
+    /// </summary>
+    private void CollectStreamCancellationFrames(List<Frame> frames)
+    {
+        foreach ((ulong id, QuicStream stream) in StreamMap)
+        {
+            if (stream.Send.TakeResetFrame() is { } reset)
+                frames.Add(reset);
+            if (stream.Receive.TakeStopSendingErrorCode() is { } errorCode)
+                frames.Add(new StopSendingFrame(id, errorCode));
+        }
+    }
+
     private void DrainRetransmitQueue(int level, List<Frame> frames)
     {
         if (_retransmitQueue[level].Count == 0)
             return;
-        frames.AddRange(_retransmitQueue[level]);
+        foreach (Frame frame in _retransmitQueue[level])
+        {
+            // RFC 9000 §19.4: nach einem RESET_STREAM keine STREAM-Frames dieses Streams mehr
+            // (re)transmittieren; §3.5: ein STOP_SENDING ist überflüssig, sobald der Peer schon
+            // zurückgesetzt hat.
+            if (frame is StreamFrame sf && StreamMap.TryGetValue(sf.StreamId, out QuicStream? s) && s.Send.IsReset)
+                continue;
+            if (frame is StopSendingFrame ss && StreamMap.TryGetValue(ss.StreamId, out QuicStream? r) && r.Receive.ResetReceived)
+                continue;
+            frames.Add(frame);
+        }
         _retransmitQueue[level].Clear();
     }
 
@@ -801,7 +941,8 @@ public abstract class QuicEndpoint : IDisposable
             return; // reine ACK-Pakete zählen weder zu bytes_in_flight noch zum Pacing-Budget
         _pacer.OnBytesSent(size);
         _idle.OnAckElicitingPacketSent(_clock.Elapsed.Ticks); // RFC 9000 §10.1
-        List<Frame> retransmittable = frames.Where(f => f is CryptoFrame or StreamFrame).ToList();
+        // RESET_STREAM/STOP_SENDING müssen zuverlässig ankommen (RFC 9000 §19.4/§3.5) ⇒ mitverfolgen.
+        List<Frame> retransmittable = frames.Where(f => f is CryptoFrame or StreamFrame or ResetStreamFrame or StopSendingFrame).ToList();
         _recovery.OnPacketSent(level, new SentPacket
         {
             PacketNumber = packetNumber,
@@ -1112,6 +1253,29 @@ public abstract class QuicEndpoint : IDisposable
                 case StreamFrame sf:
                     HandleStreamFrame(sf);
                     break;
+                case ResetStreamFrame rs:
+                    HandleResetStream(rs);
+                    break;
+                case StopSendingFrame ss:
+                    HandleStopSending(ss);
+                    break;
+                case DatagramFrame datagram:
+                    // RFC 9221 §3/§5: nur mit 0-RTT-/1-RTT-Schutz zulässig; ohne eigene Ankündigung
+                    // oder über unserem angekündigten Limit ⇒ PROTOCOL_VIOLATION.
+                    if (level != EncryptionLevel.Application ||
+                        LocalParams.MaxDatagramFrameSizeValue == 0)
+                    {
+                        CloseWithTransportError(TransportError.ProtocolViolation, "unexpected DATAGRAM frame");
+                        return;
+                    }
+                    if (1UL + (ulong)VarInt.GetLength((ulong)datagram.Data.Length) + (ulong)datagram.Data.Length >
+                        LocalParams.MaxDatagramFrameSizeValue)
+                    {
+                        CloseWithTransportError(TransportError.ProtocolViolation, "DATAGRAM larger than announced limit");
+                        return;
+                    }
+                    _receivedDatagrams.Add(datagram.Data.ToArray()); // §5: der Anwendung sofort zustellen
+                    break;
                 case MaxStreamDataFrame m when StreamMap.TryGetValue(m.StreamId, out QuicStream? s):
                     s.Send.MaxData = Math.Max(s.Send.MaxData, m.MaximumStreamData);
                     break;
@@ -1229,6 +1393,68 @@ public abstract class QuicEndpoint : IDisposable
     /// </summary>
     private ulong StreamLimitFor(StreamId id)
         => id.IsUnidirectional ? LocalParams.InitialMaxStreamsUniValue : LocalParams.InitialMaxStreamsBidiValue;
+
+    /// <summary>
+    /// Verarbeitet ein RESET_STREAM des Peers (RFC 9000 §19.4): validiert Stream-Zustand/-Limit,
+    /// übernimmt die Final Size (§4.5) und markiert die Empfangsseite als abgebrochen.
+    /// </summary>
+    private void HandleResetStream(ResetStreamFrame rs)
+    {
+        var id = new StreamId(rs.StreamId);
+
+        // §19.4: RESET_STREAM für einen Stream, auf dem der Peer gar nicht sendet (unsere uni Sendeseite)
+        // bzw. für einen lokal initiierten, nie geöffneten Stream ⇒ STREAM_STATE_ERROR.
+        if ((id.IsUnidirectional && LocallyInitiated(id)) ||
+            (LocallyInitiated(id) && !StreamMap.ContainsKey(rs.StreamId)))
+        {
+            CloseWithTransportError(TransportError.StreamStateError, "RESET_STREAM on send-only or uncreated stream");
+            return;
+        }
+        // §4.6: auch RESET_STREAM darf keinen Stream jenseits des gewährten Limits erzeugen.
+        if (!LocallyInitiated(id) && id.Index >= StreamLimitFor(id))
+        {
+            CloseWithTransportError(TransportError.StreamLimitError, "stream limit exceeded");
+            return;
+        }
+
+        switch (GetOrCreateStream(id).Receive.Reset(rs.ApplicationErrorCode, rs.FinalSize))
+        {
+            case StreamReceiveResult.FlowControlError:   // §4.1: Final Size über dem gewährten Fenster
+                CloseWithTransportError(TransportError.FlowControlError, "reset final size exceeds flow control");
+                break;
+            case StreamReceiveResult.FinalSizeError:     // §4.5: Final Size widersprüchlich
+                CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size in RESET_STREAM");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Verarbeitet ein STOP_SENDING des Peers (RFC 9000 §19.5, §3.5): validiert den Stream-Zustand und
+    /// setzt unsere Sendeseite mit kopiertem Fehlercode zurück (MUST in „Ready"/„Send"; wir antworten
+    /// grundsätzlich sofort — das deckt auch das MAY-Verschieben in „Data Sent" konservativ ab).
+    /// </summary>
+    private void HandleStopSending(StopSendingFrame ss)
+    {
+        var id = new StreamId(ss.StreamId);
+
+        // §19.5: STOP_SENDING für einen reinen Empfangsstream (peer-initiiert uni ⇒ wir senden nie)
+        // bzw. für einen lokal initiierten, nie geöffneten Stream ⇒ STREAM_STATE_ERROR.
+        if ((id.IsUnidirectional && !LocallyInitiated(id)) ||
+            (LocallyInitiated(id) && !StreamMap.ContainsKey(ss.StreamId)))
+        {
+            CloseWithTransportError(TransportError.StreamStateError, "STOP_SENDING on receive-only or uncreated stream");
+            return;
+        }
+        if (!LocallyInitiated(id) && id.Index >= StreamLimitFor(id))
+        {
+            CloseWithTransportError(TransportError.StreamLimitError, "stream limit exceeded");
+            return;
+        }
+
+        QuicStream stream = GetOrCreateStream(id);
+        stream.PeerStopSendingErrorCode = ss.ApplicationErrorCode;
+        stream.Send.Reset(ss.ApplicationErrorCode); // §3.5: Fehlercode SHOULD kopiert werden
+    }
 
     private void DeliverCryptoToTls(EncryptionLevel level)
     {

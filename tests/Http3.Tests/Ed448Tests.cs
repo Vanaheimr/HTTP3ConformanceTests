@@ -28,6 +28,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// BouncyCastle-Primitiv byte-genau gegen die Testvektoren aus RFC 8032 §7.4 (öffentlicher Schlüssel
 /// <b>und</b> Signatur) und prüft, dass die Verifikation manipulierte Signaturen ablehnt.
 /// </summary>
+[TestFixture]
 public class Ed448Tests
 {
     // RFC 8032 §7.4 — Test "Blank" (leere Nachricht, leerer Kontext).
@@ -49,37 +50,37 @@ public class Ed448Tests
         "26b8f91727bd62897af15e41eb43c377efb9c610d48f2335cb0bd0087810f4352541b143c4b981b7e18f62de8ccdf633fc1bf037ab7cd779" +
         "805e0dbcc0aae1cbcee1afb2e027df36bc04dcecbf154336c19f0af7e0a6472905e799f1953d2a0ff3348ab21aa4adafd1d234441cf807c03a00";
 
-    [Fact]
+    [Test]
     public void PublicKeyAndSignature_MatchRfc8032BlankTest_EmptyMessage()
     {
         var ed = new Ed448Signature(Convert.FromHexString(BlankSeed));
 
-        Assert.Equal(BlankPublicKey, Convert.ToHexString(ed.PublicKey).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(ed.PublicKey).ToLowerInvariant(), Is.EqualTo(BlankPublicKey));
         byte[] signature = ed.Sign(ReadOnlySpan<byte>.Empty);
-        Assert.Equal(BlankSignature, Convert.ToHexString(signature).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(signature).ToLowerInvariant(), Is.EqualTo(BlankSignature));
     }
 
-    [Fact]
+    [Test]
     public void PublicKeyAndSignature_MatchRfc8032OneOctetTest()
     {
         var ed = new Ed448Signature(Convert.FromHexString(OneOctetSeed));
 
-        Assert.Equal(OneOctetPublicKey, Convert.ToHexString(ed.PublicKey).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(ed.PublicKey).ToLowerInvariant(), Is.EqualTo(OneOctetPublicKey));
         byte[] signature = ed.Sign(Convert.FromHexString(OneOctetMessage));
-        Assert.Equal(OneOctetSignature, Convert.ToHexString(signature).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(signature).ToLowerInvariant(), Is.EqualTo(OneOctetSignature));
     }
 
-    [Fact]
+    [Test]
     public void Verify_AcceptsValidRfcSignature()
     {
         byte[] publicKey = Convert.FromHexString(OneOctetPublicKey);
         byte[] message = Convert.FromHexString(OneOctetMessage);
         byte[] signature = Convert.FromHexString(OneOctetSignature);
 
-        Assert.True(Ed448Signature.Verify(publicKey, message, signature));
+        Assert.That(Ed448Signature.Verify(publicKey, message, signature), Is.True);
     }
 
-    [Fact]
+    [Test]
     public void Verify_RejectsTamperedSignatureAndMessage()
     {
         byte[] publicKey = Convert.FromHexString(OneOctetPublicKey);
@@ -88,20 +89,20 @@ public class Ed448Tests
 
         byte[] tamperedSig = (byte[])signature.Clone();
         tamperedSig[0] ^= 0x01;
-        Assert.False(Ed448Signature.Verify(publicKey, message, tamperedSig));
+        Assert.That(Ed448Signature.Verify(publicKey, message, tamperedSig), Is.False);
 
-        Assert.False(Ed448Signature.Verify(publicKey, [0x04], signature));
+        Assert.That(Ed448Signature.Verify(publicKey, [0x04], signature), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void SignAndVerify_RoundTripsWithFreshKeyPair()
     {
         var ed = new Ed448Signature();
         byte[] content = "TLS 1.3, server CertificateVerify"u8.ToArray();
 
         byte[] signature = ed.Sign(content);
-        Assert.Equal(57, ed.PublicKey.Length);
-        Assert.Equal(114, signature.Length);
-        Assert.True(Ed448Signature.Verify(ed.PublicKey, content, signature));
+        Assert.That(ed.PublicKey.Length, Is.EqualTo(57));
+        Assert.That(signature.Length, Is.EqualTo(114));
+        Assert.That(Ed448Signature.Verify(ed.PublicKey, content, signature), Is.True);
     }
 }

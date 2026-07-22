@@ -26,50 +26,51 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// <summary>
 /// Deterministische Tests des Idle-Timeouts (RFC 9000 §10.1) mit injizierten Zeitpunkten.
 /// </summary>
+[TestFixture]
 public class IdleTimeoutTests
 {
     private static long Ms(double ms) => TimeSpan.FromMilliseconds(ms).Ticks;
     private static readonly TimeSpan TinyPto = TimeSpan.FromMilliseconds(1); // 3·PTO = 3 ms, unterhalb aller Grenzen hier
 
-    [Fact]
+    [Test]
     public void Negotiate_TakesMinimumOfNonZeroValues()
     {
         var idle = new IdleTimeout();
 
         idle.Negotiate(30_000, 10_000);
-        Assert.Equal(TimeSpan.FromMilliseconds(10_000), idle.Negotiated);
+        Assert.That(idle.Negotiated, Is.EqualTo(TimeSpan.FromMilliseconds(10_000)));
 
         idle.Negotiate(0, 5_000);
-        Assert.Equal(TimeSpan.FromMilliseconds(5_000), idle.Negotiated); // 0 = deaktiviert bei diesem Peer
+        Assert.That(idle.Negotiated, Is.EqualTo(TimeSpan.FromMilliseconds(5_000))); // 0 = deaktiviert bei diesem Peer
 
         idle.Negotiate(7_000, 0);
-        Assert.Equal(TimeSpan.FromMilliseconds(7_000), idle.Negotiated);
+        Assert.That(idle.Negotiated, Is.EqualTo(TimeSpan.FromMilliseconds(7_000)));
     }
 
-    [Fact]
+    [Test]
     public void Negotiate_BothZero_DisablesTimeout()
     {
         var idle = new IdleTimeout();
         idle.Negotiate(0, 0);
 
-        Assert.False(idle.Enabled);
+        Assert.That(idle.Enabled, Is.False);
         idle.Start(0);
-        Assert.False(idle.IsExpired(Ms(1_000_000), TinyPto)); // deaktiviert ⇒ nie abgelaufen
+        Assert.That(idle.IsExpired(Ms(1_000_000), TinyPto), Is.False); // deaktiviert ⇒ nie abgelaufen
     }
 
-    [Fact]
+    [Test]
     public void IsExpired_OnlyAfterNegotiatedDurationElapses()
     {
         var idle = new IdleTimeout();
         idle.Negotiate(100, 0); // 100 ms
         idle.Start(0);
 
-        Assert.False(idle.IsExpired(Ms(50), TinyPto));
-        Assert.False(idle.IsExpired(Ms(100), TinyPto)); // exakt gleich ist noch nicht „darüber"
-        Assert.True(idle.IsExpired(Ms(150), TinyPto));
+        Assert.That(idle.IsExpired(Ms(50), TinyPto), Is.False);
+        Assert.That(idle.IsExpired(Ms(100), TinyPto), Is.False); // exakt gleich ist noch nicht „darüber"
+        Assert.That(idle.IsExpired(Ms(150), TinyPto), Is.True);
     }
 
-    [Fact]
+    [Test]
     public void IsExpired_UsesThreePtoFloor_WhenLargerThanNegotiated()
     {
         var idle = new IdleTimeout();
@@ -77,11 +78,11 @@ public class IdleTimeoutTests
         idle.Start(0);
         var pto = TimeSpan.FromMilliseconds(20);      // 3·PTO = 60 ms > 10 ms ⇒ Grenze 60 ms
 
-        Assert.False(idle.IsExpired(Ms(50), pto));
-        Assert.True(idle.IsExpired(Ms(70), pto));
+        Assert.That(idle.IsExpired(Ms(50), pto), Is.False);
+        Assert.That(idle.IsExpired(Ms(70), pto), Is.True);
     }
 
-    [Fact]
+    [Test]
     public void OnPacketReceived_RestartsTimer()
     {
         var idle = new IdleTimeout();
@@ -89,11 +90,11 @@ public class IdleTimeoutTests
         idle.Start(0);
 
         idle.OnPacketReceived(Ms(90)); // Timer bei t=90 ms neu starten
-        Assert.False(idle.IsExpired(Ms(150), TinyPto)); // 150 − 90 = 60 ms < 100 ms
-        Assert.True(idle.IsExpired(Ms(200), TinyPto));  // 200 − 90 = 110 ms > 100 ms
+        Assert.That(idle.IsExpired(Ms(150), TinyPto), Is.False); // 150 − 90 = 60 ms < 100 ms
+        Assert.That(idle.IsExpired(Ms(200), TinyPto), Is.True);  // 200 − 90 = 110 ms > 100 ms
     }
 
-    [Fact]
+    [Test]
     public void ShouldSendKeepAlive_OnlyAfterIntervalOfInactivity_AndResetsOnActivity()
     {
         var idle = new IdleTimeout();
@@ -101,24 +102,24 @@ public class IdleTimeoutTests
         idle.Start(0);
         var interval = TimeSpan.FromMilliseconds(100);
 
-        Assert.False(idle.ShouldSendKeepAlive(Ms(50), interval));
-        Assert.True(idle.ShouldSendKeepAlive(Ms(120), interval));
+        Assert.That(idle.ShouldSendKeepAlive(Ms(50), interval), Is.False);
+        Assert.That(idle.ShouldSendKeepAlive(Ms(120), interval), Is.True);
 
         idle.OnPacketReceived(Ms(120)); // Aktivität setzt den Zähler zurück
-        Assert.False(idle.ShouldSendKeepAlive(Ms(150), interval));
-        Assert.True(idle.ShouldSendKeepAlive(Ms(230), interval));
+        Assert.That(idle.ShouldSendKeepAlive(Ms(150), interval), Is.False);
+        Assert.That(idle.ShouldSendKeepAlive(Ms(230), interval), Is.True);
     }
 
-    [Fact]
+    [Test]
     public void ShouldSendKeepAlive_False_WhenIdleTimeoutDisabled()
     {
         var idle = new IdleTimeout();
         idle.Negotiate(0, 0); // deaktiviert
         idle.Start(0);
-        Assert.False(idle.ShouldSendKeepAlive(Ms(1_000_000), TimeSpan.FromMilliseconds(1)));
+        Assert.That(idle.ShouldSendKeepAlive(Ms(1_000_000), TimeSpan.FromMilliseconds(1)), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void OnAckElicitingSent_RestartsTimer_OnlyOnceUntilNextReceive()
     {
         var idle = new IdleTimeout();
@@ -128,10 +129,10 @@ public class IdleTimeoutTests
         idle.OnAckElicitingPacketSent(Ms(50)); // erstes ack-eliciting seit Empfang ⇒ Reset auf 50 ms
         idle.OnAckElicitingPacketSent(Ms(90)); // weiteres ohne zwischenzeitlichen Empfang ⇒ KEIN Reset
 
-        Assert.True(idle.IsExpired(Ms(160), TinyPto)); // 160 − 50 = 110 ms > 100 ms (Basis blieb 50 ms)
+        Assert.That(idle.IsExpired(Ms(160), TinyPto), Is.True); // 160 − 50 = 110 ms > 100 ms (Basis blieb 50 ms)
 
         idle.OnPacketReceived(Ms(160));         // Empfang erlaubt wieder einen Sende-Reset
         idle.OnAckElicitingPacketSent(Ms(200)); // jetzt greift der Reset erneut ⇒ Basis 200 ms
-        Assert.False(idle.IsExpired(Ms(260), TinyPto)); // 260 − 200 = 60 ms < 100 ms
+        Assert.That(idle.IsExpired(Ms(260), TinyPto), Is.False); // 260 − 200 = 60 ms < 100 ms
     }
 }

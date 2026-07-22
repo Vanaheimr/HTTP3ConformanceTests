@@ -31,11 +31,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// pre_shared_key zurück, der Server prüft den Binder und resümiert (ohne Zertifikat). Prüft zugleich die
 /// graceful Fallback-Wege, wenn der Server das Ticket nicht kennt.
 /// </summary>
+[TestFixture]
 public class ResumptionTests
 {
     private static readonly byte[] Tp = [0x0f, 0x00];
 
-    [Fact]
+    [Test]
     public void Client_ResumesWithPsk_ServerSkipsCertificate_AndSecretsMatch()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -46,12 +47,12 @@ public class ResumptionTests
         var client1 = new TlsClientHandshake("localhost", Tp, certificateValidation: trusting);
         using var server1 = new TlsServerHandshake(cert, Tp, resumptionCache: cache);
         RunHandshake(client1, server1);
-        Assert.True(client1.ServerCertificateValid);
-        Assert.False(client1.ResumptionAccepted);
+        Assert.That(client1.ServerCertificateValid, Is.True);
+        Assert.That(client1.ResumptionAccepted, Is.False);
 
         // NewSessionTicket kommt post-Handshake auf Application-Level – einmal nachpumpen.
         Pump(server1, client1);
-        Assert.NotEmpty(client1.NewSessionTickets);
+        Assert.That(client1.NewSessionTickets, Is.Not.Empty);
         ResumptionTicket ticket = client1.NewSessionTickets[0];
         client1.Dispose();
 
@@ -60,14 +61,14 @@ public class ResumptionTests
         using var server2 = new TlsServerHandshake(cert, Tp, resumptionCache: cache);
         RunHandshake(client2, server2);
 
-        Assert.True(client2.ResumptionAccepted, "Client muss die PSK-Annahme (selected_identity) erkennen.");
-        Assert.True(server2.ResumptionAccepted, "Server muss den PSK-Binder akzeptiert haben.");
-        Assert.False(client2.ServerCertificateValid); // Resumption ⇒ kein Zertifikat
+        Assert.That(client2.ResumptionAccepted, Is.True, "Client muss die PSK-Annahme (selected_identity) erkennen.");
+        Assert.That(server2.ResumptionAccepted, Is.True, "Server muss den PSK-Binder akzeptiert haben.");
+        Assert.That(client2.ServerCertificateValid, Is.False); // Resumption ⇒ kein Zertifikat
         AssertMatchingSecrets(client2, server2);
         client2.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void UnknownTicket_FallsBackToFullHandshake_WithCertificate()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -86,9 +87,9 @@ public class ResumptionTests
         using var server2 = new TlsServerHandshake(cert, Tp, resumptionCache: new ServerResumptionCache());
         RunHandshake(client2, server2);
 
-        Assert.False(client2.ResumptionAccepted);
-        Assert.False(server2.ResumptionAccepted);
-        Assert.True(client2.ServerCertificateValid, "Ohne Resumption muss das Zertifikat geprüft werden.");
+        Assert.That(client2.ResumptionAccepted, Is.False);
+        Assert.That(server2.ResumptionAccepted, Is.False);
+        Assert.That(client2.ServerCertificateValid, Is.True, "Ohne Resumption muss das Zertifikat geprüft werden.");
         AssertMatchingSecrets(client2, server2);
         client2.Dispose();
     }
@@ -101,16 +102,14 @@ public class ResumptionTests
             Pump(client, server);
             Pump(server, client);
         }
-        Assert.True(client.IsComplete, "Client-Handshake unvollständig.");
-        Assert.True(server.IsComplete, "Server-Handshake unvollständig.");
+        Assert.That(client.IsComplete, Is.True, "Client-Handshake unvollständig.");
+        Assert.That(server.IsComplete, Is.True, "Server-Handshake unvollständig.");
     }
 
     private static void AssertMatchingSecrets(ITlsHandshake client, ITlsHandshake server)
     {
-        Assert.Equal(client.ApplicationSecrets!.ClientApplicationTrafficSecret,
-                     server.ApplicationSecrets!.ClientApplicationTrafficSecret);
-        Assert.Equal(client.ApplicationSecrets.ServerApplicationTrafficSecret,
-                     server.ApplicationSecrets.ServerApplicationTrafficSecret);
+        Assert.That(server.ApplicationSecrets!.ClientApplicationTrafficSecret, Is.EqualTo(client.ApplicationSecrets!.ClientApplicationTrafficSecret));
+        Assert.That(server.ApplicationSecrets.ServerApplicationTrafficSecret, Is.EqualTo(client.ApplicationSecrets.ServerApplicationTrafficSecret));
     }
 
     private static void Pump(ITlsHandshake from, ITlsHandshake to)

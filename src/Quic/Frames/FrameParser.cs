@@ -118,6 +118,13 @@ public static class FrameParser
                     frames.Add(stopSending!);
                     break;
 
+                case FrameType.DatagramNoLength:
+                case FrameType.DatagramWithLength: // RFC 9221 §4
+                    if (!DatagramFrame.TryReadBody(ref reader, hasLength: type == FrameType.DatagramWithLength, out DatagramFrame? datagram))
+                        return FrameParseResult.EncodingError;
+                    frames.Add(datagram!);
+                    break;
+
                 case FrameType.MaxData:
                     if (!MaxDataFrame.TryReadBody(ref reader, out MaxDataFrame? maxData))
                         return FrameParseResult.EncodingError;

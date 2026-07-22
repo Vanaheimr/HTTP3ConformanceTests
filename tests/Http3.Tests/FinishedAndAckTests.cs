@@ -26,19 +26,20 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class FinishedAndAckTests
 {
-    [Fact]
+    [Test]
     public void FinishedKey_FromServerHsSecret_MatchesRfc8448()
     {
         // RFC 8448 §3: finished_key aus dem server handshake traffic secret.
         byte[] sHsSecret = Hex.Parse("b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38");
         byte[] finishedKey = new KeySchedule(CipherSuite.Aes128GcmSha256).FinishedKey(sHsSecret);
 
-        Assert.Equal("008d3b66f816ea559f96b537e885c31fc068bf492c652f01f288a1d8cdc19fc8", Hex.ToHex(finishedKey));
+        Assert.That(Hex.ToHex(finishedKey), Is.EqualTo("008d3b66f816ea559f96b537e885c31fc068bf492c652f01f288a1d8cdc19fc8"));
     }
 
-    [Fact]
+    [Test]
     public void Finished_BuildMessage_HasCorrectHeader()
     {
         byte[] verifyData = new byte[32];
@@ -46,31 +47,29 @@ public class FinishedAndAckTests
 
         byte[] msg = Finished.BuildMessage(verifyData);
 
-        Assert.Equal((byte)HandshakeType.Finished, msg[0]);
-        Assert.Equal(new byte[] { 0x00, 0x00, 0x20 }, msg[1..4]); // 3-Byte-Länge = 32
-        Assert.Equal(verifyData, msg[4..]);
+        Assert.That(msg[0], Is.EqualTo((byte)HandshakeType.Finished));
+        Assert.That(msg[1..4], Is.EqualTo(new byte[] { 0x00, 0x00, 0x20 })); // 3-Byte-Länge = 32
+        Assert.That(msg[4..], Is.EqualTo(verifyData));
     }
 
-    [Fact]
+    [Test]
     public void AckFrame_FromPacketNumbers_CoalescesConsecutive()
     {
         // {0,1,2, 5, 7,8} -> Bereiche [8..7], [5..5], [2..0]
         var ack = AckFrame.FromPacketNumbers([2, 0, 1, 8, 5, 7]);
 
-        Assert.Equal(8UL, ack.LargestAcknowledged);
-        Assert.Equal(
-            new[] { new PacketNumberRange(8, 7), new PacketNumberRange(5, 5), new PacketNumberRange(2, 0) },
-            ack.Ranges);
+        Assert.That(ack.LargestAcknowledged, Is.EqualTo(8UL));
+        Assert.That(ack.Ranges, Is.EqualTo(new[] { new PacketNumberRange(8, 7), new PacketNumberRange(5, 5), new PacketNumberRange(2, 0) }));
     }
 
-    [Fact]
+    [Test]
     public void AckFrame_FromPacketNumbers_SingleRange_RoundTripsThroughWire()
     {
         var ack = AckFrame.FromPacketNumbers([0, 1, 2, 3]);
         byte[] bytes = FrameParser.Serialize([ack]);
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(bytes, out var frames));
-        var parsed = Assert.IsType<AckFrame>(Assert.Single(frames));
-        Assert.Equal(new[] { new PacketNumberRange(3, 0) }, parsed.Ranges);
+        Assert.That(FrameParser.TryParseAll(bytes, out var frames), Is.EqualTo(FrameParseResult.Ok));
+        var parsed = Expect.Type<AckFrame>(Expect.Single(frames));
+        Assert.That(parsed.Ranges, Is.EqualTo(new[] { new PacketNumberRange(3, 0) }));
     }
 }

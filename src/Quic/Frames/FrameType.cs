@@ -49,6 +49,12 @@ public static class FrameType
     public const ulong StreamsBlockedBidi = 0x16;
     public const ulong StreamsBlockedUni = 0x17;
 
+    /// <summary>
+    /// DATAGRAM-Frames (RFC 9221 §4): 0x30 ohne, 0x31 mit Length-Feld (LEN-Bit 0x01).
+    /// </summary>
+    public const ulong DatagramNoLength = 0x30;
+    public const ulong DatagramWithLength = 0x31;
+
     public const ulong PathChallenge = 0x1a;
     public const ulong PathResponse = 0x1b;
     public const ulong ConnectionCloseQuic = 0x1c;

@@ -27,63 +27,64 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class PacketNumberSpaceTests
 {
-    [Fact]
+    [Test]
     public void NextPacketNumber_IncrementsFromZero()
     {
         var space = new PacketNumberSpace();
-        Assert.Equal(0UL, space.NextPacketNumber());
-        Assert.Equal(1UL, space.NextPacketNumber());
-        Assert.Equal(2UL, space.NextPacketNumber());
+        Assert.That(space.NextPacketNumber(), Is.EqualTo(0UL));
+        Assert.That(space.NextPacketNumber(), Is.EqualTo(1UL));
+        Assert.That(space.NextPacketNumber(), Is.EqualTo(2UL));
     }
 
-    [Fact]
+    [Test]
     public void ReceivedPackets_DriveAckPendingAndBuildAck()
     {
         var space = new PacketNumberSpace();
-        Assert.False(space.AckPending);
-        Assert.Null(space.BuildAck());
+        Assert.That(space.AckPending, Is.False);
+        Assert.That(space.BuildAck(), Is.Null);
 
         space.RecordReceived(0);
         space.RecordReceived(1);
-        Assert.True(space.AckPending);
+        Assert.That(space.AckPending, Is.True);
 
         AckFrame? ack = space.BuildAck();
-        Assert.NotNull(ack);
-        Assert.Equal(1UL, ack!.LargestAcknowledged);
-        Assert.False(space.AckPending); // nach dem Bauen quittiert
-        Assert.Equal(1, space.LargestReceived);
+        Assert.That(ack, Is.Not.Null);
+        Assert.That(ack!.LargestAcknowledged, Is.EqualTo(1UL));
+        Assert.That(space.AckPending, Is.False); // nach dem Bauen quittiert
+        Assert.That(space.LargestReceived, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public void OnAckReceived_TracksLargestAckedByPeer()
     {
         var space = new PacketNumberSpace();
-        Assert.Equal(-1, space.LargestAckedByPeer);
+        Assert.That(space.LargestAckedByPeer, Is.EqualTo(-1));
 
         space.OnAckReceived(5);
-        Assert.Equal(5, space.LargestAckedByPeer);
+        Assert.That(space.LargestAckedByPeer, Is.EqualTo(5));
         space.OnAckReceived(3); // kleinerer Wert ändert nichts
-        Assert.Equal(5, space.LargestAckedByPeer);
+        Assert.That(space.LargestAckedByPeer, Is.EqualTo(5));
     }
 }
 
 public class TlsClientHandshakeTests
 {
-    [Fact]
+    [Test]
     public void Start_ProducesClientHelloAtInitialLevel()
     {
         using var tls = new TlsClientHandshake("example.com", new byte[] { 0x01, 0x01, 0x00 });
         tls.Start();
 
-        Assert.True(tls.TryGetOutgoingCrypto(out EncryptionLevel level, out byte[] data));
-        Assert.Equal(EncryptionLevel.Initial, level);
-        Assert.Equal(0x01, data[0]); // Handshake-Typ ClientHello
-        Assert.False(tls.TryGetOutgoingCrypto(out _, out _)); // nur eine Nachricht
+        Assert.That(tls.TryGetOutgoingCrypto(out EncryptionLevel level, out byte[] data), Is.True);
+        Assert.That(level, Is.EqualTo(EncryptionLevel.Initial));
+        Assert.That(data[0], Is.EqualTo(0x01)); // Handshake-Typ ClientHello
+        Assert.That(tls.TryGetOutgoingCrypto(out _, out _), Is.False); // nur eine Nachricht
     }
 
-    [Fact]
+    [Test]
     public void ProvideServerHello_DerivesHandshakeSecrets()
     {
         // Server-Key-Share aus einem echten P-256-Schlüsselpaar.
@@ -97,9 +98,9 @@ public class TlsClientHandshakeTests
 
         tls.ProvideCrypto(EncryptionLevel.Initial, serverHello);
 
-        Assert.Equal(CipherSuite.Aes128GcmSha256, tls.NegotiatedCipherSuite);
-        Assert.NotNull(tls.HandshakeSecrets);
-        Assert.Equal(32, tls.HandshakeSecrets!.ServerHandshakeTrafficSecret.Length);
+        Assert.That(tls.NegotiatedCipherSuite, Is.EqualTo(CipherSuite.Aes128GcmSha256));
+        Assert.That(tls.HandshakeSecrets, Is.Not.Null);
+        Assert.That(tls.HandshakeSecrets!.ServerHandshakeTrafficSecret.Length, Is.EqualTo(32));
     }
 
     private static byte[] BuildServerHello(ushort cipher, ushort group, byte[] keyShare)

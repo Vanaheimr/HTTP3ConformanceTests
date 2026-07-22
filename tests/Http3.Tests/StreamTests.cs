@@ -24,93 +24,93 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class StreamIdTests
 {
-    [Theory]
-    [InlineData(0UL, true, true)]   // client, bidi
-    [InlineData(1UL, false, true)]  // server, bidi
-    [InlineData(2UL, true, false)]  // client, uni
-    [InlineData(3UL, false, false)] // server, uni
+        [TestCase(0UL, true, true)]   // client, bidi
+    [TestCase(1UL, false, true)]  // server, bidi
+    [TestCase(2UL, true, false)]  // client, uni
+    [TestCase(3UL, false, false)] // server, uni
     public void Bits_EncodeInitiatorAndDirection(ulong value, bool clientInitiated, bool bidirectional)
     {
         var id = new StreamId(value);
-        Assert.Equal(clientInitiated, id.IsClientInitiated);
-        Assert.Equal(!clientInitiated, id.IsServerInitiated);
-        Assert.Equal(bidirectional, id.IsBidirectional);
-        Assert.Equal(!bidirectional, id.IsUnidirectional);
+        Assert.That(id.IsClientInitiated, Is.EqualTo(clientInitiated));
+        Assert.That(id.IsServerInitiated, Is.EqualTo(!clientInitiated));
+        Assert.That(id.IsBidirectional, Is.EqualTo(bidirectional));
+        Assert.That(id.IsUnidirectional, Is.EqualTo(!bidirectional));
     }
 
-    [Fact]
+    [Test]
     public void Create_ProducesExpectedStreamIds()
     {
-        Assert.Equal(0UL, StreamId.Create(true, true, 0).Value);   // erster Client-Bidi
-        Assert.Equal(4UL, StreamId.Create(true, true, 1).Value);   // zweiter Client-Bidi
-        Assert.Equal(2UL, StreamId.Create(true, false, 0).Value);  // erster Client-Uni (Control)
-        Assert.Equal(3UL, StreamId.Create(false, false, 0).Value); // erster Server-Uni
+        Assert.That(StreamId.Create(true, true, 0).Value, Is.EqualTo(0UL));   // erster Client-Bidi
+        Assert.That(StreamId.Create(true, true, 1).Value, Is.EqualTo(4UL));   // zweiter Client-Bidi
+        Assert.That(StreamId.Create(true, false, 0).Value, Is.EqualTo(2UL));  // erster Client-Uni (Control)
+        Assert.That(StreamId.Create(false, false, 0).Value, Is.EqualTo(3UL)); // erster Server-Uni
     }
 }
 
 public class StreamReceiveBufferTests
 {
-    [Fact]
+    [Test]
     public void ReassemblesOutOfOrder_AndTracksFin()
     {
         var buf = new StreamReceiveBuffer();
-        Assert.Equal(StreamReceiveResult.Ok, buf.Receive(3, [0x33, 0x44], fin: true));  // Ende zuerst
-        Assert.Empty(buf.ReadAvailable());                                              // Lücke -> nichts lesbar
-        Assert.Equal(StreamReceiveResult.Ok, buf.Receive(0, [0x00, 0x11, 0x22], false)); // Lücke schließen
+        Assert.That(buf.Receive(3, [0x33, 0x44], fin: true), Is.EqualTo(StreamReceiveResult.Ok));  // Ende zuerst
+        Assert.That(buf.ReadAvailable(), Is.Empty);                                              // Lücke -> nichts lesbar
+        Assert.That(buf.Receive(0, [0x00, 0x11, 0x22], false), Is.EqualTo(StreamReceiveResult.Ok)); // Lücke schließen
 
-        Assert.Equal(new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44 }, buf.ReadAvailable());
-        Assert.True(buf.FinReceived);
-        Assert.True(buf.IsComplete);
+        Assert.That(buf.ReadAvailable(), Is.EqualTo(new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44 }));
+        Assert.That(buf.FinReceived, Is.True);
+        Assert.That(buf.IsComplete, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void OverlappingAndDuplicateData_HandledIdempotently()
     {
         var buf = new StreamReceiveBuffer();
         buf.Receive(0, [1, 2, 3], false);
         buf.Receive(2, [3, 4, 5], false); // überlappt bei Offset 2
-        Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, buf.ReadAvailable());
+        Assert.That(buf.ReadAvailable(), Is.EqualTo(new byte[] { 1, 2, 3, 4, 5 }));
     }
 
-    [Fact]
+    [Test]
     public void ExceedingFlowControlLimit_ReportsError()
     {
         var buf = new StreamReceiveBuffer { MaxData = 4 };
-        Assert.Equal(StreamReceiveResult.FlowControlError, buf.Receive(2, [1, 2, 3], false)); // Ende bei 5 > 4
+        Assert.That(buf.Receive(2, [1, 2, 3], false), Is.EqualTo(StreamReceiveResult.FlowControlError)); // Ende bei 5 > 4
     }
 
-    [Fact]
+    [Test]
     public void ConflictingFinalSize_ReportsError()
     {
         var buf = new StreamReceiveBuffer();
         buf.Receive(0, [1, 2, 3], fin: true);          // Final Size = 3
-        Assert.Equal(StreamReceiveResult.FinalSizeError, buf.Receive(3, [4, 5], fin: true)); // Final Size = 5
+        Assert.That(buf.Receive(3, [4, 5], fin: true), Is.EqualTo(StreamReceiveResult.FinalSizeError)); // Final Size = 5
     }
 }
 
 public class StreamSendBufferTests
 {
-    [Fact]
+    [Test]
     public void EmitsFramesWithinFlowControlWindow()
     {
         var send = new StreamSendBuffer(0) { MaxData = 3 };
         send.Write([1, 2, 3, 4, 5]);
 
         StreamFrame? f1 = send.NextFrame(maxPayload: 10);
-        Assert.NotNull(f1);
-        Assert.Equal(new byte[] { 1, 2, 3 }, f1!.Data.ToArray()); // durch MaxData=3 begrenzt
-        Assert.Equal(0UL, f1.Offset);
-        Assert.True(send.IsBlocked);                              // Rest wartet auf Kredit
+        Assert.That(f1, Is.Not.Null);
+        Assert.That(f1!.Data.ToArray(), Is.EqualTo(new byte[] { 1, 2, 3 })); // durch MaxData=3 begrenzt
+        Assert.That(f1.Offset, Is.EqualTo(0UL));
+        Assert.That(send.IsBlocked, Is.True);                              // Rest wartet auf Kredit
 
         send.MaxData = 5; // MAX_STREAM_DATA erhöht das Fenster
         StreamFrame? f2 = send.NextFrame(10);
-        Assert.Equal(new byte[] { 4, 5 }, f2!.Data.ToArray());
-        Assert.Equal(3UL, f2.Offset);
+        Assert.That(f2!.Data.ToArray(), Is.EqualTo(new byte[] { 4, 5 }));
+        Assert.That(f2.Offset, Is.EqualTo(3UL));
     }
 
-    [Fact]
+    [Test]
     public void RespectsMaxPayload_AndSendsFin()
     {
         var send = new StreamSendBuffer(4) { MaxData = 1000 };
@@ -118,13 +118,13 @@ public class StreamSendBufferTests
         send.Finish();
 
         StreamFrame? f1 = send.NextFrame(maxPayload: 2);
-        Assert.Equal(new byte[] { 1, 2 }, f1!.Data.ToArray());
-        Assert.False(f1.Fin);
+        Assert.That(f1!.Data.ToArray(), Is.EqualTo(new byte[] { 1, 2 }));
+        Assert.That(f1.Fin, Is.False);
 
         StreamFrame? f2 = send.NextFrame(maxPayload: 100);
-        Assert.Equal(new byte[] { 3, 4 }, f2!.Data.ToArray());
-        Assert.True(f2.Fin); // letztes Frame trägt das FIN
-        Assert.Null(send.NextFrame(100));
+        Assert.That(f2!.Data.ToArray(), Is.EqualTo(new byte[] { 3, 4 }));
+        Assert.That(f2.Fin, Is.True); // letztes Frame trägt das FIN
+        Assert.That(send.NextFrame(100), Is.Null);
     }
 }
 
@@ -133,34 +133,34 @@ public class FlowControlFrameTests
     private static T RoundTrip<T>(T frame) where T : Frame
     {
         byte[] bytes = FrameParser.Serialize([frame]);
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(bytes, out var frames));
-        return Assert.IsType<T>(Assert.Single(frames));
+        Assert.That(FrameParser.TryParseAll(bytes, out var frames), Is.EqualTo(FrameParseResult.Ok));
+        return Expect.Type<T>(Expect.Single(frames));
     }
 
-    [Fact]
-    public void MaxData_RoundTrips() => Assert.Equal(1_000_000UL, RoundTrip(new MaxDataFrame(1_000_000)).MaximumData);
+    [Test]
+    public void MaxData_RoundTrips() => Assert.That(RoundTrip(new MaxDataFrame(1_000_000)).MaximumData, Is.EqualTo(1_000_000UL));
 
-    [Fact]
+    [Test]
     public void MaxStreamData_RoundTrips()
     {
         var f = RoundTrip(new MaxStreamDataFrame(4, 65536));
-        Assert.Equal(4UL, f.StreamId);
-        Assert.Equal(65536UL, f.MaximumStreamData);
+        Assert.That(f.StreamId, Is.EqualTo(4UL));
+        Assert.That(f.MaximumStreamData, Is.EqualTo(65536UL));
     }
 
-    [Fact]
+    [Test]
     public void MaxStreams_RoundTrips_BothDirections()
     {
-        Assert.True(RoundTrip(new MaxStreamsFrame(true, 100)).Bidirectional);
-        Assert.False(RoundTrip(new MaxStreamsFrame(false, 3)).Bidirectional);
+        Assert.That(RoundTrip(new MaxStreamsFrame(true, 100)).Bidirectional, Is.True);
+        Assert.That(RoundTrip(new MaxStreamsFrame(false, 3)).Bidirectional, Is.False);
     }
 
-    [Fact]
+    [Test]
     public void ResetStreamAndStopSending_RoundTrip()
     {
         var reset = RoundTrip(new ResetStreamFrame(4, 0x10c, 999));
-        Assert.Equal(999UL, reset.FinalSize);
+        Assert.That(reset.FinalSize, Is.EqualTo(999UL));
         var stop = RoundTrip(new StopSendingFrame(8, 0x10c));
-        Assert.Equal(8UL, stop.StreamId);
+        Assert.That(stop.StreamId, Is.EqualTo(8UL));
     }
 }

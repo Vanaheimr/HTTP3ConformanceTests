@@ -27,9 +27,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Tests der dynamischen QPACK-Tabelle (RFC 9204): der byte-genaue Anhang-B.2-Vektor, Duplicate,
 /// Encoder↔Decoder-Round-Trip inkl. dynamischer Wiederverwendung sowie Eviction.
 /// </summary>
+[TestFixture]
 public class QpackDynamicTableTests
 {
-    [Fact]
+    [Test]
     public void Rfc9204_AppendixB2_DecodesDynamicFieldSection()
     {
         var decoder = new QpackDynamicDecoder();
@@ -39,22 +40,22 @@ public class QpackDynamicTableTests
             "3fbd01" +
             "c00f" + "7777772e6578616d706c652e636f6d" +
             "c10c" + "2f73616d706c652f70617468");
-        Assert.Equal(QpackResult.Ok, decoder.ProcessEncoderInstructions(encoderStream));
-        Assert.Equal(2ul, decoder.Table.InsertCount);
-        Assert.Equal(106ul, decoder.Table.Size); // RFC: Size 106 bytes
+        Assert.That(decoder.ProcessEncoderInstructions(encoderStream), Is.EqualTo(QpackResult.Ok));
+        Assert.That(decoder.Table.InsertCount, Is.EqualTo(2ul));
+        Assert.That(decoder.Table.Size, Is.EqualTo(106ul)); // RFC: Size 106 bytes
 
         // Field Section (Stream 4): RIC=2, Base=0, zwei Post-Base-Indizes.
         byte[] fieldSection = Convert.FromHexString("03811011");
-        Assert.Equal(QpackResult.Ok, decoder.Decode(fieldSection, out List<HeaderField> headers));
+        Assert.That(decoder.Decode(fieldSection, out List<HeaderField> headers), Is.EqualTo(QpackResult.Ok));
 
-        Assert.Equal(2, headers.Count);
-        Assert.Equal(":authority", headers[0].Name);
-        Assert.Equal("www.example.com", headers[0].Value);
-        Assert.Equal(":path", headers[1].Name);
-        Assert.Equal("/sample/path", headers[1].Value);
+        Assert.That(headers.Count, Is.EqualTo(2));
+        Assert.That(headers[0].Name, Is.EqualTo(":authority"));
+        Assert.That(headers[0].Value, Is.EqualTo("www.example.com"));
+        Assert.That(headers[1].Name, Is.EqualTo(":path"));
+        Assert.That(headers[1].Value, Is.EqualTo("/sample/path"));
     }
 
-    [Fact]
+    [Test]
     public void EncoderStream_Duplicate_AddsCopyOfOlderEntry()
     {
         var decoder = new QpackDynamicDecoder();
@@ -62,14 +63,14 @@ public class QpackDynamicTableTests
             "3fbd01c00f7777772e6578616d706c652e636f6dc10c2f73616d706c652f70617468"));
 
         // Duplicate mit relativem Index 1 ⇒ absoluter Index InsertCount(2)-1-1 = 0 (:authority).
-        Assert.Equal(QpackResult.Ok, decoder.ProcessEncoderInstructions([0x01]));
-        Assert.Equal(3ul, decoder.Table.InsertCount);
-        Assert.True(decoder.Table.TryGetByAbsolute(2, out (string Name, string Value) copy));
-        Assert.Equal(":authority", copy.Name);
-        Assert.Equal("www.example.com", copy.Value);
+        Assert.That(decoder.ProcessEncoderInstructions([0x01]), Is.EqualTo(QpackResult.Ok));
+        Assert.That(decoder.Table.InsertCount, Is.EqualTo(3ul));
+        Assert.That(decoder.Table.TryGetByAbsolute(2, out (string Name, string Value) copy), Is.True);
+        Assert.That(copy.Name, Is.EqualTo(":authority"));
+        Assert.That(copy.Value, Is.EqualTo("www.example.com"));
     }
 
-    [Fact]
+    [Test]
     public void EncoderDecoder_RoundTrip_UsesDynamicTable()
     {
         var encoder = new QpackDynamicEncoder();
@@ -86,20 +87,20 @@ public class QpackDynamicTableTests
         };
 
         (byte[] instructions, byte[] section) = encoder.Encode(headers);
-        Assert.Equal(QpackResult.Ok, decoder.ProcessEncoderInstructions(instructions));
-        Assert.Equal(QpackResult.Ok, decoder.Decode(section, out List<HeaderField> decoded));
+        Assert.That(decoder.ProcessEncoderInstructions(instructions), Is.EqualTo(QpackResult.Ok));
+        Assert.That(decoder.Decode(section, out List<HeaderField> decoded), Is.EqualTo(QpackResult.Ok));
 
-        Assert.Equal(headers.Count, decoded.Count);
+        Assert.That(decoded.Count, Is.EqualTo(headers.Count));
         for (int i = 0; i < headers.Count; i++)
         {
-            Assert.Equal(headers[i].Name, decoded[i].Name);
-            Assert.Equal(headers[i].Value, decoded[i].Value);
+            Assert.That(decoded[i].Name, Is.EqualTo(headers[i].Name));
+            Assert.That(decoded[i].Value, Is.EqualTo(headers[i].Value));
         }
-        Assert.True(encoder.Table.InsertCount > 0, "Nicht-statische Header müssen die dynamische Tabelle nutzen.");
-        Assert.Equal(encoder.Table.InsertCount, decoder.Table.InsertCount);
+        Assert.That(encoder.Table.InsertCount > 0, Is.True, "Nicht-statische Header müssen die dynamische Tabelle nutzen.");
+        Assert.That(decoder.Table.InsertCount, Is.EqualTo(encoder.Table.InsertCount));
     }
 
-    [Fact]
+    [Test]
     public void RepeatedHeader_ReferencesDynamicEntry_WithoutReinserting()
     {
         var encoder = new QpackDynamicEncoder();
@@ -110,47 +111,47 @@ public class QpackDynamicTableTests
 
         (byte[] i1, byte[] s1) = encoder.Encode(headers); // fügt ein
         decoder.ProcessEncoderInstructions(i1);
-        Assert.Equal(QpackResult.Ok, decoder.Decode(s1, out _));
+        Assert.That(decoder.Decode(s1, out _), Is.EqualTo(QpackResult.Ok));
         ulong afterFirst = encoder.Table.InsertCount;
-        Assert.Equal(1ul, afterFirst);
+        Assert.That(afterFirst, Is.EqualTo(1ul));
 
         (byte[] i2, byte[] s2) = encoder.Encode(headers); // referenziert die vorhandene Zeile
-        Assert.Empty(i2);                                  // keine neue Insert-Instruktion
-        Assert.Equal(afterFirst, encoder.Table.InsertCount); // kein neuer Eintrag
+        Assert.That(i2, Is.Empty);                                  // keine neue Insert-Instruktion
+        Assert.That(encoder.Table.InsertCount, Is.EqualTo(afterFirst)); // kein neuer Eintrag
 
-        Assert.Equal(QpackResult.Ok, decoder.ProcessEncoderInstructions(i2));
-        Assert.Equal(QpackResult.Ok, decoder.Decode(s2, out List<HeaderField> decoded));
-        Assert.Single(decoded);
-        Assert.Equal(":authority", decoded[0].Name);
-        Assert.Equal("example.org", decoded[0].Value);
+        Assert.That(decoder.ProcessEncoderInstructions(i2), Is.EqualTo(QpackResult.Ok));
+        Assert.That(decoder.Decode(s2, out List<HeaderField> decoded), Is.EqualTo(QpackResult.Ok));
+        Expect.Single(decoded);
+        Assert.That(decoded[0].Name, Is.EqualTo(":authority"));
+        Assert.That(decoded[0].Value, Is.EqualTo("example.org"));
     }
 
-    [Fact]
+    [Test]
     public void DynamicTable_EvictsOldest_WhenOverCapacity()
     {
         var table = new QpackDynamicTable();
         table.SetCapacity(60); // eine Zeile (34 B) passt, zwei (68 B) nicht
 
-        Assert.True(table.Insert("a", "1")); // Größe 1+1+32 = 34
-        Assert.True(table.Insert("b", "2")); // verdrängt "a"
+        Assert.That(table.Insert("a", "1"), Is.True); // Größe 1+1+32 = 34
+        Assert.That(table.Insert("b", "2"), Is.True); // verdrängt "a"
 
-        Assert.Equal(2ul, table.InsertCount);
-        Assert.Equal(34ul, table.Size);
-        Assert.False(table.TryGetByAbsolute(0, out _), "Der älteste Eintrag muss verdrängt sein.");
-        Assert.True(table.TryGetByAbsolute(1, out (string Name, string Value) e));
-        Assert.Equal("b", e.Name);
+        Assert.That(table.InsertCount, Is.EqualTo(2ul));
+        Assert.That(table.Size, Is.EqualTo(34ul));
+        Assert.That(table.TryGetByAbsolute(0, out _), Is.False, "Der älteste Eintrag muss verdrängt sein.");
+        Assert.That(table.TryGetByAbsolute(1, out (string Name, string Value) e), Is.True);
+        Assert.That(e.Name, Is.EqualTo("b"));
     }
 
-    [Fact]
+    [Test]
     public void DynamicTable_EntryLargerThanCapacity_IsNotInserted()
     {
         var table = new QpackDynamicTable();
         table.SetCapacity(40); // < 34 + Nutzlast? "aa"+"bbbbbbbbbb" = 2+10+32 = 44 > 40
-        Assert.False(table.Insert("aa", "bbbbbbbbbb"));
-        Assert.Equal(0ul, table.InsertCount);
+        Assert.That(table.Insert("aa", "bbbbbbbbbb"), Is.False);
+        Assert.That(table.InsertCount, Is.EqualTo(0ul));
     }
 
-    [Fact]
+    [Test]
     public void SectionAcknowledgment_ReleasesReferences_ReenablingEviction()
     {
         var encoder = new QpackDynamicEncoder();
@@ -158,30 +159,30 @@ public class QpackDynamicTableTests
 
         encoder.Encode(0, [new HeaderField("x-a", "1")]); // Insert abs 0, von Stream 0 referenziert
         encoder.Encode(4, [new HeaderField("x-b", "2")]); // Insert abs 1, von Stream 4 referenziert
-        Assert.Equal(2ul, encoder.Table.InsertCount);
+        Assert.That(encoder.Table.InsertCount, Is.EqualTo(2ul));
 
         // Stream 8 bräuchte einen 3. Eintrag ⇒ müsste abs 0 verdrängen, der aber referenziert ist ⇒ kein Insert.
         encoder.Encode(8, [new HeaderField("x-c", "3")]);
-        Assert.Equal(2ul, encoder.Table.InsertCount);
+        Assert.That(encoder.Table.InsertCount, Is.EqualTo(2ul));
 
         // Section-Acknowledgment für Stream 0 gibt abs 0 frei.
         encoder.ProcessDecoderInstructions(QpackDynamicDecoder.EncodeSectionAcknowledgment(0));
-        Assert.Equal(2ul, encoder.KnownReceivedCount);
+        Assert.That(encoder.KnownReceivedCount, Is.EqualTo(2ul));
 
         // Jetzt ist abs 0 unreferenziert und kann verdrängt werden ⇒ der 3. Eintrag passt.
         encoder.Encode(12, [new HeaderField("x-d", "4")]);
-        Assert.Equal(3ul, encoder.Table.InsertCount);
+        Assert.That(encoder.Table.InsertCount, Is.EqualTo(3ul));
     }
 
-    [Fact]
+    [Test]
     public void InsertCountIncrement_AdvancesKnownReceivedCount()
     {
         var encoder = new QpackDynamicEncoder();
         encoder.SetCapacity(4096);
         encoder.Encode(0, [new HeaderField("x-a", "1"), new HeaderField("x-b", "2")]);
-        Assert.Equal(0ul, encoder.KnownReceivedCount);
+        Assert.That(encoder.KnownReceivedCount, Is.EqualTo(0ul));
 
         encoder.ProcessDecoderInstructions(QpackDynamicDecoder.EncodeInsertCountIncrement(2));
-        Assert.Equal(2ul, encoder.KnownReceivedCount);
+        Assert.That(encoder.KnownReceivedCount, Is.EqualTo(2ul));
     }
 }

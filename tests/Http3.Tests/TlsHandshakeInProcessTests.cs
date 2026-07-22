@@ -31,6 +31,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// CRYPTO-Bytes werden je Encryption-Level zwischen den beiden Engines ausgetauscht. Validiert den
 /// Server-Handshake inklusive CertificateVerify-Signatur und der Zertifikatskette, ohne echtes Netzwerk.
 /// </summary>
+[TestFixture]
 public class TlsHandshakeInProcessTests
 {
     /// <summary>
@@ -39,7 +40,7 @@ public class TlsHandshakeInProcessTests
     private static CertificateValidationOptions TrustingOptions(ServerCertificate cert)
         => new() { CustomTrustRoots = [cert.Certificate] };
 
-    [Fact]
+    [Test]
     public void ClientAndServer_CompleteHandshake_WithMatchingSecrets()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -51,18 +52,18 @@ public class TlsHandshakeInProcessTests
 
         RunHandshake(client, server);
 
-        Assert.True(server.ClientFinishedValid, "Server muss den Client-Finished akzeptieren.");
-        Assert.True(client.ServerCertificateValid, "Client muss das Serverzertifikat geprüft haben.");
-        Assert.NotNull(client.ServerCertificate);
+        Assert.That(server.ClientFinishedValid, Is.True, "Server muss den Client-Finished akzeptieren.");
+        Assert.That(client.ServerCertificateValid, Is.True, "Client muss das Serverzertifikat geprüft haben.");
+        Assert.That(client.ServerCertificate, Is.Not.Null);
         AssertMatchingSecrets(client, server);
 
         // Standardmäßig einigt man sich auf X25519 (erste angebotene Gruppe, kein HRR).
-        Assert.Equal(NamedGroup.X25519, client.NegotiatedGroup);
-        Assert.False(server.SentHelloRetryRequest);
+        Assert.That(client.NegotiatedGroup, Is.EqualTo(NamedGroup.X25519));
+        Assert.That(server.SentHelloRetryRequest, Is.False);
         client.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void ClientAndServer_CompleteHandshake_WithX25519MlKem768()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -78,15 +79,15 @@ public class TlsHandshakeInProcessTests
 
         RunHandshake(client, server);
 
-        Assert.Equal(NamedGroup.X25519MlKem768, client.NegotiatedGroup);
-        Assert.False(server.SentHelloRetryRequest);
-        Assert.True(server.ClientFinishedValid);
-        Assert.True(client.ServerCertificateValid);
+        Assert.That(client.NegotiatedGroup, Is.EqualTo(NamedGroup.X25519MlKem768));
+        Assert.That(server.SentHelloRetryRequest, Is.False);
+        Assert.That(server.ClientFinishedValid, Is.True);
+        Assert.That(client.ServerCertificateValid, Is.True);
         AssertMatchingSecrets(client, server);
         client.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void ClientAndServer_CompleteHandshake_WithX448()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -101,19 +102,19 @@ public class TlsHandshakeInProcessTests
 
         RunHandshake(client, server);
 
-        Assert.Equal(NamedGroup.X448, client.NegotiatedGroup);
-        Assert.False(server.SentHelloRetryRequest);
-        Assert.True(server.ClientFinishedValid);
-        Assert.True(client.ServerCertificateValid);
+        Assert.That(client.NegotiatedGroup, Is.EqualTo(NamedGroup.X448));
+        Assert.That(server.SentHelloRetryRequest, Is.False);
+        Assert.That(server.ClientFinishedValid, Is.True);
+        Assert.That(client.ServerCertificateValid, Is.True);
         AssertMatchingSecrets(client, server);
         client.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void ClientAndServer_CompleteHandshake_WithEd25519ServerCertificate()
     {
         using var cert = ServerCertificate.CreateSelfSignedEd25519("localhost");
-        Assert.Equal(SignatureScheme.Ed25519, cert.SignatureScheme);
+        Assert.That(cert.SignatureScheme, Is.EqualTo(SignatureScheme.Ed25519));
         var tp = new byte[] { 0x0f, 0x00 };
 
         // Insecure prüft die CertificateVerify-Signatur — hier also unseren Ed25519-Verifikationspfad —,
@@ -124,17 +125,17 @@ public class TlsHandshakeInProcessTests
 
         RunHandshake(client, server);
 
-        Assert.True(client.ServerCertificateValid, "Client muss die Ed25519-CertificateVerify-Signatur akzeptieren.");
-        Assert.True(server.ClientFinishedValid);
+        Assert.That(client.ServerCertificateValid, Is.True, "Client muss die Ed25519-CertificateVerify-Signatur akzeptieren.");
+        Assert.That(server.ClientFinishedValid, Is.True);
         AssertMatchingSecrets(client, server);
         client.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void ClientAndServer_CompleteHandshake_WithEd448ServerCertificate()
     {
         using var cert = ServerCertificate.CreateSelfSignedEd448("localhost");
-        Assert.Equal(SignatureScheme.Ed448, cert.SignatureScheme);
+        Assert.That(cert.SignatureScheme, Is.EqualTo(SignatureScheme.Ed448));
         var tp = new byte[] { 0x0f, 0x00 };
 
         // Insecure prüft die CertificateVerify-Signatur — hier unseren Ed448-Verifikationspfad —,
@@ -145,13 +146,13 @@ public class TlsHandshakeInProcessTests
 
         RunHandshake(client, server);
 
-        Assert.True(client.ServerCertificateValid, "Client muss die Ed448-CertificateVerify-Signatur akzeptieren.");
-        Assert.True(server.ClientFinishedValid);
+        Assert.That(client.ServerCertificateValid, Is.True, "Client muss die Ed448-CertificateVerify-Signatur akzeptieren.");
+        Assert.That(server.ClientFinishedValid, Is.True);
         AssertMatchingSecrets(client, server);
         client.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void HelloRetryRequest_WhenClientOffersOnlyP256ButServerPrefersX25519()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -167,15 +168,15 @@ public class TlsHandshakeInProcessTests
 
         RunHandshake(client, server);
 
-        Assert.True(server.SentHelloRetryRequest, "Server muss einen HRR gesendet haben.");
-        Assert.Equal(NamedGroup.X25519, client.NegotiatedGroup); // nach HRR auf X25519 geeinigt
-        Assert.True(server.ClientFinishedValid);
-        Assert.True(client.ServerCertificateValid);
+        Assert.That(server.SentHelloRetryRequest, Is.True, "Server muss einen HRR gesendet haben.");
+        Assert.That(client.NegotiatedGroup, Is.EqualTo(NamedGroup.X25519)); // nach HRR auf X25519 geeinigt
+        Assert.That(server.ClientFinishedValid, Is.True);
+        Assert.That(client.ServerCertificateValid, Is.True);
         AssertMatchingSecrets(client, server);
         client.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void ClientRejects_WhenHostnameDoesNotMatchCertificate()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -187,11 +188,11 @@ public class TlsHandshakeInProcessTests
         using var server = new TlsServerHandshake(cert, tp);
 
         var ex = Assert.Throws<CertificateValidationException>(() => RunHandshake(client, server));
-        Assert.Contains("Hostname", ex.Message);
+        Assert.That(ex!.Message, Does.Contain("Hostname"));
         client.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void ClientRejects_SelfSignedCertificate_UnderDefaultPolicy()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -205,7 +206,7 @@ public class TlsHandshakeInProcessTests
         client.Dispose();
     }
 
-    [Fact]
+    [Test]
     public void ClientAccepts_SelfSignedCertificate_UnderInsecurePolicy()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -218,8 +219,8 @@ public class TlsHandshakeInProcessTests
 
         RunHandshake(client, server);
 
-        Assert.True(client.ServerCertificateValid);
-        Assert.True(server.ClientFinishedValid);
+        Assert.That(client.ServerCertificateValid, Is.True);
+        Assert.That(server.ClientFinishedValid, Is.True);
         client.Dispose();
     }
 
@@ -231,20 +232,17 @@ public class TlsHandshakeInProcessTests
             Pump(client, server);
             Pump(server, client);
         }
-        Assert.True(client.IsComplete, "Client-Handshake unvollständig.");
-        Assert.True(server.IsComplete, "Server-Handshake unvollständig.");
+        Assert.That(client.IsComplete, Is.True, "Client-Handshake unvollständig.");
+        Assert.That(server.IsComplete, Is.True, "Server-Handshake unvollständig.");
     }
 
     private static void AssertMatchingSecrets(ITlsHandshake client, ITlsHandshake server)
     {
-        Assert.NotNull(client.HandshakeSecrets);
-        Assert.NotNull(server.HandshakeSecrets);
-        Assert.Equal(client.HandshakeSecrets!.ServerHandshakeTrafficSecret,
-                     server.HandshakeSecrets!.ServerHandshakeTrafficSecret);
-        Assert.Equal(client.ApplicationSecrets!.ClientApplicationTrafficSecret,
-                     server.ApplicationSecrets!.ClientApplicationTrafficSecret);
-        Assert.Equal(client.ApplicationSecrets.ServerApplicationTrafficSecret,
-                     server.ApplicationSecrets.ServerApplicationTrafficSecret);
+        Assert.That(client.HandshakeSecrets, Is.Not.Null);
+        Assert.That(server.HandshakeSecrets, Is.Not.Null);
+        Assert.That(server.HandshakeSecrets!.ServerHandshakeTrafficSecret, Is.EqualTo(client.HandshakeSecrets!.ServerHandshakeTrafficSecret));
+        Assert.That(server.ApplicationSecrets!.ClientApplicationTrafficSecret, Is.EqualTo(client.ApplicationSecrets!.ClientApplicationTrafficSecret));
+        Assert.That(server.ApplicationSecrets.ServerApplicationTrafficSecret, Is.EqualTo(client.ApplicationSecrets.ServerApplicationTrafficSecret));
     }
 
     private static void Pump(ITlsHandshake from, ITlsHandshake to)

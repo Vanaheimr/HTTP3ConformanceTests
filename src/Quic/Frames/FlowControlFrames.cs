@@ -163,6 +163,39 @@ public sealed record ResetStreamFrame(ulong StreamId, ulong ApplicationErrorCode
 }
 
 /// <summary>
+/// DATAGRAM-Frame (Typ 0x30/0x31, RFC 9221 §4): unzuverlässige Anwendungsdaten — nicht retransmittiert,
+/// nicht flow-controlled, aber ack-eliciting und congestion-controlled. Wir senden stets die Variante
+/// MIT Length-Feld (0x31); geparst werden beide (bei 0x30 reicht die Nutzlast bis ans Paketende).
+/// </summary>
+public sealed record DatagramFrame(ReadOnlyMemory<byte> Data) : Frame
+{
+    public override void Write(ref BufferWriter writer)
+    {
+        writer.WriteVarInt(FrameType.DatagramWithLength);
+        writer.WriteVarInt((ulong)Data.Length);
+        writer.WriteBytes(Data.Span);
+    }
+
+    public static bool TryReadBody(ref BufferReader reader, bool hasLength, out DatagramFrame? frame)
+    {
+        frame = null;
+        int count;
+        if (hasLength)
+        {
+            if (!reader.TryReadVarInt(out ulong length) || length > (ulong)reader.Remaining)
+                return false;
+            count = (int)length;
+        }
+        else
+            count = reader.Remaining; // LEN-Bit 0: Daten bis zum Paketende (RFC 9221 §4)
+        if (!reader.TryReadBytes(count, out ReadOnlySpan<byte> data))
+            return false;
+        frame = new DatagramFrame(data.ToArray());
+        return true;
+    }
+}
+
+/// <summary>
 /// STOP_SENDING-Frame (Typ 0x05, RFC 9000 §19.5): bittet den Peer, das Senden einzustellen.
 /// </summary>
 public sealed record StopSendingFrame(ulong StreamId, ulong ApplicationErrorCode) : Frame

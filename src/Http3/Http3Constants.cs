@@ -29,6 +29,16 @@ public static class Http3FrameType
     public const ulong PushPromise = 0x05;
     public const ulong GoAway = 0x07;
     public const ulong MaxPushId = 0x0d;
+
+    /// <summary>
+    /// PRIORITY_UPDATE für Request-Streams (RFC 9218 §7.2) — nur Client→Server auf dem Control-Stream.
+    /// </summary>
+    public const ulong PriorityUpdateRequest = 0xF0700;
+
+    /// <summary>
+    /// PRIORITY_UPDATE für Push-Streams (RFC 9218 §7.2).
+    /// </summary>
+    public const ulong PriorityUpdatePush = 0xF0701;
 }
 
 /// <summary>
@@ -50,4 +60,48 @@ public static class Http3Setting
     public const ulong QpackMaxTableCapacity = 0x01;
     public const ulong MaxFieldSectionSize = 0x06;
     public const ulong QpackBlockedStreams = 0x07;
+
+    /// <summary>
+    /// SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 8441 §3 / RFC 9220 §3, Wert 0x08): der Server erlaubt
+    /// Extended CONNECT (:protocol-Pseudo-Header). Wert MUSS 0 oder 1 sein.
+    /// </summary>
+    public const ulong EnableConnectProtocol = 0x08;
+
+    /// <summary>
+    /// SETTINGS_H3_DATAGRAM (RFC 9297 §2.1.1, Wert 0x33): der Endpunkt nimmt HTTP/3-Datagramme an.
+    /// Wert MUSS 0 oder 1 sein; QUIC-DATAGRAM-Frames dürfen erst fließen, wenn das Setting mit 1
+    /// GESENDET und EMPFANGEN wurde.
+    /// </summary>
+    public const ulong H3Datagram = 0x33;
+}
+
+/// <summary>
+/// HTTP/3-Fehlercodes (RFC 9114 §8.1) — als Application Protocol Error Code in RESET_STREAM/
+/// STOP_SENDING (Stream-Fehler) bzw. CONNECTION_CLOSE Typ 0x1d (Verbindungsfehler).
+/// </summary>
+public static class Http3Error
+{
+    public const ulong NoError = 0x0100;
+    public const ulong GeneralProtocolError = 0x0101;
+    public const ulong InternalError = 0x0102;
+    public const ulong StreamCreationError = 0x0103;
+    public const ulong ClosedCriticalStream = 0x0104;
+    public const ulong FrameUnexpected = 0x0105;
+    public const ulong FrameError = 0x0106;
+    public const ulong ExcessiveLoad = 0x0107;
+    public const ulong IdError = 0x0108;
+    public const ulong SettingsError = 0x0109;
+    public const ulong MissingSettings = 0x010a;
+    public const ulong RequestRejected = 0x010b;
+    public const ulong RequestCancelled = 0x010c;
+    public const ulong RequestIncomplete = 0x010d;
+    public const ulong MessageError = 0x010e;
+    public const ulong ConnectError = 0x010f;
+    public const ulong VersionFallback = 0x0110;
+
+    /// <summary>
+    /// H3_DATAGRAM_ERROR (RFC 9297, Wert 0x33): Verstöße gegen das HTTP-Datagram-Format
+    /// (Verbindungsfehler) bzw. Datagramme zu Requests ohne Datagram-Semantik (Stream-Fehler).
+    /// </summary>
+    public const ulong DatagramError = 0x33;
 }

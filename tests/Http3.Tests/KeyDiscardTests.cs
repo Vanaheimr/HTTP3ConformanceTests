@@ -34,6 +34,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// der Handshake bestätigt ist). Sonst sondiert ein PTO fälschlich den Initial-Space und der ClientHello geht
 /// als (auf 1200 Byte gepolstertes) Initial erneut raus.
 /// </summary>
+[TestFixture]
 public class KeyDiscardTests
 {
     private static bool IsInitial(byte[] dg) =>
@@ -42,7 +43,7 @@ public class KeyDiscardTests
     private static bool IsHandshake(byte[] dg) =>
         dg.Length > 0 && PacketFormat.IsLongHeader(dg[0]) && PacketFormat.GetLongPacketType(dg[0]) == LongPacketType.Handshake;
 
-    [Fact]
+    [Test]
     public void AfterHandshake_ClientSendsNoInitialOrHandshakePackets_EvenUnderPto()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -56,7 +57,7 @@ public class KeyDiscardTests
             foreach (byte[] dg in client.GetDatagramsToSend()) server.ProcessDatagram(dg);
             foreach (byte[] dg in server.GetDatagramsToSend()) client.ProcessDatagram(dg);
         }
-        Assert.True(client.HandshakeConfirmed);
+        Assert.That(client.HandshakeConfirmed, Is.True);
 
         // Ack-eliciting 1-RTT-Daten erzeugen, die NICHT bestätigt werden (Server bekommt nichts mehr) ⇒ PTO feuert.
         QuicStream stream = client.OpenBidirectionalStream();
@@ -74,8 +75,8 @@ public class KeyDiscardTests
             Thread.Sleep(20); // realer Uhr Zeit für die PTO-Deadline geben
         }
 
-        Assert.False(initialSeen, "Nach dem Handshake darf KEIN Initial-Paket mehr gesendet werden (RFC 9001 §4.9.1).");
-        Assert.False(handshakeSeen, "Nach dem Handshake darf KEIN Handshake-Paket mehr gesendet werden (RFC 9001 §4.9.2).");
+        Assert.That(initialSeen, Is.False, "Nach dem Handshake darf KEIN Initial-Paket mehr gesendet werden (RFC 9001 §4.9.1).");
+        Assert.That(handshakeSeen, Is.False, "Nach dem Handshake darf KEIN Handshake-Paket mehr gesendet werden (RFC 9001 §4.9.2).");
     }
 
     /// <summary>
@@ -83,7 +84,7 @@ public class KeyDiscardTests
     /// Client muss den Server-Initial (ServerHello) noch acken können (RFC 9001 §4.9), also ein zweites Initial-
     /// Paket senden. Würde man die Keys schon beim Installieren der Handshake-Keys verwerfen, entfiele dieser ACK.
     /// </summary>
-    [Fact]
+    [Test]
     public void DuringHandshake_ClientSendsInitialAckForServerHello_KeysNotDiscardedTooEarly()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -105,10 +106,9 @@ public class KeyDiscardTests
                 client.ProcessDatagram(dg);
         }
 
-        Assert.True(client.HandshakeConfirmed);
+        Assert.That(client.HandshakeConfirmed, Is.True);
         // ClientHello (≥1 Initial) UND ein Initial-ACK des ServerHello ⇒ mindestens zwei Initial-Pakete.
-        Assert.True(clientInitialPackets >= 2,
-            $"Der Client muss den Server-Initial noch acken (≥2 Initial-Pakete), sonst wurden die Keys zu früh verworfen. Waren: {clientInitialPackets}.");
+        Assert.That(clientInitialPackets >= 2, Is.True, $"Der Client muss den Server-Initial noch acken (≥2 Initial-Pakete), sonst wurden die Keys zu früh verworfen. Waren: {clientInitialPackets}.");
     }
 
     /// <summary>
@@ -116,7 +116,7 @@ public class KeyDiscardTests
     /// auch ohne HANDSHAKE_DONE. Damit werden die Handshake-Keys ggf. früher (bzw. trotz verlorenem HANDSHAKE_DONE)
     /// verworfen. Der Server unterdrückt hier HANDSHAKE_DONE, damit NUR der 1-RTT-ACK-Pfad die Bestätigung auslöst.
     /// </summary>
-    [Fact]
+    [Test]
     public void ClientConfirmsHandshake_ViaOneRttAck_EvenWithoutHandshakeDone()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -130,8 +130,8 @@ public class KeyDiscardTests
             foreach (byte[] dg in client.GetDatagramsToSend()) server.ProcessDatagram(dg);
             foreach (byte[] dg in server.GetDatagramsToSend()) client.ProcessDatagram(dg);
         }
-        Assert.True(client.HandshakeComplete, "Der Client muss seinen Finished gesendet haben.");
-        Assert.False(client.HandshakeConfirmed, "Ohne HANDSHAKE_DONE ist der Handshake noch NICHT bestätigt.");
+        Assert.That(client.HandshakeComplete, Is.True, "Der Client muss seinen Finished gesendet haben.");
+        Assert.That(client.HandshakeConfirmed, Is.False, "Ohne HANDSHAKE_DONE ist der Handshake noch NICHT bestätigt.");
 
         // Der Client sendet 1-RTT-Daten; deren ACK (kein HANDSHAKE_DONE!) bestätigt den Handshake (§4.1.2).
         QuicStream stream = client.OpenBidirectionalStream();
@@ -142,8 +142,7 @@ public class KeyDiscardTests
             foreach (byte[] dg in server.GetDatagramsToSend()) client.ProcessDatagram(dg);
         }
 
-        Assert.True(client.HandshakeConfirmed,
-            "Der Client muss den Handshake allein per 1-RTT-ACK bestätigen (RFC 9001 §4.1.2), ohne HANDSHAKE_DONE.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Der Client muss den Handshake allein per 1-RTT-ACK bestätigen (RFC 9001 §4.1.2), ohne HANDSHAKE_DONE.");
     }
 
     /// <summary>
@@ -153,7 +152,7 @@ public class KeyDiscardTests
     /// reordertes Handshake-Paket trüge nur schon Bekanntes. Der Test belegt: im selben Moment, in dem der
     /// Handshake bestätigt ist, sind die Handshake-Keys bereits weg.
     /// </summary>
-    [Fact]
+    [Test]
     public void HandshakeKeys_DiscardedImmediatelyOnConfirmation_NoReorderingWindow()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -171,12 +170,10 @@ public class KeyDiscardTests
             foreach (byte[] dg in server.GetDatagramsToSend()) client.ProcessDatagram(dg);
         }
 
-        Assert.True(client.HandshakeConfirmed);
-        Assert.True(hadHandshakeKeysBeforeConfirm, "Die Handshake-Keys müssen während des Handshakes installiert gewesen sein.");
-        Assert.False(client.HasHandshakeKeysForTest,
-            "Mit der Bestätigung müssen die Handshake-Keys SOFORT verworfen sein – kein Reordering-Fenster (RFC 9001 §4.9.2).");
+        Assert.That(client.HandshakeConfirmed, Is.True);
+        Assert.That(hadHandshakeKeysBeforeConfirm, Is.True, "Die Handshake-Keys müssen während des Handshakes installiert gewesen sein.");
+        Assert.That(client.HasHandshakeKeysForTest, Is.False, "Mit der Bestätigung müssen die Handshake-Keys SOFORT verworfen sein – kein Reordering-Fenster (RFC 9001 §4.9.2).");
         // Auch der Server verwirft sie mit dem Handshake-Abschluss sofort.
-        Assert.False(server.HasHandshakeKeysForTest,
-            "Auch der Server verwirft die Handshake-Keys sofort bei Abschluss (RFC 9001 §4.9.2).");
+        Assert.That(server.HasHandshakeKeysForTest, Is.False, "Auch der Server verwirft die Handshake-Keys sofort bei Abschluss (RFC 9001 §4.9.2).");
     }
 }

@@ -22,6 +22,7 @@ using System.Net.Sockets;
 using System.Text;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
+using org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
 using org.GraphDefined.Vanaheimr.Hermod.Quic;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
@@ -44,6 +45,10 @@ var serverParams = new TransportParameters { MaxIdleTimeoutMs = idleMs };
 
 // Optionale Adressvalidierung per Retry (RFC 9000 §8.1): --retry.
 bool requireRetry = args.Contains("--retry");
+
+// Optional Graceful Shutdown vorführen (RFC 9114 §5.2): nach der ersten beantworteten Anfrage ein
+// GOAWAY senden, dann (einen Austausch später) mit H3_NO_ERROR schließen: --goaway.
+bool goAwayDemo = args.Contains("--goaway");
 
 // Optional ein Ed25519- oder Ed448-Serverzertifikat (RFC 8032/8410) statt ECDSA-P-256: --ed25519 / --ed448.
 bool useEd25519 = args.Contains("--ed25519");
@@ -86,6 +91,10 @@ socket.Bind(new IPEndPoint(IPAddress.Any, port));
 // Verbindungen werden vorrangig über die Connection ID demultiplext (nicht über die Adresse), damit
 // eine Connection Migration (RFC 9000 §9) – ein Client, der die Adresse wechselt – dieselbe Verbindung trifft.
 var connections = new List<ServerConn>();
+var datagramEchoTunnels = new List<Http3Tunnel>(); // „datagram-echo"-Tunnel (RFC 9297): Echo in der Hauptschleife
+var webTransportSessions = new List<WebTransportSession>(); // WebTransport-Sessions: Echo in der Hauptschleife
+var wtEchoStreams = new List<(WebTransportStream In, WebTransportStream? Reply)>();
+var wtEchoBuffers = new Dictionary<WebTransportStream, List<byte>>();
 byte[] buffer = new byte[2048];
 
 while (true)
@@ -148,7 +157,12 @@ while (true)
 
         conn = new ServerConn(new Http3ServerConnection(certificate, Handle, serverParams, requireRetry,
             preferredGroups: preferGroups, resumptionCache: resumptionCache, maxEarlyDataSize: 0xFFFFFFFF,
-            statelessResetTokens: statelessResetTokens), from);
+            statelessResetTokens: statelessResetTokens,
+            maxFieldSectionSize: 16_384,        // RFC 9114 §4.2.2: zu große Request-Header ⇒ 431
+            connectHandler: HandleConnect,      // RFC 9220: WebSockets über Extended CONNECT
+            enableDatagrams: true,              // RFC 9297/9221: HTTP-Datagramme
+            webTransportMaxSessions: 4,         // draft-webtrans-http3: WebTransport
+            webTransportHandler: HandleWebTransport), from);
         connections.Add(conn);
         Console.WriteLine($"Neue Verbindung von {from}");
     }
@@ -161,6 +175,61 @@ while (true)
     }
 
     conn.Connection.ProcessDatagram(datagram);
+
+    // Graceful-Shutdown-Demo (RFC 9114 §5.2): erst GOAWAY ankündigen (und flushen), im NÄCHSTEN
+    // Austausch dann — sofern nichts mehr aussteht — anständig mit H3_NO_ERROR schließen.
+    if (goAwayDemo && !conn.Connection.IsClosing && !conn.Connection.IsDraining)
+    {
+        if (conn.GoAwayAnnounced && !conn.Connection.HasPendingRequests)
+        {
+            Console.WriteLine("→ Alle angenommenen Requests bedient — CONNECTION_CLOSE (H3_NO_ERROR).");
+            conn.Connection.CloseGracefully();
+        }
+        else if (conn.Connection.RequestsHandled > 0 && conn.Connection.GoAwaySent is null)
+        {
+            conn.Connection.InitiateGracefulShutdown();
+            conn.GoAwayAnnounced = true;
+            Console.WriteLine($"→ GOAWAY gesendet (Grenze: Stream-ID {conn.Connection.GoAwaySent}) — Graceful Shutdown (RFC 9114 §5.2).");
+        }
+    }
+
+    // „datagram-echo"-Tunnel bedienen (RFC 9297): empfangene HTTP-Datagramme zurückspiegeln.
+    foreach (Http3Tunnel echoTunnel in datagramEchoTunnels)
+        while (echoTunnel.TryReceiveDatagram(out byte[]? payload) && payload is not null)
+        {
+            Console.WriteLine($"  ← HTTP-Datagramm ({payload.Length} Bytes) — Echo zurück (unzuverlässig, RFC 9297).");
+            echoTunnel.TrySendDatagram(payload);
+        }
+
+    // WebTransport-Sessions bedienen: Datagramme + eingehende Streams zurückspiegeln (Echo).
+    foreach (WebTransportSession wt in webTransportSessions)
+    {
+        while (wt.TryReceiveDatagram(out byte[]? dgram) && dgram is not null)
+        {
+            Console.WriteLine($"  ← WT-Datagramm ({dgram.Length} Bytes) — Echo.");
+            wt.SendDatagram(dgram);
+        }
+        // Eingehende uni-/bidi-Streams annehmen und den Rumpf zurückschicken.
+        while (wt.AcceptUnidirectionalStream() is { } uni)
+            wtEchoStreams.Add((uni, null));
+        while (wt.AcceptBidirectionalStream() is { } bidi)
+            wtEchoStreams.Add((bidi, bidi));
+    }
+    for (int i = wtEchoStreams.Count - 1; i >= 0; i--)
+    {
+        (WebTransportStream inStream, WebTransportStream? reply) = wtEchoStreams[i];
+        wtEchoBuffers.TryAdd(inStream, []);
+        wtEchoBuffers[inStream].AddRange(inStream.Read());
+        if (inStream.IsReceiveComplete)
+        {
+            byte[] body = [.. wtEchoBuffers[inStream]];
+            Console.WriteLine($"  ← WT-Stream ({(reply is null ? "uni" : "bidi")}, {body.Length} Bytes: „{Encoding.UTF8.GetString(body)}\")");
+            if (reply is not null) { reply.Write(body); reply.Finish(); } // bidi ⇒ Echo zurück
+            wtEchoBuffers.Remove(inStream);
+            wtEchoStreams.RemoveAt(i);
+        }
+    }
+
     foreach (byte[] dg in conn.Connection.GetDatagramsToSend())
         socket.SendTo(dg, conn.Endpoint);
 
@@ -211,9 +280,118 @@ static byte[] LoadOrCreateSecret(string path, out bool created)
     return fresh;
 }
 
+// Extended CONNECT (RFC 8441/9220): :protocol „websocket" ⇒ WebSocket-Echo über den Tunnel;
+// „datagram-echo" ⇒ HTTP-Datagramme (RFC 9297) zurückspiegeln; alles andere ⇒ 501 (RFC 9220 §3 SHOULD).
+Http3ConnectResult HandleConnect(Http3Request request)
+{
+    Console.WriteLine($"  → CONNECT :protocol={request.Protocol}  (:path={request.Path})");
+
+    if (request.Protocol == "datagram-echo")
+        return new Http3ConnectResult
+        {
+            Status = 200,
+            OnTunnel = tunnel => datagramEchoTunnels.Add(tunnel), // Echo übernimmt die Hauptschleife
+        };
+
+    if (request.Protocol != "websocket")
+        return new Http3ConnectResult { Status = 501 };
+
+    bool deflate = WebSocketDeflate.ShouldAccept(
+        request.AdditionalHeaders.FirstOrDefault(h => h.Name == "sec-websocket-extensions").Value,
+        out string? extensionsResponse);
+
+    return new Http3ConnectResult
+    {
+        Status = 200,
+        Headers = deflate ? [new HeaderField("sec-websocket-extensions", extensionsResponse!)] : [],
+        OnTunnel = tunnel =>
+        {
+            var ws = new WebSocketConnection(tunnel, WebSocketRole.Server, deflate);
+            _ = EchoWebSocket(ws, tunnel);
+        },
+    };
+}
+
+// RFC-6455-Echo: Text-/Binärnachrichten zurückspiegeln, bis der Close-Handshake (oder ein FIN) endet.
+static async Task EchoWebSocket(WebSocketConnection ws, Http3Tunnel tunnel)
+{
+    while (await ws.ReceiveAsync(CancellationToken.None) is { } message)
+    {
+        if (message.Opcode == WebSocketOpcode.Text)
+        {
+            string text = Encoding.UTF8.GetString(message.Payload);
+            Console.WriteLine($"  ← WebSocket-Text: „{text}\" — Echo zurück.");
+            await ws.SendTextAsync(text, CancellationToken.None);
+        }
+        else
+            await ws.SendBinaryAsync(message.Payload, CancellationToken.None);
+    }
+    tunnel.Complete(); // geordnetes Tunnel-Ende (FIN ≙ TCP-Close, RFC 9220 §3)
+    Console.WriteLine("  ✓ WebSocket geschlossen (Close-Handshake vollzogen).");
+}
+
+// WebTransport (draft-webtrans-http3): /wt annehmen, sonst 404. Echo für Datagramme + eingehende Streams.
+Action<WebTransportSession>? HandleWebTransport(Http3Request request)
+{
+    Console.WriteLine($"  → WebTransport CONNECT :path={request.Path}");
+    if (request.Path != "/wt")
+        return null; // ⇒ 404 (draft §3.2)
+    return session =>
+    {
+        webTransportSessions.Add(session);
+        Console.WriteLine($"  ✓ WebTransport-Session {session.SessionId} etabliert.");
+    };
+}
+
 static Http3Response Handle(Http3Request request)
 {
-    Console.WriteLine($"  → {request.Method} {request.Path}  (:authority={request.Authority})");
+    Console.WriteLine($"  → {request.Method} {request.Path}  (:authority={request.Authority}"
+                      + (request.Body.Length > 0 ? $", Rumpf {request.Body.Length} Bytes" : "") + ")");
+
+    // GET /big: ~300 KB deterministischer Rumpf — Spielwiese für Priorisierung (RFC 9218) und Transfers.
+    if (request.Path == "/big")
+    {
+        byte[] bigBody = new byte[300_000];
+        for (int i = 0; i < bigBody.Length; i++)
+            bigBody[i] = (byte)(i * 13 + 5);
+        return new Http3Response
+        {
+            Status = 200,
+            Headers = [new HeaderField("content-type", "application/octet-stream"), new HeaderField("server", "http3-from-scratch")],
+            Body = bigBody,
+        };
+    }
+
+    // GET /hints: 103 Early Hints (Interim-Response, RFC 9110 §15.2.2) vor der finalen Antwort und
+    // eine Trailer-Sektion mit Prüfsumme danach (RFC 9114 §4.1: HEADERS(1xx) → HEADERS → DATA → HEADERS).
+    if (request.Path == "/hints")
+    {
+        byte[] hintsBody = Encoding.UTF8.GetBytes("<html><head><title>Early Hints</title></head><body>Rumpf nach 103.</body></html>");
+        return new Http3Response
+        {
+            Status = 200,
+            Headers = [new HeaderField("content-type", "text/html; charset=utf-8"), new HeaderField("server", "http3-from-scratch")],
+            Body = hintsBody,
+            InterimResponses = [new Http3InterimResponse(103, [new HeaderField("link", "</style.css>; rel=preload; as=style")])],
+            Trailers = [new HeaderField("checksum",
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(hintsBody))[..16].ToLowerInvariant())],
+        };
+    }
+
+    // POST /echo: den Request-Rumpf byte-genau zurückspiegeln (RFC 9114 §4.1 — Content in DATA-Frames).
+    if (request.Method == "POST" && request.Path == "/echo")
+        return new Http3Response
+        {
+            Status = 200,
+            Headers =
+            [
+                new HeaderField("content-type",
+                    request.AdditionalHeaders.FirstOrDefault(h => h.Name == "content-type").Value ?? "application/octet-stream"),
+                new HeaderField("server", "http3-from-scratch"),
+            ],
+            Body = request.Body,
+        };
+
     string html = $"""
         <!DOCTYPE html>
         <html><head><title>HTTP/3 from Scratch</title></head>
@@ -237,4 +415,5 @@ sealed class ServerConn(Http3ServerConnection connection, EndPoint endpoint)
     public Http3ServerConnection Connection { get; } = connection;
     public EndPoint Endpoint { get; set; } = endpoint;
     public bool PathAnnounced { get; set; }
+    public bool GoAwayAnnounced { get; set; } // GOAWAY bereits gesendet (Graceful-Shutdown-Demo)
 }

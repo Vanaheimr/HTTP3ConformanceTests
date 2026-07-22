@@ -32,21 +32,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Tests für Stateless Reset (RFC 9000 §10.3): den Paketaufbau sowie die Erkennung anhand des vom Server
 /// per Transport-Parameter angekündigten Stateless-Reset-Tokens.
 /// </summary>
+[TestFixture]
 public class StatelessResetTests
 {
-    [Fact]
+    [Test]
     public void Build_EndsWithToken_AndLooksLikeAShortHeaderPacket()
     {
         byte[] token = RandomNumberGenerator.GetBytes(StatelessReset.TokenLength);
         byte[] packet = StatelessReset.Build(token, totalLength: 41);
 
-        Assert.Equal(41, packet.Length);
-        Assert.True(StatelessReset.EndsWith(packet, token));
-        Assert.Equal(0, packet[0] & 0x80);    // Header Form 0 (Short Header)
-        Assert.Equal(0x40, packet[0] & 0x40); // Fixed Bit gesetzt
+        Assert.That(packet.Length, Is.EqualTo(41));
+        Assert.That(StatelessReset.EndsWith(packet, token), Is.True);
+        Assert.That(packet[0] & 0x80, Is.EqualTo(0));    // Header Form 0 (Short Header)
+        Assert.That(packet[0] & 0x40, Is.EqualTo(0x40)); // Fixed Bit gesetzt
     }
 
-    [Fact]
+    [Test]
     public void Build_RejectsWrongTokenLength()
         => Assert.Throws<ArgumentException>(() => StatelessReset.Build(new byte[8]));
 
@@ -63,11 +64,11 @@ public class StatelessResetTests
             foreach (byte[] dg in server.GetDatagramsToSend())
                 client.ProcessDatagram(dg);
         }
-        Assert.True(client.HandshakeConfirmed);
+        Assert.That(client.HandshakeConfirmed, Is.True);
         return (client, server);
     }
 
-    [Fact]
+    [Test]
     public void StatelessReset_WithKnownToken_TerminatesConnection()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -77,17 +78,17 @@ public class StatelessResetTests
 
         // Der Server kündigt seinen Stateless-Reset-Token per Transport-Parameter an; der Client hat ihn.
         byte[]? token = client.PeerTransportParameters?.StatelessResetTokenValue;
-        Assert.NotNull(token);
+        Assert.That(token, Is.Not.Null);
 
         // Ein Paket, das (statt entschlüsselbar zu sein) mit diesem Token endet, ist ein Stateless Reset.
         byte[] reset = StatelessReset.Build(token!);
         client.ProcessDatagram(reset);
 
-        Assert.True(client.StatelessResetReceived, "Der Client muss den Stateless Reset erkennen.");
-        Assert.True(client.IsDraining, "Nach einem Stateless Reset geht die Verbindung in Draining.");
+        Assert.That(client.StatelessResetReceived, Is.True, "Der Client muss den Stateless Reset erkennen.");
+        Assert.That(client.IsDraining, Is.True, "Nach einem Stateless Reset geht die Verbindung in Draining.");
     }
 
-    [Fact]
+    [Test]
     public void TokenGenerator_IsDeterministic_PerCidAndSecret()
     {
         byte[] secret = RandomNumberGenerator.GetBytes(32);
@@ -96,25 +97,25 @@ public class StatelessResetTests
         byte[] cid1 = [1, 2, 3, 4, 5, 6, 7, 8];
         byte[] cid2 = [1, 2, 3, 4, 5, 6, 7, 9];
 
-        Assert.Equal(a.ComputeToken(cid1), b.ComputeToken(cid1));    // gleiches Geheimnis+CID ⇒ gleiches Token
-        Assert.NotEqual(a.ComputeToken(cid1), a.ComputeToken(cid2)); // andere CID ⇒ anderes Token
-        Assert.Equal(StatelessReset.TokenLength, a.ComputeToken(cid1).Length);
+        Assert.That(b.ComputeToken(cid1), Is.EqualTo(a.ComputeToken(cid1)));    // gleiches Geheimnis+CID ⇒ gleiches Token
+        Assert.That(a.ComputeToken(cid2), Is.Not.EqualTo(a.ComputeToken(cid1))); // andere CID ⇒ anderes Token
+        Assert.That(a.ComputeToken(cid1).Length, Is.EqualTo(StatelessReset.TokenLength));
     }
 
-    [Fact]
+    [Test]
     public void BuildResponse_IgnoresLongHeaderAndTinyPackets()
     {
         var gen = new StatelessResetTokenGenerator();
         byte[] longHeader = new byte[30];
         longHeader[0] = 0xC0; // Long Header (Initial) ⇒ neue Verbindung, kein Reset
-        Assert.Null(StatelessReset.BuildResponse(longHeader, localCidLength: 8, gen));
+        Assert.That(StatelessReset.BuildResponse(longHeader, localCidLength: 8, gen), Is.Null);
 
         byte[] tiny = new byte[StatelessReset.MinLength];
         tiny[0] = 0x40; // Short Header, aber ≤ 21 Byte ⇒ kein (kleinerer) Reset möglich
-        Assert.Null(StatelessReset.BuildResponse(tiny, localCidLength: 8, gen));
+        Assert.That(StatelessReset.BuildResponse(tiny, localCidLength: 8, gen), Is.Null);
     }
 
-    [Fact]
+    [Test]
     public void BuildResponse_ProducesSmallerResetEndingWithCidToken()
     {
         var gen = new StatelessResetTokenGenerator();
@@ -124,12 +125,12 @@ public class StatelessResetTests
         cid.CopyTo(incoming, 1);
 
         byte[]? reset = StatelessReset.BuildResponse(incoming, localCidLength: 8, gen);
-        Assert.NotNull(reset);
-        Assert.True(reset!.Length < incoming.Length, "Der Reset muss kleiner sein als der Auslöser (Loop-Vermeidung).");
-        Assert.True(StatelessReset.EndsWith(reset, gen.ComputeToken(cid)));
+        Assert.That(reset, Is.Not.Null);
+        Assert.That(reset!.Length < incoming.Length, Is.True, "Der Reset muss kleiner sein als der Auslöser (Loop-Vermeidung).");
+        Assert.That(StatelessReset.EndsWith(reset, gen.ComputeToken(cid)), Is.True);
     }
 
-    [Fact]
+    [Test]
     public void StatelessResponder_WithSharedSecret_ProducesResetTheClientRecognizes()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -146,18 +147,18 @@ public class StatelessResetTests
             foreach (byte[] dg in client.GetDatagramsToSend()) server.ProcessDatagram(dg);
             foreach (byte[] dg in server.GetDatagramsToSend()) client.ProcessDatagram(dg);
         }
-        Assert.True(client.HandshakeConfirmed);
+        Assert.That(client.HandshakeConfirmed, Is.True);
 
         // Ein zustandsloser Endpoint mit DEMSELBEN Geheimnis empfängt ein 1-RTT-Paket an die Server-CID und
         // rechnet das Token aus der DCID neu → Stateless Reset. (Simuliert einen Server nach Zustandsverlust.)
         ConnectionId serverCid = client.DestinationConnectionId;
         byte[] packetToLostServer = FakeShortHeaderTo(serverCid);
         byte[]? reset = StatelessReset.BuildResponse(packetToLostServer, serverCid.Length, gen);
-        Assert.NotNull(reset);
+        Assert.That(reset, Is.Not.Null);
 
         client.ProcessDatagram(reset!);
-        Assert.True(client.StatelessResetReceived, "Der Client muss den Stateless Reset des zustandslosen Endpoints erkennen.");
-        Assert.True(client.IsDraining);
+        Assert.That(client.StatelessResetReceived, Is.True, "Der Client muss den Stateless Reset des zustandslosen Endpoints erkennen.");
+        Assert.That(client.IsDraining, Is.True);
     }
 
     private static byte[] FakeShortHeaderTo(ConnectionId dcid)
@@ -169,7 +170,7 @@ public class StatelessResetTests
         return packet;
     }
 
-    [Fact]
+    [Test]
     public void UnrecognizedToken_IsNotTreatedAsStatelessReset()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -181,7 +182,7 @@ public class StatelessResetTests
         byte[] reset = StatelessReset.Build(new byte[StatelessReset.TokenLength]);
         client.ProcessDatagram(reset);
 
-        Assert.False(client.StatelessResetReceived);
-        Assert.False(client.IsDraining);
+        Assert.That(client.StatelessResetReceived, Is.False);
+        Assert.That(client.IsDraining, Is.False);
     }
 }

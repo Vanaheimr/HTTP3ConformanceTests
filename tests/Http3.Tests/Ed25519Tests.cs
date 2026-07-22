@@ -28,6 +28,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Testvektoren aus RFC 8032 §7.1 (öffentlicher Schlüssel <b>und</b> Signatur) und prüft, dass die
 /// Verifikation manipulierte Signaturen ablehnt.
 /// </summary>
+[TestFixture]
 public class Ed25519Tests
 {
     // RFC 8032 §7.1 — TEST 1 (leere Nachricht).
@@ -43,37 +44,37 @@ public class Ed25519Tests
     private const string Test2Signature =
         "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00";
 
-    [Fact]
+    [Test]
     public void PublicKeyAndSignature_MatchRfc8032Test1_EmptyMessage()
     {
         var ed = new Ed25519Signature(Convert.FromHexString(Test1Seed));
 
-        Assert.Equal(Test1PublicKey, Convert.ToHexString(ed.PublicKey).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(ed.PublicKey).ToLowerInvariant(), Is.EqualTo(Test1PublicKey));
         byte[] signature = ed.Sign(ReadOnlySpan<byte>.Empty);
-        Assert.Equal(Test1Signature, Convert.ToHexString(signature).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(signature).ToLowerInvariant(), Is.EqualTo(Test1Signature));
     }
 
-    [Fact]
+    [Test]
     public void PublicKeyAndSignature_MatchRfc8032Test2_OneByteMessage()
     {
         var ed = new Ed25519Signature(Convert.FromHexString(Test2Seed));
 
-        Assert.Equal(Test2PublicKey, Convert.ToHexString(ed.PublicKey).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(ed.PublicKey).ToLowerInvariant(), Is.EqualTo(Test2PublicKey));
         byte[] signature = ed.Sign(Convert.FromHexString(Test2Message));
-        Assert.Equal(Test2Signature, Convert.ToHexString(signature).ToLowerInvariant());
+        Assert.That(Convert.ToHexString(signature).ToLowerInvariant(), Is.EqualTo(Test2Signature));
     }
 
-    [Fact]
+    [Test]
     public void Verify_AcceptsValidRfcSignature()
     {
         byte[] publicKey = Convert.FromHexString(Test2PublicKey);
         byte[] message = Convert.FromHexString(Test2Message);
         byte[] signature = Convert.FromHexString(Test2Signature);
 
-        Assert.True(Ed25519Signature.Verify(publicKey, message, signature));
+        Assert.That(Ed25519Signature.Verify(publicKey, message, signature), Is.True);
     }
 
-    [Fact]
+    [Test]
     public void Verify_RejectsTamperedSignatureAndMessage()
     {
         byte[] publicKey = Convert.FromHexString(Test2PublicKey);
@@ -82,18 +83,18 @@ public class Ed25519Tests
 
         byte[] tamperedSig = (byte[])signature.Clone();
         tamperedSig[0] ^= 0x01;
-        Assert.False(Ed25519Signature.Verify(publicKey, message, tamperedSig));
+        Assert.That(Ed25519Signature.Verify(publicKey, message, tamperedSig), Is.False);
 
-        Assert.False(Ed25519Signature.Verify(publicKey, [0x73], signature));
+        Assert.That(Ed25519Signature.Verify(publicKey, [0x73], signature), Is.False);
     }
 
-    [Fact]
+    [Test]
     public void SignAndVerify_RoundTripsWithFreshKeyPair()
     {
         var ed = new Ed25519Signature();
         byte[] content = "TLS 1.3, server CertificateVerify"u8.ToArray();
 
         byte[] signature = ed.Sign(content);
-        Assert.True(Ed25519Signature.Verify(ed.PublicKey, content, signature));
+        Assert.That(Ed25519Signature.Verify(ed.PublicKey, content, signature), Is.True);
     }
 }

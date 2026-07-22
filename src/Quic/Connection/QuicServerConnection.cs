@@ -102,6 +102,12 @@ public sealed class QuicServerConnection : QuicEndpoint
     public QuicStream OpenUnidirectionalStream() => OpenLocalStream(bidirectional: false);
 
     /// <summary>
+    /// Öffnet einen server-initiierten bidirektionalen Stream (z. B. eine server-seitige
+    /// WebTransport-Bidi-Stream, RFC-Draft webtrans-http3 §4.2).
+    /// </summary>
+    public QuicStream OpenBidirectionalStream() => OpenLocalStream(bidirectional: true);
+
+    /// <summary>
     /// Seit dem letzten Aufruf neu vom Client geöffnete bidirektionale (Request-)Streams.
     /// </summary>
     public IReadOnlyList<ulong> TakeNewRequestStreams()

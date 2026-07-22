@@ -24,21 +24,22 @@ using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class Http3FrameTests
 {
-    [Fact]
+    [Test]
     public void BuildAndParse_DataFrame_RoundTrips()
     {
         byte[] frame = Http3Frames.Build(Http3FrameType.Data, [0x48, 0x69]); // "Hi"
 
-        Assert.True(Http3Frames.TryReadAll(frame, out var frames, out int consumed));
-        Assert.Equal(frame.Length, consumed);
-        var parsed = Assert.Single(frames);
-        Assert.Equal(Http3FrameType.Data, parsed.Type);
-        Assert.Equal(new byte[] { 0x48, 0x69 }, parsed.Payload.ToArray());
+        Assert.That(Http3Frames.TryReadAll(frame, out var frames, out int consumed), Is.True);
+        Assert.That(consumed, Is.EqualTo(frame.Length));
+        var parsed = Expect.Single(frames);
+        Assert.That(parsed.Type, Is.EqualTo(Http3FrameType.Data));
+        Assert.That(parsed.Payload.ToArray(), Is.EqualTo(new byte[] { 0x48, 0x69 }));
     }
 
-    [Fact]
+    [Test]
     public void TryReadAll_ParsesMultipleFrames_AndReportsPartialTail()
     {
         // HEADERS(2 Byte) + DATA(3 Byte) + angefangenes drittes Frame (Länge 10, aber nur 1 Byte da).
@@ -49,29 +50,29 @@ public class Http3FrameTests
             0x00, 0x0a, 0xff,                    // DATA len=10 (unvollständig)
         ];
 
-        Assert.True(Http3Frames.TryReadAll(buffer, out var frames, out int consumed));
-        Assert.Equal(2, frames.Count);
-        Assert.Equal(Http3FrameType.Headers, frames[0].Type);
-        Assert.Equal(Http3FrameType.Data, frames[1].Type);
-        Assert.Equal(9, consumed); // das unvollständige dritte Frame bleibt liegen
+        Assert.That(Http3Frames.TryReadAll(buffer, out var frames, out int consumed), Is.True);
+        Assert.That(frames.Count, Is.EqualTo(2));
+        Assert.That(frames[0].Type, Is.EqualTo(Http3FrameType.Headers));
+        Assert.That(frames[1].Type, Is.EqualTo(Http3FrameType.Data));
+        Assert.That(consumed, Is.EqualTo(9)); // das unvollständige dritte Frame bleibt liegen
     }
 }
 
 public class Http3RequestTests
 {
-    [Fact]
+    [Test]
     public void ToHeaderFields_ProducesPseudoHeadersInOrder()
     {
         var request = Http3Request.Get("example.com", "/index.html");
         List<HeaderField> fields = request.ToHeaderFields();
 
-        Assert.Equal(new HeaderField(":method", "GET"), fields[0]);
-        Assert.Equal(new HeaderField(":scheme", "https"), fields[1]);
-        Assert.Equal(new HeaderField(":authority", "example.com"), fields[2]);
-        Assert.Equal(new HeaderField(":path", "/index.html"), fields[3]);
+        Assert.That(fields[0], Is.EqualTo(new HeaderField(":method", "GET")));
+        Assert.That(fields[1], Is.EqualTo(new HeaderField(":scheme", "https")));
+        Assert.That(fields[2], Is.EqualTo(new HeaderField(":authority", "example.com")));
+        Assert.That(fields[3], Is.EqualTo(new HeaderField(":path", "/index.html")));
     }
 
-    [Fact]
+    [Test]
     public void RequestHeaders_SurviveQpackAndHttp3FrameRoundTrip()
     {
         // So baut der Client die Anfrage: QPACK-Header-Block in einem HEADERS-Frame.
@@ -80,13 +81,13 @@ public class Http3RequestTests
         byte[] frame = Http3Frames.Build(Http3FrameType.Headers, headerBlock);
 
         // Empfängerseite: Frame parsen -> QPACK dekodieren.
-        Assert.True(Http3Frames.TryReadAll(frame, out var frames, out _));
-        Assert.Equal(Http3FrameType.Headers, frames[0].Type);
-        Assert.Equal(QpackResult.Ok, QpackDecoder.Decode(frames[0].Payload.Span, out var headers));
-        Assert.Equal(request.ToHeaderFields(), headers);
+        Assert.That(Http3Frames.TryReadAll(frame, out var frames, out _), Is.True);
+        Assert.That(frames[0].Type, Is.EqualTo(Http3FrameType.Headers));
+        Assert.That(QpackDecoder.Decode(frames[0].Payload.Span, out var headers), Is.EqualTo(QpackResult.Ok));
+        Assert.That(headers, Is.EqualTo(request.ToHeaderFields()));
     }
 
-    [Fact]
+    [Test]
     public void ResponseHeaders_DecodeStatusAndContentType()
     {
         // Ein typischer Server-HEADERS-Block (Static-Table + Literale), so wie ihn Cloudflare sendet.
@@ -98,10 +99,10 @@ public class Http3RequestTests
         ]);
         byte[] frame = Http3Frames.Build(Http3FrameType.Headers, headerBlock);
 
-        Assert.True(Http3Frames.TryReadAll(frame, out var frames, out _));
-        Assert.Equal(QpackResult.Ok, QpackDecoder.Decode(frames[0].Payload.Span, out var headers));
+        Assert.That(Http3Frames.TryReadAll(frame, out var frames, out _), Is.True);
+        Assert.That(QpackDecoder.Decode(frames[0].Payload.Span, out var headers), Is.EqualTo(QpackResult.Ok));
 
-        Assert.Contains(new HeaderField(":status", "200"), headers);
-        Assert.Contains(new HeaderField("content-type", "text/html"), headers);
+        Assert.That(headers, Does.Contain(new HeaderField(":status", "200")));
+        Assert.That(headers, Does.Contain(new HeaderField("content-type", "text/html")));
     }
 }

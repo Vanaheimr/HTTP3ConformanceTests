@@ -24,22 +24,23 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Recovery;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class RttEstimatorTests
 {
     private static TimeSpan Ms(double ms) => TimeSpan.FromMilliseconds(ms);
 
-    [Fact]
+    [Test]
     public void FirstSample_InitializesSmoothedAndVar()
     {
         var rtt = new RttEstimator();
         rtt.AddSample(Ms(100), ackDelay: Ms(0), maxAckDelay: Ms(25));
 
-        Assert.Equal(Ms(100), rtt.MinRtt);
-        Assert.Equal(Ms(100), rtt.SmoothedRtt);
-        Assert.Equal(Ms(50), rtt.RttVar);
+        Assert.That(rtt.MinRtt, Is.EqualTo(Ms(100)));
+        Assert.That(rtt.SmoothedRtt, Is.EqualTo(Ms(100)));
+        Assert.That(rtt.RttVar, Is.EqualTo(Ms(50)));
     }
 
-    [Fact]
+    [Test]
     public void SubsequentSample_SmoothsToward_AndAppliesAckDelay()
     {
         var rtt = new RttEstimator();
@@ -47,21 +48,21 @@ public class RttEstimatorTests
         rtt.AddSample(Ms(140), ackDelay: Ms(20), maxAckDelay: Ms(25)); // adjusted = 120
 
         // smoothed = 7/8*100 + 1/8*120 = 102.5 ms
-        Assert.Equal(Ms(102.5), rtt.SmoothedRtt);
-        Assert.Equal(Ms(100), rtt.MinRtt);
+        Assert.That(rtt.SmoothedRtt, Is.EqualTo(Ms(102.5)));
+        Assert.That(rtt.MinRtt, Is.EqualTo(Ms(100)));
     }
 
-    [Fact]
+    [Test]
     public void Pto_UsesInitialRtt_BeforeAnySample()
     {
         var rtt = new RttEstimator();
-        Assert.Equal(2 * RttEstimator.InitialRtt, rtt.GetProbeTimeout(Ms(25)));
+        Assert.That(rtt.GetProbeTimeout(Ms(25)), Is.EqualTo(2 * RttEstimator.InitialRtt));
     }
 }
 
 public class NewRenoTests
 {
-    [Fact]
+    [Test]
     public void SlowStart_GrowsWindowByAckedBytes()
     {
         var cc = new NewRenoCongestionControl();
@@ -69,12 +70,12 @@ public class NewRenoTests
         cc.OnPacketSent(1200);
         cc.OnPacketAcked(1200, sentTimeTicks: 100);
 
-        Assert.True(cc.InSlowStart);
-        Assert.Equal(start + 1200, cc.CongestionWindow);
-        Assert.Equal(0, cc.BytesInFlight);
+        Assert.That(cc.InSlowStart, Is.True);
+        Assert.That(cc.CongestionWindow, Is.EqualTo(start + 1200));
+        Assert.That(cc.BytesInFlight, Is.EqualTo(0));
     }
 
-    [Fact]
+    [Test]
     public void Loss_HalvesWindow_AndEntersRecovery()
     {
         var cc = new NewRenoCongestionControl();
@@ -82,28 +83,28 @@ public class NewRenoTests
         cc.OnPacketSent(1200);
         cc.OnPacketsLost(1200, largestLostSentTimeTicks: 100, nowTicks: 200);
 
-        Assert.Equal(start / 2, cc.SlowStartThreshold);
-        Assert.Equal(Math.Max(start / 2, NewRenoCongestionControl.MinimumWindow), cc.CongestionWindow);
-        Assert.False(cc.InSlowStart);
+        Assert.That(cc.SlowStartThreshold, Is.EqualTo(start / 2));
+        Assert.That(cc.CongestionWindow, Is.EqualTo(Math.Max(start / 2, NewRenoCongestionControl.MinimumWindow)));
+        Assert.That(cc.InSlowStart, Is.False);
     }
 
-    [Fact]
+    [Test]
     public void CanSend_BlocksWhenBytesInFlightReachWindow()
     {
         var cc = new NewRenoCongestionControl();
         int window = cc.CongestionWindow;
 
         cc.OnPacketSent(window); // Fenster genau ausgefüllt
-        Assert.Equal(0, cc.Available);
-        Assert.False(cc.CanSend(1));   // nichts Neues mehr erlaubt
-        Assert.True(cc.CanSend(0));
+        Assert.That(cc.Available, Is.EqualTo(0));
+        Assert.That(cc.CanSend(1), Is.False);   // nichts Neues mehr erlaubt
+        Assert.That(cc.CanSend(0), Is.True);
 
         cc.OnPacketAcked(window, sentTimeTicks: 1); // wieder freigegeben
-        Assert.True(cc.Available > 0);
-        Assert.True(cc.CanSend(1));
+        Assert.That(cc.Available > 0, Is.True);
+        Assert.That(cc.CanSend(1), Is.True);
     }
 
-    [Fact]
+    [Test]
     public void PersistentCongestion_CollapsesWindowToMinimum_AndRestartsSlowStart()
     {
         var cc = new NewRenoCongestionControl();
@@ -112,8 +113,8 @@ public class NewRenoTests
 
         cc.OnPersistentCongestion();
 
-        Assert.Equal(NewRenoCongestionControl.MinimumWindow, cc.CongestionWindow);
-        Assert.True(cc.InSlowStart); // cwnd < ssthresh ⇒ wieder Slow Start
+        Assert.That(cc.CongestionWindow, Is.EqualTo(NewRenoCongestionControl.MinimumWindow));
+        Assert.That(cc.InSlowStart, Is.True); // cwnd < ssthresh ⇒ wieder Slow Start
     }
 }
 
@@ -121,15 +122,15 @@ public class PacerTests
 {
     private static long Ticks(double ms) => TimeSpan.FromMilliseconds(ms).Ticks;
 
-    [Fact]
+    [Test]
     public void FirstRefill_GrantsFullBurst()
     {
         var pacer = new Pacer();
         pacer.Refill(nowTicks: 0, congestionWindow: 12000, smoothedRtt: TimeSpan.FromMilliseconds(100));
-        Assert.Equal(12000, pacer.AvailableBytes); // Burst-Cap = min(cwnd, 10·MDS) = 12000
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(12000)); // Burst-Cap = min(cwnd, 10·MDS) = 12000
     }
 
-    [Fact]
+    [Test]
     public void Refill_AccumulatesAtRate_ProportionalToElapsedTime()
     {
         var pacer = new Pacer();
@@ -138,10 +139,10 @@ public class PacerTests
 
         // Rate = 1.25 · 12000 / 1_200_000 Ticks = 0.0125 Byte/Tick; über 10 ms (100_000 Ticks) → 1250 Byte.
         pacer.Refill(Ticks(10), congestionWindow: 12000, smoothedRtt: TimeSpan.FromMilliseconds(120));
-        Assert.Equal(1250, pacer.AvailableBytes);
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(1250));
     }
 
-    [Fact]
+    [Test]
     public void Refill_CapsAtBurst_AfterLongIdle()
     {
         var pacer = new Pacer();
@@ -150,26 +151,26 @@ public class PacerTests
 
         // Sehr lange Pause: würde weit über den Burst hinaus akkumulieren – wird gedeckelt.
         pacer.Refill(Ticks(100_000), 12000, TimeSpan.FromMilliseconds(100));
-        Assert.Equal(12000, pacer.AvailableBytes);
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(12000));
     }
 
-    [Fact]
+    [Test]
     public void BurstCap_NeverExceeds_TenDatagrams_EvenForLargeWindow()
     {
         var pacer = new Pacer();
         pacer.Refill(0, congestionWindow: 1_000_000, smoothedRtt: TimeSpan.FromMilliseconds(50));
-        Assert.Equal(12000, pacer.AvailableBytes); // 10 · 1200, unabhängig vom großen cwnd
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(12000)); // 10 · 1200, unabhängig vom großen cwnd
     }
 
-    [Fact]
+    [Test]
     public void OverSpending_DrivesBudgetNegative_ReportedAsZero()
     {
         var pacer = new Pacer();
         pacer.Refill(0, congestionWindow: 2000, smoothedRtt: TimeSpan.FromMilliseconds(100));
-        Assert.Equal(2400, pacer.AvailableBytes); // Burst-Cap = max(2·MDS, min(cwnd, 10·MDS)) = 2400
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(2400)); // Burst-Cap = max(2·MDS, min(cwnd, 10·MDS)) = 2400
 
         pacer.OnBytesSent(3000); // mehr gesendet als Budget
-        Assert.Equal(0, pacer.AvailableBytes); // negativ, aber als 0 gemeldet
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(0)); // negativ, aber als 0 gemeldet
     }
 }
 
@@ -184,7 +185,7 @@ public class LossRecoveryTests
         RetransmittableFrames = frames,
     };
 
-    [Fact]
+    [Test]
     public void PacketThreshold_MarksOlderPacketsLost_AndReturnsTheirFrames()
     {
         var lr = new LossRecovery();
@@ -199,10 +200,10 @@ public class LossRecoveryTests
         var ack = AckFrame.FromPacketNumbers([3]);
         List<Frame> lost = lr.OnAckReceived(0, ack, TimeSpan.Zero, nowTicks: 2000);
 
-        Assert.Contains(crypto, lost);
+        Assert.That(lost, Does.Contain(crypto));
     }
 
-    [Fact]
+    [Test]
     public void Ack_UpdatesRtt_FromLargestAcked()
     {
         var lr = new LossRecovery();
@@ -212,21 +213,21 @@ public class LossRecoveryTests
         long now = TimeSpan.FromMilliseconds(100).Ticks;
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([0]), TimeSpan.Zero, now);
 
-        Assert.Equal(TimeSpan.FromMilliseconds(100), lr.Rtt.SmoothedRtt);
+        Assert.That(lr.Rtt.SmoothedRtt, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
     }
 
-    [Fact]
+    [Test]
     public void ProbeTimeout_ReturnsOldestUnackedFrames()
     {
         var lr = new LossRecovery();
         var crypto = new CryptoFrame(0, new byte[] { 9 });
         lr.OnPacketSent(1, Packet(0, tick: 0, crypto));
 
-        Assert.True(lr.GetProbeTimeoutDeadline() > 0);
+        Assert.That(lr.GetProbeTimeoutDeadline() > 0, Is.True);
         lr.OnProbeTimeoutFired();
         List<Frame> probe = lr.GetProbeFrames(1);
-        Assert.Contains(crypto, probe);
-        Assert.Equal(1, lr.PtoCount);
+        Assert.That(probe, Does.Contain(crypto));
+        Assert.That(lr.PtoCount, Is.EqualTo(1));
     }
 
     private static long Ms(double ms) => TimeSpan.FromMilliseconds(ms).Ticks;
@@ -243,7 +244,7 @@ public class LossRecoveryTests
         RetransmittableFrames = [],
     };
 
-    [Fact]
+    [Test]
     public void PersistentCongestion_CollapsesWindow_AfterLongLossRun()
     {
         var lr = new LossRecovery { MaxAckDelay = TimeSpan.FromMilliseconds(25) };
@@ -263,11 +264,11 @@ public class LossRecoveryTests
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([20]), TimeSpan.Zero, Ms(1400));
 
         // Spanne 1..8 = 1050 ms > 975 ms ⇒ Persistent Congestion ⇒ Fenster kollabiert auf das Minimum.
-        Assert.Equal(NewRenoCongestionControl.MinimumWindow, lr.Congestion.CongestionWindow);
-        Assert.True(lr.Congestion.CongestionWindow < cwndBefore);
+        Assert.That(lr.Congestion.CongestionWindow, Is.EqualTo(NewRenoCongestionControl.MinimumWindow));
+        Assert.That(lr.Congestion.CongestionWindow < cwndBefore, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void PersistentCongestion_NotEstablished_WhenLossSpanTooShort()
     {
         var lr = new LossRecovery { MaxAckDelay = TimeSpan.FromMilliseconds(25) };
@@ -281,10 +282,10 @@ public class LossRecoveryTests
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([20]), TimeSpan.Zero, Ms(500));
 
         // Kein PC: Fenster nur durch das Congestion-Event halbiert, aber nicht auf das Minimum kollabiert.
-        Assert.True(lr.Congestion.CongestionWindow > NewRenoCongestionControl.MinimumWindow);
+        Assert.That(lr.Congestion.CongestionWindow > NewRenoCongestionControl.MinimumWindow, Is.True);
     }
 
-    [Fact]
+    [Test]
     public void PersistentCongestion_NotEstablished_BeforeFirstRttSample()
     {
         var lr = new LossRecovery { MaxAckDelay = TimeSpan.FromMilliseconds(25) };
@@ -296,6 +297,6 @@ public class LossRecoveryTests
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([20]), TimeSpan.Zero, Ms(1400));
 
         // PC darf ohne vorherige RTT-Stichprobe nicht greifen (RFC 9002 §7.6.2).
-        Assert.True(lr.Congestion.CongestionWindow > NewRenoCongestionControl.MinimumWindow);
+        Assert.That(lr.Congestion.CongestionWindow > NewRenoCongestionControl.MinimumWindow, Is.True);
     }
 }

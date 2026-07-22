@@ -23,32 +23,31 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class PacketNumberTests
 {
     // RFC 9000 Anhang A.3: largest_pn = 0xa82f30ea, truncated = 0x9b32, length = 2
     //   => full packet number 0xa82f9b32.
-    [Fact]
+    [Test]
     public void Decode_RfcAppendixA3_Example()
     {
         ulong pn = PacketNumber.Decode(truncated: 0x9b32, length: 2, largestAcked: 0xa82f30ea);
-        Assert.Equal(0xa82f9b32UL, pn);
+        Assert.That(pn, Is.EqualTo(0xa82f9b32UL));
     }
 
-    [Theory]
-    [InlineData(0UL, -1L, 1)]        // erste Pakete, noch kein ACK -> voller Bereich, aber klein
-    [InlineData(127UL, -1L, 1)]
-    [InlineData(128UL, -1L, 2)]
-    [InlineData(2UL, -1L, 1)]
+        [TestCase(0UL, -1L, 1)]        // erste Pakete, noch kein ACK -> voller Bereich, aber klein
+    [TestCase(127UL, -1L, 1)]
+    [TestCase(128UL, -1L, 2)]
+    [TestCase(2UL, -1L, 1)]
     public void EncodeLength_PicksEnoughBytes(ulong pn, long largestAcked, int expected)
     {
-        Assert.Equal(expected, PacketNumber.EncodeLength(pn, largestAcked));
+        Assert.That(PacketNumber.EncodeLength(pn, largestAcked), Is.EqualTo(expected));
     }
 
-    [Theory]
-    [InlineData(0UL, 1)]
-    [InlineData(2UL, 4)]
-    [InlineData(0xa82f9b32UL, 4)]
-    [InlineData(0x1234UL, 2)]
+        [TestCase(0UL, 1)]
+    [TestCase(2UL, 4)]
+    [TestCase(0xa82f9b32UL, 4)]
+    [TestCase(0x1234UL, 2)]
     public void EncodeThenDecode_RoundTrips(ulong pn, int length)
     {
         Span<byte> buf = stackalloc byte[4];
@@ -60,6 +59,6 @@ public class PacketNumberTests
 
         // largestAcked = pn - 1: der Empfänger erwartet genau diese Nummer.
         ulong decoded = PacketNumber.Decode(truncated, length, (long)pn - 1);
-        Assert.Equal(pn, decoded);
+        Assert.That(decoded, Is.EqualTo(pn));
     }
 }

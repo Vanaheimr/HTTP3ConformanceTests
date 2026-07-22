@@ -28,11 +28,13 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 #endregion
 
 // ---------------------------------------------------------------------------------------------
-// H3Get: Ein echtes HTTP/3-GET, from scratch. Optional mit künstlichem Paketverlust (--loss=N),
-// um Loss Recovery (RFC 9002) nachzuweisen: der Handshake + Download überstehen verworfene Pakete
-// dank Retransmission (Paket-/Zeitschwelle + PTO). Das Serverzertifikat wird standardmäßig geprüft
-// (Kette gegen die System-Roots + Hostname); -k/--insecure überspringt das wie curl (nur für
-// selbstsignierte Testserver, z. B. den lokalen H3Server).
+// H3Get: Ein echter HTTP/3-Client, from scratch. Standard: GET; --post=<Text> sendet stattdessen
+// einen POST mit Rumpf. Weitere Demos: --cancel (Request-Cancellation mitten im Download),
+// --goaway (Graceful Shutdown beobachten, gegen `H3Server --goaway`), --zerortt/--resume,
+// --key-update, --migrate, --rotate-cid, --qpack-dynamic, --mlkem/--x448/--chacha20, --hold=<s>
+// und künstlicher Paketverlust (--loss=N) als Loss-Recovery-Nachweis (RFC 9002). Das Server-
+// zertifikat wird standardmäßig geprüft (Kette gegen die System-Roots + Hostname); -k/--insecure
+// überspringt das wie curl (nur für selbstsignierte Testserver, z. B. den lokalen H3Server).
 // ---------------------------------------------------------------------------------------------
 
 string host = args.FirstOrDefault(a => !a.StartsWith('-')) ?? "cloudflare-quic.com";
@@ -43,6 +45,8 @@ bool insecure = args.Contains("-k") || args.Contains("--insecure");
 bool keyUpdate = args.Contains("--key-update");
 bool rotateCid = args.Contains("--rotate-cid");
 bool migrate = args.Contains("--migrate");
+// --post=<Text>: statt GET einen POST mit Rumpf senden (Request-Body als DATA-Frame, RFC 9114 §4.1).
+string? postBody = args.FirstOrDefault(a => a.StartsWith("--post=", StringComparison.Ordinal))?["--post=".Length..];
 var rng = new Random(1234);
 int dropped = 0;
 
@@ -77,7 +81,10 @@ IReadOnlyList<NamedGroup>? keyExchangeGroups =
     args.Contains("--mlkem") ? [NamedGroup.X25519MlKem768]
     : args.Contains("--x448") ? [NamedGroup.X448]
     : null;
-using var http3 = new Http3ClientConnection(host, transportParams, validation, qpackCapacity, cipherSuites, keyExchangeGroups);
+bool wantWebTransport = args.Contains("--webtransport");
+using var http3 = new Http3ClientConnection(host, transportParams, validation, qpackCapacity, cipherSuites, keyExchangeGroups,
+                                            enableDatagrams: args.Contains("--datagrams") || wantWebTransport, // RFC 9297/9221
+                                            webTransportMaxSessions: wantWebTransport ? 4u : 0u); // draft-webtrans-http3
 http3.Start();
 
 try
@@ -103,9 +110,50 @@ http3.InitializeHttp3();
 // Kurz Datagramme pendeln lassen, damit die SETTINGS des Servers ankommen (Kapazität lernen).
 for (int round = 0; round < 3; round++)
     Exchange();
-ulong requestStream = http3.SendRequest(Http3Request.Get(host, path));
-Console.WriteLine($"→ GET gesendet (Stream {requestStream})"
+if (http3.ServerMaxFieldSectionSize is { } maxFieldSection)
+    Console.WriteLine($"  Server-Limit: MAX_FIELD_SECTION_SIZE = {maxFieldSection} Bytes (RFC 9114 §4.2.2) — größere Header-Sektionen senden wir nicht.");
+
+Http3Request request = postBody is not null
+    ? Http3Request.Post(host, path, System.Text.Encoding.UTF8.GetBytes(postBody), "text/plain; charset=utf-8")
+    : Http3Request.Get(host, path);
+ulong requestStream = http3.SendRequest(request);
+Console.WriteLine($"→ {request.Method} gesendet (Stream {requestStream})"
+                  + (postBody is not null ? $" — Rumpf {request.Body.Length} Bytes als DATA-Frame" : "")
                   + (qpackCapacity > 0 ? " (QPACK dynamische Tabelle aktiv)" : "") + "\n");
+
+// Optional: Request-Cancellation (RFC 9114 §4.1.1) – den laufenden Download mitten im Transfer
+// abbrechen (RESET_STREAM + STOP_SENDING mit H3_REQUEST_CANCELLED) und beweisen, dass die
+// VERBINDUNG weiterlebt: ein zweites GET über dieselbe Verbindung liefert die volle Antwort.
+if (args.Contains("--cancel"))
+{
+    for (int round = 0; round < 2; round++)
+        Exchange(); // einen Teil der Antwort eintreffen lassen (Slow Start ⇒ längst nicht alles)
+    http3.CancelRequest(requestStream);
+    Console.WriteLine("→ Request mitten im Download abgebrochen (RESET_STREAM + STOP_SENDING, H3_REQUEST_CANCELLED) …");
+    for (int round = 0; round < 6; round++)
+        Exchange();
+    if (http3.IsRequestCancelled(requestStream))
+        Console.WriteLine("  Abbruch wirksam"
+                          + (http3.RequestResetErrorCode(requestStream) is { } rc
+                             ? $" — Server hat seine Antwortseite zurückgesetzt (Code 0x{rc:x})."
+                             : " — Server hat den Sendefluss gestoppt."));
+    else
+        Console.WriteLine("  Antwort war bereits vollständig — Abbruch gemäß RFC 9114 §4.1.1 ignoriert (Antwort bleibt nutzbar).");
+
+    ulong secondStream = http3.SendRequest(request);
+    Http3Response? secondResponse = null;
+    for (int round = 0; round < 120 && secondResponse is null; round++)
+    {
+        Exchange();
+        http3.TryGetResponse(secondStream, out secondResponse);
+    }
+    if (secondResponse is null) { Console.WriteLine("✗ Zweites GET nach dem Abbruch fehlgeschlagen."); return 1; }
+    Console.WriteLine($"HTTP/3 {secondResponse.Status} ({secondResponse.Body.Length} Bytes) über DIESELBE Verbindung nach dem Abbruch.");
+    Console.WriteLine("✓✓ Request-Cancellation erfolgreich — die Verbindung lebt weiter (zweites GET ok).");
+    http3.Close();
+    foreach (byte[] dg in http3.GetDatagramsToSend()) socket.SendTo(dg, remote);
+    return 0;
+}
 
 Http3Response? response = null;
 for (int round = 0; round < 120; round++)
@@ -118,9 +166,17 @@ for (int round = 0; round < 120; round++)
 Console.WriteLine("== Antwort ==");
 if (response is null) { Console.WriteLine("Keine vollständige Antwort erhalten."); return 1; }
 
+// Interim-Responses (1xx, RFC 9114 §4.1) und Trailer-Sektion sichtbar machen, falls vorhanden.
+foreach (var interim in response.InterimResponses)
+    Console.WriteLine($"HTTP/3 {interim.Status} (Interim) — {string.Join(", ", interim.Headers.Select(h => $"{h.Name}: {h.Value}"))}");
 Console.WriteLine($"HTTP/3 {response.Status}  ({response.GetHeader("content-type")})");
-Console.WriteLine($"Rumpf: {response.Body.Length} Bytes, Titel: {ExtractTitle(response.BodyText)}");
-Console.WriteLine($"\n✓✓ HTTP/3-GET erfolgreich — Status {response.Status}"
+if (response.Trailers.Count > 0)
+    Console.WriteLine($"Trailer: {string.Join(", ", response.Trailers.Select(h => $"{h.Name}: {h.Value}"))}");
+if (postBody is not null)
+    Console.WriteLine($"Rumpf ({response.Body.Length} Bytes): {(response.BodyText.Length <= 200 ? response.BodyText : response.BodyText[..200] + "…")}");
+else
+    Console.WriteLine($"Rumpf: {response.Body.Length} Bytes, Titel: {ExtractTitle(response.BodyText)}");
+Console.WriteLine($"\n✓✓ HTTP/3-{request.Method} erfolgreich — Status {response.Status}"
                   + (lossPercent > 0 ? $", {dropped} Datagramme verworfen und via Retransmission überbrückt." : "."));
 if (qpackCapacity > 0)
     Console.WriteLine($"  QPACK dynamische Tabelle: {http3.QpackEncoderInsertCount} Request-Inserts, "
@@ -200,6 +256,221 @@ if (args.Contains("--resume") || zeroRtt)
 
     resumed.Close();
     foreach (byte[] dg in resumed.GetDatagramsToSend()) socket2.SendTo(dg, remote);
+    return 0;
+}
+
+// Optional: WebTransport (draft-webtrans-http3, nur gegen den eigenen Server): Session über Extended
+// CONNECT (:protocol=webtransport), dann Datagramm + uni-Stream + bidi-Stream (mit Echo) + Session-Ende.
+if (args.Contains("--webtransport"))
+{
+    Console.WriteLine("\n== WebTransport über HTTP/3 (draft-ietf-webtrans-http3) ==");
+    for (int round = 0; round < 20 && !http3.ServerSupportsWebTransport; round++)
+        Exchange();
+    if (!http3.ServerSupportsWebTransport) { Console.WriteLine("✗ Server unterstützt kein WebTransport."); return 1; }
+    Console.WriteLine("→ Server-Support erkannt (WT_MAX_SESSIONS > 0, Extended CONNECT, Datagramme).");
+
+    ulong wtStream = http3.ConnectWebTransport(host, "/wt");
+    org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport.WebTransportSession? wt = null;
+    for (int round = 0; round < 40 && wt is null; round++) { Exchange(); http3.TryGetWebTransportSession(wtStream, out wt); }
+    if (wt is null) { Console.WriteLine($"✗ Session fehlgeschlagen (Status {http3.WebTransportConnectStatus(wtStream)})."); return 1; }
+    Console.WriteLine($"→ Session {wt.SessionId} etabliert (Flow Control: {(wt.FlowControlEnabled ? "an" : "aus")}).");
+
+    // Datagramm.
+    wt.SendDatagram(System.Text.Encoding.UTF8.GetBytes("WT-Datagramm!"));
+    byte[]? dg = null;
+    for (int round = 0; round < 40 && dg is null; round++) { Exchange(); wt.TryReceiveDatagram(out dg); }
+    Console.WriteLine(dg is not null ? $"← Datagramm-Echo: „{System.Text.Encoding.UTF8.GetString(dg)}\"" : "○ (kein Datagramm-Echo — unzuverlässig)");
+
+    // Unidirektionaler Stream (Client → Server).
+    var uni = wt.OpenUnidirectionalStream();
+    uni!.Write(System.Text.Encoding.UTF8.GetBytes("uni-gruß")); uni.Finish();
+    Console.WriteLine("→ Unidirektionaler WebTransport-Stream gesendet (0x54 ‖ Session-ID ‖ Daten).");
+
+    // Bidirektionaler Stream mit Echo (Client → Server → Client).
+    var bidi = wt.OpenBidirectionalStream();
+    bidi!.Write(System.Text.Encoding.UTF8.GetBytes("bidi-ping")); bidi.Finish();
+    var reply = new List<byte>();
+    for (int round = 0; round < 60 && !bidi.IsReceiveComplete; round++) { Exchange(); reply.AddRange(bidi.Read()); }
+    reply.AddRange(bidi.Read());
+    Console.WriteLine($"← Bidi-Echo: „{System.Text.Encoding.UTF8.GetString(reply.ToArray())}\" (WT_STREAM 0x41)");
+
+    wt.Close(0, "fertig");
+    for (int round = 0; round < 10; round++) Exchange();
+    Console.WriteLine($"✓✓ WebTransport erfolgreich — Session geschlossen (IsClosed={wt.IsClosed}).");
+    http3.Close();
+    foreach (byte[] d in http3.GetDatagramsToSend()) socket.SendTo(d, remote);
+    return 0;
+}
+
+// Optional: HTTP-Datagramme (RFC 9297) über QUIC-DATAGRAM-Frames (RFC 9221, nur gegen den eigenen
+// Server): unzuverlässige Nachrichten neben dem Byte-Strom eines Extended-CONNECT-Tunnels —
+// die Grundlage von MASQUE/connect-udp und WebTransport.
+if (args.Contains("--datagrams"))
+{
+    Console.WriteLine("\n== HTTP-Datagramme (RFC 9297/9221) ==");
+    for (int round = 0; round < 20 && !http3.DatagramsNegotiated; round++)
+        Exchange();
+    if (!http3.DatagramsNegotiated) { Console.WriteLine("✗ Datagramme nicht ausgehandelt."); return 1; }
+    Console.WriteLine($"→ Ausgehandelt: SETTINGS_H3_DATAGRAM = 1 beidseitig, max_datagram_frame_size = {http3.Quic.PeerMaxDatagramFrameSize}.");
+
+    ulong dgStream = http3.SendExtendedConnect(host, "/", "datagram-echo");
+    Http3Tunnel? dgTunnel = null;
+    int dgStatus = 0;
+    for (int round = 0; round < 40 && dgTunnel is null && dgStatus == 0; round++)
+    {
+        Exchange();
+        http3.TryGetConnectResponse(dgStream, out dgStatus, out _, out dgTunnel);
+    }
+    if (dgTunnel is null) { Console.WriteLine($"✗ CONNECT fehlgeschlagen (Status {dgStatus})."); return 1; }
+    Console.WriteLine($"→ CONNECT :protocol=datagram-echo angenommen (Status {dgStatus}).");
+
+    int echoed = 0;
+    for (int i = 1; i <= 3; i++)
+    {
+        byte[] ping = System.Text.Encoding.UTF8.GetBytes($"Datagramm #{i} über QUIC!");
+        if (!dgTunnel.TrySendDatagram(ping)) { Console.WriteLine("✗ Senden verweigert."); return 1; }
+        byte[]? pong = null;
+        for (int round = 0; round < 40 && pong is null; round++)
+        {
+            Exchange();
+            dgTunnel.TryReceiveDatagram(out pong);
+        }
+        if (pong is null) { Console.WriteLine($"✗ Kein Echo für Datagramm #{i} (unzuverlässig — hier lokal unerwartet)."); return 1; }
+        Console.WriteLine($"← Echo #{i}: „{System.Text.Encoding.UTF8.GetString(pong)}\" ({pong.Length} Bytes, in einem DATAGRAM-Frame)");
+        echoed++;
+    }
+    Console.WriteLine($"✓✓ {echoed}/3 HTTP-Datagramme geecht — RFC 9297 (Quarter Stream ID) über RFC 9221 (DATAGRAM-Frames).");
+    http3.Close();
+    foreach (byte[] dg in http3.GetDatagramsToSend()) socket.SendTo(dg, remote);
+    return 0;
+}
+
+// Optional: WebSocket über HTTP/3 (RFC 9220, nur gegen den eigenen Server): Extended CONNECT mit
+// :protocol=websocket (RFC 8441), dann RFC-6455-Frames durch den Tunnel (DATA-Frames, RFC 9114 §4.4).
+if (args.Contains("--websocket"))
+{
+    Console.WriteLine("\n== WebSocket über HTTP/3 (RFC 9220) ==");
+    for (int round = 0; round < 20 && !http3.ServerEnablesConnectProtocol; round++)
+        Exchange();
+    if (!http3.ServerEnablesConnectProtocol) { Console.WriteLine("✗ Server erlaubt kein Extended CONNECT."); return 1; }
+    Console.WriteLine("→ SETTINGS_ENABLE_CONNECT_PROTOCOL = 1 empfangen — Extended CONNECT erlaubt.");
+
+    ulong wsStream = http3.SendExtendedConnect(host, "/chat", "websocket",
+        [new org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack.HeaderField("sec-websocket-version", "13")]);
+    int wsStatus = 0;
+    Http3Tunnel? tunnel = null;
+    for (int round = 0; round < 40 && tunnel is null && wsStatus == 0; round++)
+    {
+        Exchange();
+        http3.TryGetConnectResponse(wsStream, out wsStatus, out _, out tunnel);
+    }
+    if (tunnel is null) { Console.WriteLine($"✗ CONNECT fehlgeschlagen (Status {wsStatus})."); return 1; }
+    Console.WriteLine($"→ CONNECT :protocol=websocket angenommen (Status {wsStatus}) — Stream {wsStream} ist jetzt der Tunnel.");
+
+    var ws = new WebSocketConnection(tunnel, WebSocketRole.Client);
+    _ = ws.SendTextAsync("Hallo WebSocket über HTTP/3 — from scratch!", CancellationToken.None);
+    var receive = ws.ReceiveAsync(CancellationToken.None);
+    for (int round = 0; round < 100 && !receive.IsCompleted; round++)
+        Exchange();
+    if (!receive.IsCompleted || receive.Result is not { } wsEcho) { Console.WriteLine("✗ Kein WebSocket-Echo erhalten."); return 1; }
+    Console.WriteLine($"← Echo: „{System.Text.Encoding.UTF8.GetString(wsEcho.Payload)}\"");
+
+    _ = ws.CloseAsync(1000, "fertig", CancellationToken.None);
+    var closing = ws.ReceiveAsync(CancellationToken.None);
+    for (int round = 0; round < 40 && !closing.IsCompleted; round++)
+        Exchange();
+    Console.WriteLine(closing.IsCompleted && closing.Result is null
+        ? "✓ Close-Handshake vollzogen (RFC 6455 §5.5.1) — Tunnel geordnet beendet."
+        : "✗ Close-Handshake nicht vollzogen.");
+    Console.WriteLine("✓✓ WebSocket über HTTP/3 erfolgreich — RFC 9220 + RFC 8441 + RFC 6455 über unserem Stack.");
+    http3.Close();
+    foreach (byte[] dg in http3.GetDatagramsToSend()) socket.SendTo(dg, remote);
+    return 0;
+}
+
+// Optional: Priorisierung (RFC 9218) vorführen — nur gegen den eigenen Server sinnvoll (Route /big):
+// zwei konkurrierende Downloads, der ZWEITE mit `priority: u=0` (dringlich) — der Server bedient ihn
+// zuerst, obwohl er später angefragt wurde. Danach dasselbe mit PRIORITY_UPDATE-Reprioritisierung.
+if (args.Contains("--priorities"))
+{
+    Console.WriteLine("\n== Priorisierung (RFC 9218) ==");
+    ulong slow = http3.SendRequest(Http3Request.Get(host, "/big"));                                       // u=3 (Default)
+    ulong fast = http3.SendRequest(Http3Request.Get(host, "/big") with { Priority = new Http3Priority(0, false) }); // u=0
+    Console.WriteLine($"→ Zwei GET /big: Stream {slow} (Default u=3), danach Stream {fast} (priority: u=0)");
+
+    ulong? firstDone = null;
+    Http3Response? slowResp = null, fastResp = null;
+    for (int round = 0; round < 400 && (slowResp is null || fastResp is null); round++)
+    {
+        Exchange();
+        if (slowResp is null && http3.TryGetResponse(slow, out slowResp) && firstDone is null) firstDone = slow;
+        if (fastResp is null && http3.TryGetResponse(fast, out fastResp) && firstDone is null) firstDone = fast;
+    }
+    if (slowResp is null || fastResp is null) { Console.WriteLine("✗ Antworten unvollständig."); return 1; }
+    Console.WriteLine(firstDone == fast
+        ? $"✓ Der dringlichere Download (u=0, Stream {fast}) kam ZUERST an — obwohl später angefragt."
+        : "✗ Erwartet war, dass der u=0-Download zuerst fertig wird!");
+
+    // Reprioritisierung (RFC 9218 §6/§7): „Prefetch" mit u=0 starten, dann per PRIORITY_UPDATE auf
+    // u=7 (Hintergrund) zurückstufen — der Default-Download überholt ihn.
+    ulong prefetch = http3.SendRequest(Http3Request.Get(host, "/big") with { Priority = new Http3Priority(0, false) });
+    ulong normal = http3.SendRequest(Http3Request.Get(host, "/big"));
+    http3.SendPriorityUpdate(prefetch, new Http3Priority(7, false));
+    Console.WriteLine($"→ Reprioritisierung: Stream {prefetch} (Header u=0) per PRIORITY_UPDATE auf u=7 zurückgestuft; Stream {normal} (u=3)");
+
+    firstDone = null;
+    Http3Response? prefetchResp = null, normalResp = null;
+    for (int round = 0; round < 400 && (prefetchResp is null || normalResp is null); round++)
+    {
+        Exchange();
+        if (prefetchResp is null && http3.TryGetResponse(prefetch, out prefetchResp) && firstDone is null) firstDone = prefetch;
+        if (normalResp is null && http3.TryGetResponse(normal, out normalResp) && firstDone is null) firstDone = normal;
+    }
+    if (prefetchResp is null || normalResp is null) { Console.WriteLine("✗ Antworten unvollständig."); return 1; }
+    Console.WriteLine(firstDone == normal
+        ? $"✓ Das PRIORITY_UPDATE (u=7) überschrieb den Header (u=0) — Stream {normal} überholte den degradierten Prefetch."
+        : "✗ Erwartet war, dass das PRIORITY_UPDATE den Prefetch zurückstuft!");
+    Console.WriteLine($"✓✓ RFC-9218-Priorisierung erfolgreich ({slowResp.Body.Length} Bytes je Download, 4 Downloads).");
+    http3.Close();
+    foreach (byte[] dg in http3.GetDatagramsToSend()) socket.SendTo(dg, remote);
+    return firstDone == normal ? 0 : 1;
+}
+
+// Optional: GOAWAY / Graceful Shutdown beobachten (RFC 9114 §5.2, nur gegen `H3Server --goaway`):
+// der Server kündigt nach der Antwort per GOAWAY den Abbau an; neue Requests sind dann verboten,
+// und die Verbindung endet anständig mit H3_NO_ERROR (CONNECTION_CLOSE Typ 0x1d).
+if (args.Contains("--goaway"))
+{
+    Console.WriteLine("\n== GOAWAY / Graceful Shutdown ==");
+    for (int round = 0; round < 40 && http3.GoAwayStreamId is null && http3.PeerCloseFrame is null; round++)
+        Exchange();
+
+    if (http3.GoAwayStreamId is not { } goAwayId)
+    {
+        Console.WriteLine("✗ Kein GOAWAY erhalten.");
+        return 1;
+    }
+    Console.WriteLine($"→ GOAWAY empfangen: Grenze Stream-ID {goAwayId} — keine neuen Requests auf dieser Verbindung.");
+    try
+    {
+        http3.SendRequest(Http3Request.Get(host, path));
+        Console.WriteLine("✗ Der neue Request hätte verweigert werden müssen!");
+        return 1;
+    }
+    catch (InvalidOperationException)
+    {
+        Console.WriteLine("✓ Neuer Request korrekt verweigert (RFC 9114 §5.2 MUST NOT).");
+    }
+
+    for (int round = 0; round < 40 && http3.PeerCloseFrame is null; round++)
+        Exchange();
+    if (http3.PeerCloseFrame is not { } close)
+    {
+        Console.WriteLine("✗ Kein CONNECTION_CLOSE des Servers erhalten.");
+        return 1;
+    }
+    Console.WriteLine($"✓✓ Server schloss anständig: CONNECTION_CLOSE ({(close.IsApplicationError ? "Application" : "Transport")}) "
+                      + $"Code 0x{close.ErrorCode:x}{(close.ErrorCode == Http3Error.NoError ? " = H3_NO_ERROR" : "")}.");
     return 0;
 }
 

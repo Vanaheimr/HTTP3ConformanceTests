@@ -33,9 +33,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Tests für 1-RTT-Key-Updates (RFC 9001 §6): die „quic ku"-Ableitung der nächsten Generation sowie ein
 /// vollständiger Update-Umlauf zwischen unserem Client und Server über das Key-Phase-Bit.
 /// </summary>
+[TestFixture]
 public class KeyUpdateTests
 {
-    [Fact]
+    [Test]
     public void TrafficKeys_Next_AdvancesSecretKeyAndIv_ButKeepsHeaderProtectionKey()
     {
         byte[] secret = new byte[32];
@@ -45,10 +46,10 @@ public class KeyUpdateTests
         var tk = TrafficKeys.FromSecret(HashAlgorithmName.SHA256, secret, keyLength: 16);
         TrafficKeys next = tk.Next(HashAlgorithmName.SHA256, hashLength: 32);
 
-        Assert.NotEqual(tk.Secret, next.Secret); // secret_<n+1> = HKDF-Expand-Label(secret_<n>, "quic ku", …)
-        Assert.NotEqual(tk.Key, next.Key);
-        Assert.NotEqual(tk.Iv, next.Iv);
-        Assert.Equal(tk.HeaderProtectionKey, next.HeaderProtectionKey); // HP-Key bleibt unverändert (RFC 9001 §6.1)
+        Assert.That(next.Secret, Is.Not.EqualTo(tk.Secret)); // secret_<n+1> = HKDF-Expand-Label(secret_<n>, "quic ku", …)
+        Assert.That(next.Key, Is.Not.EqualTo(tk.Key));
+        Assert.That(next.Iv, Is.Not.EqualTo(tk.Iv));
+        Assert.That(next.HeaderProtectionKey, Is.EqualTo(tk.HeaderProtectionKey)); // HP-Key bleibt unverändert (RFC 9001 §6.1)
     }
 
     private static (QuicClientConnection client, QuicServerConnection server) Handshaken(ServerCertificate cert)
@@ -59,7 +60,7 @@ public class KeyUpdateTests
         client.Start();
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
-        Assert.True(client.HandshakeConfirmed, "Handshake muss zustande kommen.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
         Pump(client, server); // Restdaten (HANDSHAKE_DONE-ACK etc.) abfließen lassen
         return (client, server);
     }
@@ -72,7 +73,7 @@ public class KeyUpdateTests
             client.ProcessDatagram(dg);
     }
 
-    [Fact]
+    [Test]
     public void KeyUpdate_ClientInitiated_RotatesBothDirections_AndStreamDataArrives()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -80,12 +81,12 @@ public class KeyUpdateTests
         using var _ = client;
         using var __ = server;
 
-        Assert.False(client.CurrentKeyPhase);
-        Assert.False(server.CurrentKeyPhase);
+        Assert.That(client.CurrentKeyPhase, Is.False);
+        Assert.That(server.CurrentKeyPhase, Is.False);
 
         // Client leitet den Key Update ein: Send-Phase kippt sofort auf 1.
-        Assert.True(client.InitiateKeyUpdate());
-        Assert.True(client.CurrentKeyPhase);
+        Assert.That(client.InitiateKeyUpdate(), Is.True);
+        Assert.That(client.CurrentKeyPhase, Is.True);
 
         // Stream-Daten unter den neuen Schlüsseln senden.
         QuicStream stream = client.OpenBidirectionalStream();
@@ -94,17 +95,17 @@ public class KeyUpdateTests
             Pump(client, server);
 
         // Server erkennt das gekippte Key-Phase-Bit, rotiert Read- und Send-Keys.
-        Assert.True(server.CurrentKeyPhase, "Server muss auf die neue Key-Phase gewechselt sein.");
-        Assert.True(server.KeyUpdateCount >= 1);
+        Assert.That(server.CurrentKeyPhase, Is.True, "Server muss auf die neue Key-Phase gewechselt sein.");
+        Assert.That(server.KeyUpdateCount >= 1, Is.True);
         // Der Client rotiert seine Read-Keys, sobald der Server mit der neuen Phase antwortet.
-        Assert.True(client.CurrentKeyPhase);
+        Assert.That(client.CurrentKeyPhase, Is.True);
 
         // Entscheidend: die Anwendungsdaten kamen unter den rotierten Schlüsseln korrekt an.
-        Assert.True(server.Streams.ContainsKey(stream.Id.Value));
-        Assert.Equal([10, 20, 30, 40, 50], server.Streams[stream.Id.Value].Read());
+        Assert.That(server.Streams.ContainsKey(stream.Id.Value), Is.True);
+        Assert.That(server.Streams[stream.Id.Value].Read(), Is.EqualTo([10, 20, 30, 40, 50]));
     }
 
-    [Fact]
+    [Test]
     public void KeyUpdate_SecondUpdate_TogglesKeyPhaseBack_AndDataStillFlows()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -118,22 +119,22 @@ public class KeyUpdateTests
         s1.Write([1, 1, 1]);
         for (int round = 0; round < 10; round++)
             Pump(client, server);
-        Assert.True(client.CurrentKeyPhase);
-        Assert.True(server.CurrentKeyPhase);
+        Assert.That(client.CurrentKeyPhase, Is.True);
+        Assert.That(server.CurrentKeyPhase, Is.True);
 
         // Zweiter Update (Phase → 0, Secret-Generation 2).
-        Assert.True(client.InitiateKeyUpdate());
-        Assert.False(client.CurrentKeyPhase);
+        Assert.That(client.InitiateKeyUpdate(), Is.True);
+        Assert.That(client.CurrentKeyPhase, Is.False);
         QuicStream s2 = client.OpenBidirectionalStream();
         s2.Write([2, 2, 2, 2]);
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.False(server.CurrentKeyPhase, "Nach dem zweiten Update muss die Phase wieder 0 sein.");
-        Assert.Equal([2, 2, 2, 2], server.Streams[s2.Id.Value].Read());
+        Assert.That(server.CurrentKeyPhase, Is.False, "Nach dem zweiten Update muss die Phase wieder 0 sein.");
+        Assert.That(server.Streams[s2.Id.Value].Read(), Is.EqualTo([2, 2, 2, 2]));
     }
 
-    [Fact]
+    [Test]
     public void KeyUpdate_ServerInitiated_IsDetectedByClient()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -142,8 +143,8 @@ public class KeyUpdateTests
         using var __ = server;
 
         // Server leitet den Update ein.
-        Assert.True(server.InitiateKeyUpdate());
-        Assert.True(server.CurrentKeyPhase);
+        Assert.That(server.InitiateKeyUpdate(), Is.True);
+        Assert.That(server.CurrentKeyPhase, Is.True);
 
         // Server sendet Daten mit neuer Phase; der Client muss den Update erkennen.
         QuicStream stream = server.OpenUnidirectionalStream();
@@ -151,7 +152,7 @@ public class KeyUpdateTests
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.True(client.CurrentKeyPhase, "Client muss den Key Update des Servers erkannt haben.");
-        Assert.True(server.CurrentKeyPhase);
+        Assert.That(client.CurrentKeyPhase, Is.True, "Client muss den Key Update des Servers erkannt haben.");
+        Assert.That(server.CurrentKeyPhase, Is.True);
     }
 }

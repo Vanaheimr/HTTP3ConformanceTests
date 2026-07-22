@@ -33,9 +33,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// meldet sie im ACK-Frame (Typ 0x03); der Sender behandelt einen gestiegenen CE-Zähler wie einen Verlust und
 /// verkleinert das Congestion Window. Unit-Tests für Zählung/Meldung und CE-Reaktion plus ein End-to-End-Test.
 /// </summary>
+[TestFixture]
 public class EcnTests
 {
-    [Fact]
+    [Test]
     public void PacketNumberSpace_CountsEcnCodepoints_AndReportsThemInAck()
     {
         var space = new PacketNumberSpace();
@@ -44,14 +45,14 @@ public class EcnTests
         space.RecordReceived(2, EcnCodepoint.Ce);
 
         AckFrame? ack = space.BuildAck();
-        Assert.NotNull(ack);
-        Assert.NotNull(ack!.Ecn);
-        Assert.Equal(2ul, ack.Ecn!.Value.Ect0);
-        Assert.Equal(0ul, ack.Ecn.Value.Ect1);
-        Assert.Equal(1ul, ack.Ecn.Value.CongestionExperienced);
+        Assert.That(ack, Is.Not.Null);
+        Assert.That(ack!.Ecn, Is.Not.Null);
+        Assert.That(ack.Ecn!.Value.Ect0, Is.EqualTo(2ul));
+        Assert.That(ack.Ecn.Value.Ect1, Is.EqualTo(0ul));
+        Assert.That(ack.Ecn.Value.CongestionExperienced, Is.EqualTo(1ul));
     }
 
-    [Fact]
+    [Test]
     public void PacketNumberSpace_WithoutEcnMarks_BuildsPlainAck()
     {
         var space = new PacketNumberSpace();
@@ -59,11 +60,11 @@ public class EcnTests
         space.RecordReceived(1);
 
         AckFrame? ack = space.BuildAck();
-        Assert.NotNull(ack);
-        Assert.Null(ack!.Ecn); // Typ 0x02, keine ECN-Zähler
+        Assert.That(ack, Is.Not.Null);
+        Assert.That(ack!.Ecn, Is.Null); // Typ 0x02, keine ECN-Zähler
     }
 
-    [Fact]
+    [Test]
     public void LossRecovery_OnIncreasedCeCount_ReducesCongestionWindow()
     {
         var recovery = new LossRecovery();
@@ -77,11 +78,10 @@ public class EcnTests
         var ack = new AckFrame([new PacketNumberRange(0, 0)], 0, new EcnCounts(0, 0, 1));
         recovery.OnAckReceived(space: 0, ack, System.TimeSpan.Zero, nowTicks: 1000);
 
-        Assert.True(recovery.Congestion.CongestionWindow < before,
-            $"Ein gestiegener CE-Zähler muss das Fenster verkleinern (war {before}, ist {recovery.Congestion.CongestionWindow}).");
+        Assert.That(recovery.Congestion.CongestionWindow < before, Is.True, $"Ein gestiegener CE-Zähler muss das Fenster verkleinern (war {before}, ist {recovery.Congestion.CongestionWindow}).");
     }
 
-    [Fact]
+    [Test]
     public void LossRecovery_SameCeCount_DoesNotReduceTwice()
     {
         var recovery = new LossRecovery();
@@ -93,10 +93,10 @@ public class EcnTests
         // Zweites ACK mit UNVERÄNDERTEM CE-Zähler ⇒ kein erneutes Verkleinern.
         recovery.OnAckReceived(0, new AckFrame([new PacketNumberRange(1, 1)], 0, new EcnCounts(0, 0, 1)), System.TimeSpan.Zero, 2000);
 
-        Assert.True(recovery.Congestion.CongestionWindow >= afterFirst, "Gleicher CE-Zähler darf nicht erneut verkleinern.");
+        Assert.That(recovery.Congestion.CongestionWindow >= afterFirst, Is.True, "Gleicher CE-Zähler darf nicht erneut verkleinern.");
     }
 
-    [Fact]
+    [Test]
     public void CeMarkedPackets_ReportedByPeer_ReduceSendersCongestionWindow()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -120,8 +120,8 @@ public class EcnTests
             prevCwnd = client.CongestionWindow;
         }
 
-        Assert.True(client.HandshakeConfirmed, "Handshake muss zustande kommen.");
-        Assert.True(server.ApplicationReceivedCeCount > 0, "Der Server muss CE-markierte 1-RTT-Pakete gezählt haben.");
-        Assert.True(cwndDropped, "Die CE-Meldung des Servers muss das Congestion Window des Clients verkleinern.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
+        Assert.That(server.ApplicationReceivedCeCount > 0, Is.True, "Der Server muss CE-markierte 1-RTT-Pakete gezählt haben.");
+        Assert.That(cwndDropped, Is.True, "Die CE-Meldung des Servers muss das Congestion Window des Clients verkleinern.");
     }
 }

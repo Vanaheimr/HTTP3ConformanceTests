@@ -33,9 +33,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Die Datagramme werden direkt zwischen beiden ausgetauscht (kein echtes Netzwerk). Validiert den
 /// vollständigen Server-Pfad: QUIC-Server-Handshake, HTTP/3-Server, QPACK-kodierte Antwort.
 /// </summary>
+[TestFixture]
 public class Http3ClientServerTests
 {
-    [Fact]
+    [Test]
     public void Client_Gets_ResponseFromOwnServer()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -78,14 +79,14 @@ public class Http3ClientServerTests
                 client.TryGetResponse(requestStream, out response);
         }
 
-        Assert.NotNull(response);
-        Assert.Equal(200, response!.Status);
-        Assert.Equal("text/plain", response.GetHeader("content-type"));
-        Assert.Contains("/hello", response.BodyText);
-        Assert.Contains("from scratch", response.BodyText);
+        Assert.That(response, Is.Not.Null);
+        Assert.That(response!.Status, Is.EqualTo(200));
+        Assert.That(response.GetHeader("content-type"), Is.EqualTo("text/plain"));
+        Assert.That(response.BodyText, Does.Contain("/hello"));
+        Assert.That(response.BodyText, Does.Contain("from scratch"));
     }
 
-    [Fact]
+    [Test]
     public void LargeResponse_TransfersFully_ThroughPacedCongestionControlledSendPath()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -136,16 +137,139 @@ public class Http3ClientServerTests
                 client.TryGetResponse(requestStream, out response);
         }
 
-        Assert.NotNull(response);
-        Assert.Equal(200, response!.Status);
-        Assert.Equal(body.Length, response.Body.Length);
-        Assert.True(body.AsSpan().SequenceEqual(response.Body), "Der empfangene Rumpf muss byte-genau stimmen.");
+        Assert.That(response, Is.Not.Null);
+        Assert.That(response!.Status, Is.EqualTo(200));
+        Assert.That(response.Body.Length, Is.EqualTo(body.Length));
+        Assert.That(body.AsSpan().SequenceEqual(response.Body), Is.True, "Der empfangene Rumpf muss byte-genau stimmen.");
 
         // Der MTU-begrenzte Emitter darf keine überdimensionierten Datagramme erzeugen.
-        Assert.True(maxServerDatagram <= 1300, $"Server-Datagramm zu groß: {maxServerDatagram} Bytes.");
+        Assert.That(maxServerDatagram <= 1300, Is.True, $"Server-Datagramm zu groß: {maxServerDatagram} Bytes.");
     }
 
-    [Fact]
+    [Test]
+    public void Post_WithRequestBody_ServerReceivesBodyAndContentLength()
+    {
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+
+        byte[] requestBody = System.Text.Encoding.UTF8.GetBytes("Hallo Server, hier kommt ein POST-Rumpf!");
+        Http3Request? seenRequest = null;
+
+        // Echo-Handler: spiegelt den Request-Rumpf zurück (beweist Empfang UND Antwortpfad).
+        Http3Response Handler(Http3Request request)
+        {
+            seenRequest = request;
+            return new Http3Response
+            {
+                Status = 200,
+                Headers = [new HeaderField("content-type", "application/octet-stream")],
+                Body = request.Body,
+            };
+        }
+
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+        using var server = new Http3ServerConnection(cert, Handler);
+        using var client = new Http3ClientConnection("localhost", certificateValidation: validation);
+        client.Start();
+
+        ulong requestStream = 0;
+        bool requestSent = false;
+        Http3Response? response = null;
+
+        for (int round = 0; round < 30 && response is null; round++)
+        {
+            client.CheckTimeouts();
+            foreach (byte[] dg in client.GetDatagramsToSend())
+                server.ProcessDatagram(dg);
+            foreach (byte[] dg in server.GetDatagramsToSend())
+                client.ProcessDatagram(dg);
+
+            if (client.HandshakeConfirmed && !requestSent)
+            {
+                client.InitializeHttp3();
+                requestStream = client.SendRequest(Http3Request.Post("localhost", "/echo", requestBody, "text/plain"));
+                requestSent = true;
+            }
+
+            if (requestSent)
+                client.TryGetResponse(requestStream, out response);
+        }
+
+        // Der Server hat Methode, Header und den vollständigen Rumpf gesehen (RFC 9114 §4.1).
+        Assert.That(seenRequest, Is.Not.Null);
+        Assert.That(seenRequest!.Method, Is.EqualTo("POST"));
+        Assert.That(seenRequest.Path, Is.EqualTo("/echo"));
+        Assert.That(seenRequest.AdditionalHeaders.FirstOrDefault(h => h.Name == "content-type").Value, Is.EqualTo("text/plain"));
+        Assert.That(seenRequest.AdditionalHeaders.FirstOrDefault(h => h.Name == "content-length").Value, Is.EqualTo(requestBody.Length.ToString()));
+        Assert.That(requestBody.AsSpan().SequenceEqual(seenRequest.Body), Is.True, "Der Request-Rumpf muss byte-genau ankommen.");
+
+        // Und das Echo kam vollständig zurück.
+        Assert.That(response, Is.Not.Null);
+        Assert.That(response!.Status, Is.EqualTo(200));
+        Assert.That(requestBody.AsSpan().SequenceEqual(response.Body), Is.True, "Das Echo muss byte-genau stimmen.");
+    }
+
+    [Test]
+    public void LargeRequestBody_UploadsFully_ThroughClientSendPath()
+    {
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+
+        // ~120 KB Upload – treibt erstmals den CLIENT-Sendepfad (cwnd, Pacing, MTU-Paketierung,
+        // Flow Control) über viele Pakete; bisher testeten nur Downloads die Gegenrichtung.
+        byte[] requestBody = new byte[120_000];
+        for (int i = 0; i < requestBody.Length; i++)
+            requestBody[i] = (byte)(i * 17 + 3);
+
+        int seenBodyLength = -1;
+        Http3Response Handler(Http3Request request)
+        {
+            seenBodyLength = request.Body.Length;
+            // Antwort mit Prüfsumme statt Echo (hält die Antwort klein und beweist Byte-Genauigkeit).
+            byte[] hash = System.Security.Cryptography.SHA256.HashData(request.Body);
+            return new Http3Response { Status = 200, Body = hash };
+        }
+
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+        using var server = new Http3ServerConnection(cert, Handler);
+        using var client = new Http3ClientConnection("localhost", certificateValidation: validation);
+        client.Start();
+
+        ulong requestStream = 0;
+        bool requestSent = false;
+        Http3Response? response = null;
+        int maxClientDatagram = 0;
+
+        for (int round = 0; round < 2000 && response is null; round++)
+        {
+            client.CheckTimeouts();
+            foreach (byte[] dg in client.GetDatagramsToSend())
+            {
+                maxClientDatagram = Math.Max(maxClientDatagram, dg.Length);
+                server.ProcessDatagram(dg);
+            }
+            foreach (byte[] dg in server.GetDatagramsToSend())
+                client.ProcessDatagram(dg);
+
+            if (client.HandshakeConfirmed && !requestSent)
+            {
+                client.InitializeHttp3();
+                requestStream = client.SendRequest(Http3Request.Post("localhost", "/upload", requestBody));
+                requestSent = true;
+            }
+
+            if (requestSent)
+                client.TryGetResponse(requestStream, out response);
+        }
+
+        Assert.That(seenBodyLength, Is.EqualTo(requestBody.Length));
+        Assert.That(response, Is.Not.Null);
+        Assert.That(response!.Status, Is.EqualTo(200));
+        Assert.That(System.Security.Cryptography.SHA256.HashData(requestBody).AsSpan().SequenceEqual(response.Body), Is.True, "Die SHA-256-Prüfsumme des Uploads muss stimmen — der Rumpf kam byte-genau an.");
+
+        // Auch der Client-Emitter bleibt MTU-begrenzt.
+        Assert.That(maxClientDatagram <= 1300, Is.True, $"Client-Datagramm zu groß: {maxClientDatagram} Bytes.");
+    }
+
+    [Test]
     public void IdleTimeout_SilentlyClosesConnection_AfterInactivity()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -167,14 +291,14 @@ public class Http3ClientServerTests
                 client.ProcessDatagram(dg);
         }
 
-        Assert.True(client.HandshakeConfirmed, "Handshake muss zustande kommen.");
-        Assert.False(server.IsIdleTimedOut);
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
+        Assert.That(server.IsIdleTimedOut, Is.False);
 
         // Ohne weiteren Paketaustausch verstreicht mehr als der ausgehandelte Idle-Timeout.
         Thread.Sleep(600);
         server.CheckTimeouts();
 
-        Assert.True(server.IsIdleTimedOut, "Der Server muss die Verbindung nach dem Idle-Timeout schließen.");
-        Assert.Empty(server.GetDatagramsToSend()); // still geschlossen ⇒ keine Datagramme mehr
+        Assert.That(server.IsIdleTimedOut, Is.True, "Der Server muss die Verbindung nach dem Idle-Timeout schließen.");
+        Assert.That(server.GetDatagramsToSend(), Is.Empty); // still geschlossen ⇒ keine Datagramme mehr
     }
 }

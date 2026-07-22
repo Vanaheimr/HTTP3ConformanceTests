@@ -25,9 +25,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class InitialPacketFactoryTests
 {
-    [Fact]
+    [Test]
     public void BuildClientInitial_PadsToMinimumSize_AndRoundTrips()
     {
         var dcid = ConnectionId.Parse("0102030405060708");
@@ -43,23 +44,22 @@ public class InitialPacketFactoryTests
             clientProt, 0x0000_0001, dcid, scid, token: default,
             packetNumber: 0, packetNumberLength: 4, cryptoData);
 
-        Assert.True(packet.Length >= InitialPacketFactory.MinimumClientInitialSize,
-            $"Paket war nur {packet.Length} Bytes.");
+        Assert.That(packet.Length >= InitialPacketFactory.MinimumClientInitialSize, Is.True, $"Paket war nur {packet.Length} Bytes.");
 
         // Empfängerseitig: parsen -> entschützen -> Frames -> CRYPTO-Daten zurückgewinnen.
-        Assert.True(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix));
-        Assert.Equal(dcid, prefix!.DestinationConnectionId);
-        Assert.Equal(scid, prefix.SourceConnectionId);
+        Assert.That(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix), Is.True);
+        Assert.That(prefix!.DestinationConnectionId, Is.EqualTo(dcid));
+        Assert.That(prefix.SourceConnectionId, Is.EqualTo(scid));
 
         using var serverView = new PacketProtection(secrets.Client); // gleiche Richtung (Selbsttest)
         byte[] plaintext = new byte[packet.Length];
-        Assert.True(serverView.UnprotectPacket(packet, prefix.PacketNumberOffset, -1, longHeader: true,
-            plaintext, out ulong pn, out int len));
-        Assert.Equal(0UL, pn);
+        Assert.That(serverView.UnprotectPacket(packet, prefix.PacketNumberOffset, -1, longHeader: true,
+            plaintext, out ulong pn, out int len), Is.True);
+        Assert.That(pn, Is.EqualTo(0UL));
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(plaintext.AsSpan(0, len), out List<Frame> frames));
-        var crypto = Assert.IsType<CryptoFrame>(frames[0]);
-        Assert.Equal(cryptoData, crypto.Data.ToArray());
-        Assert.IsType<PaddingFrame>(frames[1]); // Rest ist PADDING
+        Assert.That(FrameParser.TryParseAll(plaintext.AsSpan(0, len), out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
+        var crypto = Expect.Type<CryptoFrame>(frames[0]);
+        Assert.That(crypto.Data.ToArray(), Is.EqualTo(cryptoData));
+        Expect.Type<PaddingFrame>(frames[1]); // Rest ist PADDING
     }
 }

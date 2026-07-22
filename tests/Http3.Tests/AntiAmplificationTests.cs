@@ -29,6 +29,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 /// Tests des Anti-Amplification-Limits (RFC 9000 §8.1): Vor der Adressvalidierung darf der Server nicht
 /// mehr als das Dreifache der empfangenen Bytes senden; der Client ist per Konstruktion nicht limitiert.
 /// </summary>
+[TestFixture]
 public class AntiAmplificationTests
 {
     private static (QuicClientConnection client, QuicServerConnection server) NewPair(ServerCertificate cert)
@@ -45,7 +46,7 @@ public class AntiAmplificationTests
             client.ProcessDatagram(dg);
     }
 
-    [Fact]
+    [Test]
     public void Client_IsValidatedByConstruction_ServerIsNot()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -53,11 +54,11 @@ public class AntiAmplificationTests
         using var _ = client;
         using var __ = server;
 
-        Assert.True(client.AddressValidated);   // der Client limitiert sich nicht
-        Assert.False(server.AddressValidated);   // der Server erst nach Adressvalidierung
+        Assert.That(client.AddressValidated, Is.True);   // der Client limitiert sich nicht
+        Assert.That(server.AddressValidated, Is.False);   // der Server erst nach Adressvalidierung
     }
 
-    [Fact]
+    [Test]
     public void Server_NeverSendsMoreThanThreeTimesReceived_BeforeAddressValidation()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -80,12 +81,12 @@ public class AntiAmplificationTests
             foreach (byte[] dg in server.GetDatagramsToSend())
                 sent += dg.Length;
 
-        Assert.False(server.AddressValidated); // ohne Handshake-Paket des Clients weiterhin unvalidiert
-        Assert.True(sent > 0, "Der Server sendet seinen (begrenzten) Flight.");
-        Assert.True(sent <= 3 * received, $"Anti-Amplification verletzt: {sent} > 3×{received}.");
+        Assert.That(server.AddressValidated, Is.False); // ohne Handshake-Paket des Clients weiterhin unvalidiert
+        Assert.That(sent > 0, Is.True, "Der Server sendet seinen (begrenzten) Flight.");
+        Assert.That(sent <= 3 * received, Is.True, $"Anti-Amplification verletzt: {sent} > 3×{received}.");
     }
 
-    [Fact]
+    [Test]
     public void Server_BecomesValidated_AfterCompletingHandshake()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -97,11 +98,11 @@ public class AntiAmplificationTests
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
 
-        Assert.True(client.HandshakeConfirmed);
-        Assert.True(server.AddressValidated, "Ein empfangenes Handshake-Paket validiert die Client-Adresse.");
+        Assert.That(client.HandshakeConfirmed, Is.True);
+        Assert.That(server.AddressValidated, Is.True, "Ein empfangenes Handshake-Paket validiert die Client-Adresse.");
     }
 
-    [Fact]
+    [Test]
     public void RetryToken_ValidatesAddress_Immediately()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
@@ -114,8 +115,8 @@ public class AntiAmplificationTests
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
 
-        Assert.True(server.SentRetry);
-        Assert.True(server.AddressValidated);
-        Assert.True(client.HandshakeConfirmed);
+        Assert.That(server.SentRetry, Is.True);
+        Assert.That(server.AddressValidated, Is.True);
+        Assert.That(client.HandshakeConfirmed, Is.True);
     }
 }

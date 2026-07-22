@@ -24,6 +24,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
+[TestFixture]
 public class FrameTests
 {
     private static byte[] Serialize(params Frame[] frames) => FrameParser.Serialize(frames);
@@ -37,42 +38,42 @@ public class FrameTests
         020304
         """;
 
-    [Fact]
+    [Test]
     public void Parse_ServerInitialPayload_YieldsAckAndCrypto()
     {
         byte[] payload = Hex.Parse(ServerPayloadHex);
 
         FrameParseResult result = FrameParser.TryParseAll(payload, out List<Frame> frames);
 
-        Assert.Equal(FrameParseResult.Ok, result);
-        Assert.Equal(2, frames.Count);
+        Assert.That(result, Is.EqualTo(FrameParseResult.Ok));
+        Assert.That(frames.Count, Is.EqualTo(2));
 
-        var ack = Assert.IsType<AckFrame>(frames[0]);
-        Assert.Equal(0UL, ack.LargestAcknowledged);
-        Assert.Equal(0UL, ack.AckDelay);
-        Assert.Single(ack.Ranges);
-        Assert.Equal(new PacketNumberRange(0, 0), ack.Ranges[0]);
-        Assert.Null(ack.Ecn);
+        var ack = Expect.Type<AckFrame>(frames[0]);
+        Assert.That(ack.LargestAcknowledged, Is.EqualTo(0UL));
+        Assert.That(ack.AckDelay, Is.EqualTo(0UL));
+        Expect.Single(ack.Ranges);
+        Assert.That(ack.Ranges[0], Is.EqualTo(new PacketNumberRange(0, 0)));
+        Assert.That(ack.Ecn, Is.Null);
 
-        var crypto = Assert.IsType<CryptoFrame>(frames[1]);
-        Assert.Equal(0UL, crypto.Offset);
-        Assert.Equal(90, crypto.Data.Length); // 0x5a
+        var crypto = Expect.Type<CryptoFrame>(frames[1]);
+        Assert.That(crypto.Offset, Is.EqualTo(0UL));
+        Assert.That(crypto.Data.Length, Is.EqualTo(90)); // 0x5a
     }
 
-    [Fact]
+    [Test]
     public void ParseThenSerialize_ServerInitialPayload_RoundTripsExactly()
     {
         byte[] payload = Hex.Parse(ServerPayloadHex);
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(payload, out List<Frame> frames));
+        Assert.That(FrameParser.TryParseAll(payload, out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
         byte[] reencoded = Serialize([.. frames]);
 
-        Assert.Equal(Hex.ToHex(payload), Hex.ToHex(reencoded));
+        Assert.That(Hex.ToHex(reencoded), Is.EqualTo(Hex.ToHex(payload)));
     }
 
     // --- Client-Initial-Payload: CRYPTO + PADDING ---------------------------------------------
 
-    [Fact]
+    [Test]
     public void Parse_ClientInitialPayload_CoalescesPadding()
     {
         // CRYPTO(245 Byte) + PADDING bis 1162.
@@ -89,20 +90,20 @@ public class FrameTests
         byte[] payload = new byte[1162];
         cryptoFrame.CopyTo(payload, 0);
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(payload, out List<Frame> frames));
-        Assert.Equal(2, frames.Count);
-        var crypto = Assert.IsType<CryptoFrame>(frames[0]);
-        Assert.Equal(241, crypto.Data.Length);
-        var padding = Assert.IsType<PaddingFrame>(frames[1]);
-        Assert.Equal(1162 - cryptoFrame.Length, padding.Length);
+        Assert.That(FrameParser.TryParseAll(payload, out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
+        Assert.That(frames.Count, Is.EqualTo(2));
+        var crypto = Expect.Type<CryptoFrame>(frames[0]);
+        Assert.That(crypto.Data.Length, Is.EqualTo(241));
+        var padding = Expect.Type<PaddingFrame>(frames[1]);
+        Assert.That(padding.Length, Is.EqualTo(1162 - cryptoFrame.Length));
 
         // Round-Trip: exakt dieselben Bytes.
-        Assert.Equal(Hex.ToHex(payload), Hex.ToHex(Serialize([.. frames])));
+        Assert.That(Hex.ToHex(Serialize([.. frames])), Is.EqualTo(Hex.ToHex(payload)));
     }
 
     // --- ACK mit mehreren Bereichen -----------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void AckFrame_MultipleRanges_RoundTrips()
     {
         var ack = new AckFrame(
@@ -111,80 +112,79 @@ public class FrameTests
 
         byte[] bytes = Serialize(ack);
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(bytes, out List<Frame> frames));
-        var parsed = Assert.IsType<AckFrame>(Assert.Single(frames));
-        Assert.Equal(ack.Ranges, parsed.Ranges);
-        Assert.Equal(1234UL, parsed.AckDelay);
+        Assert.That(FrameParser.TryParseAll(bytes, out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
+        var parsed = Expect.Type<AckFrame>(Expect.Single(frames));
+        Assert.That(parsed.Ranges, Is.EqualTo(ack.Ranges));
+        Assert.That(parsed.AckDelay, Is.EqualTo(1234UL));
     }
 
-    [Fact]
+    [Test]
     public void AckFrame_WithEcn_RoundTrips()
     {
         var ack = new AckFrame([new PacketNumberRange(5, 0)], AckDelay: 0, Ecn: new EcnCounts(10, 0, 2));
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(Serialize(ack), out List<Frame> frames));
-        var parsed = Assert.IsType<AckFrame>(Assert.Single(frames));
-        Assert.Equal(new EcnCounts(10, 0, 2), parsed.Ecn);
+        Assert.That(FrameParser.TryParseAll(Serialize(ack), out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
+        var parsed = Expect.Type<AckFrame>(Expect.Single(frames));
+        Assert.That(parsed.Ecn, Is.EqualTo(new EcnCounts(10, 0, 2)));
     }
 
     // --- CONNECTION_CLOSE / STREAM / PING ------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void ConnectionClose_Transport_RoundTrips()
     {
         var close = ConnectionCloseFrame.Transport(TransportError.ProtocolViolation, "böse Frames", triggeringFrameType: 0x06);
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(Serialize(close), out List<Frame> frames));
-        var parsed = Assert.IsType<ConnectionCloseFrame>(Assert.Single(frames));
-        Assert.Equal((ulong)TransportError.ProtocolViolation, parsed.ErrorCode);
-        Assert.False(parsed.IsApplicationError);
-        Assert.Equal(0x06UL, parsed.TriggeringFrameType);
-        Assert.Equal("böse Frames", parsed.ReasonPhrase);
+        Assert.That(FrameParser.TryParseAll(Serialize(close), out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
+        var parsed = Expect.Type<ConnectionCloseFrame>(Expect.Single(frames));
+        Assert.That(parsed.ErrorCode, Is.EqualTo((ulong)TransportError.ProtocolViolation));
+        Assert.That(parsed.IsApplicationError, Is.False);
+        Assert.That(parsed.TriggeringFrameType, Is.EqualTo(0x06UL));
+        Assert.That(parsed.ReasonPhrase, Is.EqualTo("böse Frames"));
     }
 
-    [Theory]
-    [InlineData(0UL, false)]
-    [InlineData(1000UL, true)]
+        [TestCase(0UL, false)]
+    [TestCase(1000UL, true)]
     public void StreamFrame_RoundTrips(ulong offset, bool fin)
     {
         byte[] data = [1, 2, 3, 4, 5];
         var stream = new StreamFrame(StreamId: 4, offset, data, fin);
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(Serialize(stream), out List<Frame> frames));
-        var parsed = Assert.IsType<StreamFrame>(Assert.Single(frames));
-        Assert.Equal(4UL, parsed.StreamId);
-        Assert.Equal(offset, parsed.Offset);
-        Assert.Equal(fin, parsed.Fin);
-        Assert.Equal(data, parsed.Data.ToArray());
+        Assert.That(FrameParser.TryParseAll(Serialize(stream), out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
+        var parsed = Expect.Type<StreamFrame>(Expect.Single(frames));
+        Assert.That(parsed.StreamId, Is.EqualTo(4UL));
+        Assert.That(parsed.Offset, Is.EqualTo(offset));
+        Assert.That(parsed.Fin, Is.EqualTo(fin));
+        Assert.That(parsed.Data.ToArray(), Is.EqualTo(data));
     }
 
-    [Fact]
+    [Test]
     public void PingAndPadding_Mix_Parses()
     {
         byte[] bytes = Serialize(PingFrame.Instance, new PaddingFrame(3), PingFrame.Instance);
 
-        Assert.Equal(FrameParseResult.Ok, FrameParser.TryParseAll(bytes, out List<Frame> frames));
-        Assert.Collection(frames,
-            f => Assert.IsType<PingFrame>(f),
-            f => Assert.Equal(3, Assert.IsType<PaddingFrame>(f).Length),
-            f => Assert.IsType<PingFrame>(f));
+        Assert.That(FrameParser.TryParseAll(bytes, out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
+        Assert.That(frames, Has.Count.EqualTo(3));
+        Assert.That(frames[0], Is.TypeOf<PingFrame>());
+        Assert.That(Expect.Type<PaddingFrame>(frames[1]).Length, Is.EqualTo(3));
+        Assert.That(frames[2], Is.TypeOf<PingFrame>());
     }
 
     // --- Fehlerpfade --------------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public void Parse_UnknownFrameType_ReportsError()
     {
         // 0x40 als 1-Byte-VarInt ist Typ 0 (Padding); nutze 0x1f (reserviert/unbekannt hier).
         byte[] bytes = [0x1f];
-        Assert.Equal(FrameParseResult.UnknownFrameType, FrameParser.TryParseAll(bytes, out _));
+        Assert.That(FrameParser.TryParseAll(bytes, out _), Is.EqualTo(FrameParseResult.UnknownFrameType));
     }
 
-    [Fact]
+    [Test]
     public void Parse_TruncatedCryptoFrame_ReportsEncodingError()
     {
         // CRYPTO, Offset 0, Länge 10, aber nur 2 Datenbytes vorhanden.
         byte[] bytes = [0x06, 0x00, 0x0a, 0xaa, 0xbb];
-        Assert.Equal(FrameParseResult.EncodingError, FrameParser.TryParseAll(bytes, out _));
+        Assert.That(FrameParser.TryParseAll(bytes, out _), Is.EqualTo(FrameParseResult.EncodingError));
     }
 }
