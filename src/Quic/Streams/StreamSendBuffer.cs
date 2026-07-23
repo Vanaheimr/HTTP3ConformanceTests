@@ -17,6 +17,7 @@
 
 #region Usings
 
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 #endregion
@@ -30,7 +31,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 /// </summary>
 public sealed class StreamSendBuffer(ulong streamId)
 {
-    private readonly List<byte> _pending = [];
+    private readonly ByteQueue _pending = new(); // Zero-Alloc-Pfad: O(1)-Konsum statt List<byte>-Shifting
     private ulong _sentOffset;
     private bool _finQueued;
     private bool _finSent;
@@ -93,7 +94,7 @@ public sealed class StreamSendBuffer(ulong streamId)
     {
         if (IsReset)
             return; // nach dem Reset werden keine Daten mehr angenommen
-        _pending.AddRange(data.ToArray());
+        _pending.Append(data);
     }
 
     /// <summary>
@@ -169,9 +170,9 @@ public sealed class StreamSendBuffer(ulong streamId)
         if (count == 0 && !fin)
             return null;
 
-        byte[] data = count > 0 ? _pending.GetRange(0, count).ToArray() : [];
-        if (count > 0)
-            _pending.RemoveRange(0, count);
+        // EINE Kopie je Frame ist nötig: das Frame behält die Bytes für mögliche Retransmissionen.
+        byte[] data = count > 0 ? _pending.Span[..count].ToArray() : [];
+        _pending.Consume(count);
 
         var frame = new StreamFrame(StreamId.Value, _sentOffset, data, fin);
         _sentOffset += (ulong)count;

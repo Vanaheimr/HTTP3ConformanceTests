@@ -161,6 +161,26 @@ public sealed class QuicServerConnection : QuicEndpoint
         InstallInitialKeys(initialKeyDcid);
     }
 
+    /// <summary>
+    /// Server-Seite der Parameter-Prüfung (RFC 9000 §18.2): ein Client DARF die server-only-Parameter
+    /// (original_destination_connection_id, preferred_address, retry_source_connection_id,
+    /// stateless_reset_token) NICHT senden — ihr Empfang ist ein TRANSPORT_PARAMETER_ERROR.
+    /// </summary>
+    internal override string? ValidatePeerTransportParameters(TransportParameters p)
+    {
+        if (base.ValidatePeerTransportParameters(p) is { } baseProblem)
+            return baseProblem;
+        if (p.OriginalDestinationConnectionIdValue is not null)
+            return "client sent original_destination_connection_id";
+        if (p.RetrySourceConnectionIdValue is not null)
+            return "client sent retry_source_connection_id";
+        if (p.StatelessResetTokenValue is not null)
+            return "client sent stateless_reset_token";
+        if (p.SawPreferredAddress)
+            return "client sent preferred_address";
+        return null;
+    }
+
     protected override void HandleUnsupportedVersion(ReadOnlySpan<byte> datagram)
     {
         // Anti-Amplification (RFC 9000 §6.1/§14.1): kein VN auf ein Datagramm, das kleiner ist als das

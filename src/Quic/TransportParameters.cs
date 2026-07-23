@@ -48,6 +48,7 @@ public sealed class TransportParameters
     private const ulong InitialSourceConnectionId = 0x0f;
     private const ulong MaxDatagramFrameSize = 0x20; // RFC 9221 §3
     private const ulong RetrySourceConnectionId = 0x10;
+    private const ulong PreferredAddress = 0x0d;
     private const ulong ResetStreamAt = 0x1d; // draft-ietf-quic-reliable-stream-reset §3 (provisorisch)
 
     /// <summary>
@@ -107,6 +108,20 @@ public sealed class TransportParameters
     public bool PeerSupportsResetStreamAt { get; private set; }
 
     /// <summary>
+    /// Beim Parsen gesetzt: der Peer hat initial_source_connection_id mitgesendet. Die ABWESENHEIT ist
+    /// ein Verbindungsfehler (RFC 9000 §7.3) — und da auch die leere CID ein gültiger Wert ist, braucht
+    /// es dieses Flag zusätzlich zum Wert.
+    /// </summary>
+    public bool SawInitialSourceConnectionId { get; private set; }
+
+    /// <summary>
+    /// Beim Parsen gesetzt: der Peer hat preferred_address (0x0d) mitgesendet. Wir werten den Inhalt
+    /// nicht aus, aber ein SERVER, der diesen server-only-Parameter von einem Client empfängt, MUSS
+    /// mit TRANSPORT_PARAMETER_ERROR schließen (RFC 9000 §18.2).
+    /// </summary>
+    public bool SawPreferredAddress { get; private set; }
+
+    /// <summary>
     /// Serialisiert die Parameter zu den opaken Extension-Bytes.
     /// </summary>
     public byte[] Encode()
@@ -144,7 +159,11 @@ public sealed class TransportParameters
     }
 
     /// <summary>
-    /// Parst die opaken Extension-Bytes. Unbekannte Parameter-IDs werden übersprungen.
+    /// Parst die opaken Extension-Bytes. Unbekannte Parameter-IDs werden übersprungen (Greasing-tauglich).
+    /// <c>false</c> bei syntaktisch oder semantisch ungültigen Parametern — der Aufrufer MUSS das als
+    /// Verbindungsfehler TRANSPORT_PARAMETER_ERROR behandeln (RFC 9000 §7.4): doppelte IDs (§7.4 MUST
+    /// NOT), max_udp_payload_size &lt; 1200, active_connection_id_limit &lt; 2, Stream-Limits &gt; 2^60
+    /// (§4.6), stateless_reset_token ≠ 16 Bytes, Connection IDs &gt; 20 Bytes (§17.2).
     /// </summary>
     public static bool TryDecode(ReadOnlySpan<byte> data, out TransportParameters? parameters)
     {
@@ -155,6 +174,7 @@ public sealed class TransportParameters
             MaxIdleTimeoutMs = 0,
         };
         var reader = new BufferReader(data);
+        var seen = new HashSet<ulong>();
 
         while (!reader.IsEmpty)
         {
@@ -164,27 +184,62 @@ public sealed class TransportParameters
                 !reader.TryReadBytes((int)length, out ReadOnlySpan<byte> value))
                 return false;
 
+            // §7.4: „An endpoint MUST NOT send a parameter more than once" — gilt für ALLE IDs,
+            // auch unbekannte; Duplikate SOLLEN als TRANSPORT_PARAMETER_ERROR behandelt werden.
+            if (!seen.Add(id))
+                return false;
+
+            // Connection-ID-Parameter dürfen höchstens 20 Bytes tragen (RFC 9000 §17.2) — Guard VOR dem
+            // ConnectionId-Konstruktor, damit böse Eingaben nie eine Exception auslösen.
+            if (id is InitialSourceConnectionId or OriginalDestinationConnectionId or RetrySourceConnectionId &&
+                value.Length > ConnectionId.MaxLength)
+                return false;
+
             switch (id)
             {
                 case MaxIdleTimeout: result.MaxIdleTimeoutMs = ReadVarIntValue(value); break;
-                case StatelessResetToken: result.StatelessResetTokenValue = value.ToArray(); break;
-                case MaxUdpPayloadSize: result.MaxUdpPayloadSizeValue = ReadVarIntValue(value); break;
+                case StatelessResetToken:
+                    if (value.Length != 16)
+                        return false; // §18.2: genau 16 Bytes
+                    result.StatelessResetTokenValue = value.ToArray();
+                    break;
+                case MaxUdpPayloadSize:
+                    result.MaxUdpPayloadSizeValue = ReadVarIntValue(value);
+                    if (result.MaxUdpPayloadSizeValue < 1200)
+                        return false; // §18.2: Werte unter 1200 sind ungültig
+                    break;
                 case InitialMaxData: result.InitialMaxDataValue = ReadVarIntValue(value); break;
                 case InitialMaxStreamDataBidiLocal: result.InitialMaxStreamDataBidiLocalValue = ReadVarIntValue(value); break;
                 case InitialMaxStreamDataBidiRemote: result.InitialMaxStreamDataBidiRemoteValue = ReadVarIntValue(value); break;
                 case InitialMaxStreamDataUni: result.InitialMaxStreamDataUniValue = ReadVarIntValue(value); break;
-                case InitialMaxStreamsBidi: result.InitialMaxStreamsBidiValue = ReadVarIntValue(value); break;
-                case InitialMaxStreamsUni: result.InitialMaxStreamsUniValue = ReadVarIntValue(value); break;
-                case ActiveConnectionIdLimit: result.ActiveConnectionIdLimitValue = ReadVarIntValue(value); break;
+                case InitialMaxStreamsBidi:
+                    result.InitialMaxStreamsBidiValue = ReadVarIntValue(value);
+                    if (result.InitialMaxStreamsBidiValue > 1UL << 60)
+                        return false; // §4.6: Stream-Limits über 2^60 sind unzulässig
+                    break;
+                case InitialMaxStreamsUni:
+                    result.InitialMaxStreamsUniValue = ReadVarIntValue(value);
+                    if (result.InitialMaxStreamsUniValue > 1UL << 60)
+                        return false;
+                    break;
+                case ActiveConnectionIdLimit:
+                    result.ActiveConnectionIdLimitValue = ReadVarIntValue(value);
+                    if (result.ActiveConnectionIdLimitValue < 2)
+                        return false; // §18.2: MUSS mindestens 2 sein
+                    break;
                 case MaxDatagramFrameSize: result.MaxDatagramFrameSizeValue = ReadVarIntValue(value); break;
                 case ResetStreamAt:
                     if (value.Length != 0)
                         return false; // draft §3: nicht-leerer Wert ⇒ TRANSPORT_PARAMETER_ERROR
                     result.PeerSupportsResetStreamAt = true;
                     break;
-                case InitialSourceConnectionId: result.InitialSourceConnectionIdValue = new ConnectionId(value); break;
+                case InitialSourceConnectionId:
+                    result.InitialSourceConnectionIdValue = new ConnectionId(value);
+                    result.SawInitialSourceConnectionId = true;
+                    break;
                 case OriginalDestinationConnectionId: result.OriginalDestinationConnectionIdValue = new ConnectionId(value); break;
                 case RetrySourceConnectionId: result.RetrySourceConnectionIdValue = new ConnectionId(value); break;
+                case PreferredAddress: result.SawPreferredAddress = true; break; // Inhalt ignoriert; Rollen-Check im Endpoint
                 default: break; // unbekannt/Grease -> ignorieren
             }
         }

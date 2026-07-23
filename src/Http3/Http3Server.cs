@@ -52,6 +52,7 @@ public sealed class Http3Server : IAsyncDisposable
     private readonly int _requestedPort;
     private readonly List<ServerConn> _connections = [];
     private readonly CancellationTokenSource _cts = new();
+    private readonly UdpBatchSender _sender = new();
 
     private UdpClient? _udp;
     private Task? _loopTask;
@@ -183,10 +184,7 @@ public sealed class Http3Server : IAsyncDisposable
     }
 
     private void Flush(ServerConn conn)
-    {
-        foreach (byte[] datagram in conn.Connection.GetDatagramsToSend())
-            _udp!.Send(datagram, datagram.Length, conn.Endpoint);
-    }
+        => _sender.Send(_udp!.Client, conn.Connection.GetDatagramsToSend(), conn.Endpoint);
 
     /// <summary>
     /// Liest die Ziel-Connection-ID: bei Long Headern aus dem Header selbst, bei Short Headern die

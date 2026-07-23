@@ -75,6 +75,7 @@ src/
   Http3/                 # HTTP/3 (RFC 9114) + Extensions + öffentliche API
     Http3ClientConnection.cs / Http3ServerConnection.cs
     Http3Client.cs / Http3Server.cs   # async API: Task-Fassaden mit Socket + Hintergrund-Pump
+    UdpBatchSender.cs    # UDP-Batching: GSO (Linux) + Einzelsende-Fallback
     Http3Frame.cs / Http3Constants.cs / Http3Message.cs   # Frames, Fehlercodes, Request/Response
     Http3Qpack.cs        # QPACK-Anbindung + Uni-Stream-/Control-Stream-Zustandsmaschine
     Http3MessageValidator.cs  # Malformed-Erkennung (§4.1.2/§4.2/§4.3)
@@ -83,7 +84,7 @@ src/
     WebSocket/           # RFC-6455-Framing (Kopien aus Hermod.HTTP2, nur Namespace getauscht)
     WebTransport/        # WebTransport über HTTP/3 (draft-13): Session/Streams/Capsules/Manager
 tests/
-  Http3.Tests/           # 378 NUnit-Tests, u. a. mit RFC-Testvektoren und „bösen" Roh-QUIC-Peers
+  Http3.Tests/           # 403 NUnit-Tests, u. a. mit RFC-Testvektoren und „bösen" Roh-QUIC-Peers
 samples/
   H3Get/                 # HTTP/3-Client-CLI (GET/POST, Cancel, GOAWAY, 0-RTT, … — s. README)
   H3Server/              # Demo-Server über UDP (CID-Demux, Retry, Stateless Reset, GOAWAY, …)
@@ -97,7 +98,7 @@ HTTP/3-Schicht. Projekt-/Assemblynamen bleiben die kurzen. Usings in #region Usi
 
 ## Phasen
 
-**Status-Legende:** ✅ fertig · 🔶 teilweise · ⬜ offen. Stand: 378 Tests grün, Meilensteine M1–M3
+**Status-Legende:** ✅ fertig · 🔶 teilweise · ⬜ offen. Stand: 403 Tests grün, Meilensteine M1–M3
 erreicht (M1: Live-Handshake gegen cloudflare-quic.com · M2: echtes `GET` → Status 200 + 126 KB HTML ·
 M3: eigener HTTP/3-Server, `H3Get`-Client holt Status 200 über echtes localhost-UDP).
 
@@ -458,6 +459,27 @@ Bewusst offen bleiben nur noch: Server-Push (MAY), klassisches CONNECT-Proxying.
 - ✅ Server-Push weggelassen (MAY; PUSH-bezogene Frames/Streams werden validierend abgewiesen).
 - ✅ **Meilenstein M2 erreicht:** `GET https://cloudflare-quic.com/` liefert Status 200 + 126 KB
   HTML über den eigenen Stack (QPACK-dekodierte Header, Rumpf reassembliert).
+- ✅ **Client-Interop-Matrix — 8 unabhängige QUIC-Implementierungen** (alle live über UDP, mit
+  **voller** Zertifikatskette + Hostname-Prüfung, ohne `-k`; Stand 2026-07-23):
+
+  | Ziel | Fremd-Stack | KEX / Suite / Cert | Ergebnis |
+  |---|---|---|---|
+  | cloudflare-quic.com / cloudflare.com | **quiche** (Cloudflare) | X25519 / AES-128-SHA256 / ECDSA | 200 / 301 |
+  | quic.nginx.org | **nginx QUIC** | X25519 / AES-128-SHA256 / ECDSA P-256 | 200 |
+  | www.google.com | **Google QUIC** | X25519 / AES-128-SHA256 | 200 |
+  | www.facebook.com | **mvfst** (Meta) | X25519 / AES-128-SHA256 | 302 |
+  | www.litespeedtech.com | **lsquic** (LiteSpeed) | X25519 / AES-128-SHA256 | 200 |
+  | outlook.office.com | **msquic** (Microsoft) | **P-256 / AES-256-SHA384 / RSA** | 301 |
+  | caddyserver.com / http3.is | **quic-go** (Go, via Caddy) | X25519 / AES-128 & AES-256 / ECDSA & RSA | 200 |
+  | www.akamai.com | **Akamai QUIC** | X25519 / **AES-256-SHA384** / ECDSA | 403* |
+
+  *403/301/302 sind reguläre HTTP-Antworten (Bot-Schutz/Redirect) — der HTTP/3-Stack läuft in allen
+  Fällen end-to-end durch. Die Matrix deckt beide KEX (X25519 **und** P-256), beide Suiten
+  (AES-128-GCM-SHA256 **und** AES-256-GCM-SHA384) und beide Zertifikatstypen (ECDSA **und** RSA-PSS)
+  ab — outlook.office.com übt als einziges den kompletten P-256 + AES-256 + RSA-Pfad live. (Hinweis:
+  `www.microsoft.com` bietet gar kein HTTP/3 — mit `curl --http3-only` gegengeprüft.) **Jederzeit
+  wiederholbar** per `dotnet run --project samples/H3Get -- --interop`; gepflegt in
+  [INTEROP.md](INTEROP.md) (dort auch der Server-Seiten-`curl`-Nachweis).
 - ✅ **Meilenstein M3 erreicht (über eigenen Client):** Server-Seite gebaut — `TlsServerHandshake`
   (ServerHello/EE/Certificate/CertificateVerify-Signatur/Finished, Client-Finished-Prüfung),
   `ServerCertificate` (self-signed ECDSA P-256 via `CertificateRequest`), `QuicServerConnection`,
@@ -547,15 +569,33 @@ Bewusst offen bleiben nur noch: Server-Push (MAY), klassisches CONNECT-Proxying.
   die Phase; ein gekipptes Bit beim Empfang rotiert Read- (und ggf. Send-)Keys, vorige Read-Keys werden
   kurz für Reordering behalten. `CurrentKeyPhase`/`KeyUpdateCount` durchgereicht. **Live gegen
   cloudflare-quic.com bestätigt** (zweites GET unter rotierten Schlüsseln, `H3Get --key-update`).
-- 🔶 **Transport-Error-Matrix** (RFC 9000 §11/§20.1): Protokollverstöße der Gegenseite → CONNECTION_CLOSE
-  mit korrektem Fehlercode statt Crash/still. Umgesetzt: FRAME_ENCODING_ERROR (Kodier-/Unbekannt-Fehler
-  beim Frame-Parsen), STREAM_LIMIT_ERROR (Stream-Index jenseits des gewährten Limits), FLOW_CONTROL_ERROR
-  und FINAL_SIZE_ERROR (aus `StreamReceiveBuffer` verdrahtet). Nebenbei **PATH_CHALLENGE/PATH_RESPONSE**
-  (RFC 9000 §19.17/§19.18) ergänzt und beantwortet — nötig, damit „unbekanntes Frame = fatal" Cloudflare
-  nicht bricht (live bestätigt). In-process getestet (u. a. STREAM_LIMIT_ERROR end-to-end).
-  ✅ **STREAM_STATE_ERROR** für RESET_STREAM/STOP_SENDING auf falschen Stream-Arten (§19.4/§19.5:
-  send-/receive-only, nie geöffnete lokal-initiierte Streams) — in-process end-to-end getestet.
-  ⬜ verbleibende Codes (connection-level FLOW_CONTROL, TRANSPORT_PARAMETER_ERROR) + Parser-Fuzzer.
+- ✅ **Transport-Error-Matrix** (RFC 9000 §11/§20.1) — KOMPLETT: Protokollverstöße der Gegenseite →
+  CONNECTION_CLOSE mit korrektem Fehlercode statt Crash/still. FRAME_ENCODING_ERROR (Kodier-/Unbekannt-
+  Fehler beim Frame-Parsen), STREAM_LIMIT_ERROR, stream-level FLOW_CONTROL_ERROR und FINAL_SIZE_ERROR
+  (aus `StreamReceiveBuffer`), STREAM_STATE_ERROR (RESET_STREAM/STOP_SENDING auf falschen Stream-Arten,
+  §19.4/§19.5). Nebenbei **PATH_CHALLENGE/PATH_RESPONSE** (§19.17/§19.18) — live gegen Cloudflare nötig.
+  - ✅ **Connection-level FLOW_CONTROL_ERROR** (§4.1): die Summe der höchsten empfangenen Offsets ALLER
+    Streams (bei RESET zählt die Final Size, §4.5) wird nach jedem STREAM-/RESET-Frame gegen das per
+    initial_max_data/MAX_DATA gewährte Verbindungsfenster geprüft. End-to-end getestet (Test-Seam
+    `OverrideConnSendLimitForTest` hebelt den braven Client aus) + Gegenprobe im Fenster.
+  - ✅ **TRANSPORT_PARAMETER_ERROR** (§7.3/§7.4/§18.2): `TryDecode` lehnt ab — doppelte IDs (auch
+    unbekannte), max_udp_payload_size < 1200, active_connection_id_limit < 2, Stream-Limits > 2^60,
+    stateless_reset_token ≠ 16 B, CIDs > 20 B (vorher warf hier der ConnectionId-ctor — Fuzzer-Fund!).
+    **§7.3-Authentifizierung** via `ValidatePeerTransportParameters` (Endpoint + Rollen-Overrides):
+    initial_source_connection_id Pflicht + == Peer-SCID; Client prüft original_destination_connection_id
+    (Pflicht + == erste DCID) und retry_source_connection_id (GENAU bei Retry, == Retry-SCID); Server
+    lehnt server-only-Parameter vom Client ab (ODCID/RSCID/stateless_reset_token/preferred_address).
+    End-to-end: „böser" Client mit ODCID ⇒ Server schließt 0x08, Client liest das Close.
+  - ✅ **CONNECTION_CLOSE-Zustellung im Handshake repariert** (§10.2.3, vom neuen Test gefunden): vor
+    bestätigtem Handshake ging das Close nur auf dem höchsten Level raus (ggf. 1-RTT) — ein Peer mit
+    nur Initial-Keys konnte es NIE lesen. Jetzt: 1-RTT-Close erst nach Bestätigung, vorher koalesziert
+    Initial+Handshake (Rückfall 1-RTT, wenn die Long-Header-Keys schon verworfen sind).
+  - ✅ **Parser-Fuzzer** (deterministisch, feste Seeds ⇒ reproduzierbar): FrameParser, TransportParameters
+    und Paket-Header-Parser werfen auf zufälligen UND mutierten gültigen Bytes (Bit-Flips/Kürzungen)
+    NIEMALS — Fehler kommen als sauberes false/EncodingError. 4 Fuzz-Läufe à 2000–4000 Iterationen.
+  - 11 neue Tests (TransportErrorMatrixTests + ParserFuzzTests). **Live:** Cloudflare-GET + 0-RTT,
+    eigener Server mit --retry (RSCID-Pfad) und curl --http3 laufen mit den scharfen Prüfungen
+    regressionsfrei durch.
 - ✅ **RESET_STREAM / STOP_SENDING** (RFC 9000 §2.4, §3.5, §19.4/§19.5): `QuicStream.Reset(code)` bricht
   die Sendeseite ab (ungesendete Daten verworfen, Final Size = gesendete Bytes nach §4.5, danach keine
   STREAM-(Re)Transmissionen mehr); `AbortRead(code)` sendet STOP_SENDING. Empfang: RESET_STREAM validiert
@@ -566,12 +606,39 @@ Bewusst offen bleiben nur noch: Server-Push (MAY), klassisches CONNECT-Proxying.
   (7 Tests: Puffer-Units, kopierter Code end-to-end, State-Fehler, HTTP/3-Cancellation, Loss).
 - Grease: reservierte Frame-/Stream-Typen der Gegenseite tolerieren.
 
-### 🔶 Phase 9 — Performance & Nice-to-have (offenes Ende)
-*(0-RTT und die PQ-/Krypto-Kür sind hier historisch einsortiert und längst ✅; die async API ebenfalls;
-wirklich offen sind die Performance-Punkte: Zero-Allocation-Pfad, UDP-Batching, Window-Auto-Tuning.)*
-- Zero-Allocation-Pfad: `SocketAddress`-basierte Sende-/Empfangsschleife, Buffer-Pooling,
-  `IBufferWriter<byte>`-Pipeline.
-- UDP-Batching: mehrere Datagramme pro Syscall; GSO/GRO (Linux) hinter Abstraktion.
+### ✅ Phase 9 — Performance & Nice-to-have — ABGESCHLOSSEN
+*(0-RTT und die PQ-/Krypto-Kür sind hier historisch einsortiert und längst ✅; die async API, der
+Zero-Allocation-Pfad, UDP-Batching und Window-Auto-Tuning ebenfalls.)*
+- ✅ **Zero-Allocation-Pfad (Hot Paths)**: die pro Pump-Durchlauf teuren `List<byte>`-Puffer (deren
+  `RemoveRange(0, n)` bei jedem Konsum ALLE Restbytes verschob — O(n²) über einen Transfer — und deren
+  `ToArray()` je Durchlauf den ganzen Inhalt kopierte) durch **`ByteQueue`** ersetzt (Quic.Core:
+  Head/Tail-Ringpuffer, amortisiert O(1) Anhängen/Konsumieren, Backing-Store wiederverwendet, Auslesen
+  als `Span`/`Memory` ohne Kopie). Betroffen: `StreamSendBuffer` sowie alle HTTP/3-Stream-/Capsule-/
+  QPACK-Uni-Stream-Puffer in `Http3ClientConnection`/`Http3ServerConnection`/`Http3Qpack`.
+  `StreamReceiveBuffer.ReadAvailable` baut das Ergebnis jetzt in EINEM vorab dimensionierten Array
+  (kein `MemoryStream`) und hat einen allokationsfreien Leer-Fast-Path. **Messung** (In-Process,
+  `GC.GetAllocatedBytesForCurrentThread`, single-threaded ⇒ exakt): 300-KB-Download von **51,3 MiB auf
+  7,0 MiB** gesenkt (7,3×; ~25 statt 179 B/Nutzbyte), Zeit ~55 → ~40 ms. Mess-Harness
+  `PerformanceBenchTests` mit großzügiger Regressionswache (Download < 20 MiB).
+- ✅ **UDP-Batching (GSO)**: `GsoBatcher` (Quic.Core) gruppiert die Datagramme eines Pump-Durchlaufs in
+  UDP_SEGMENT-Batches — maximaler Lauf gleich großer Datagramme, optional plus ein kleineres
+  Schluss-Segment (die Kernel-Regel), gedeckelt auf 64 Segmente / 65535 B. `UdpBatchSender` (Http3)
+  sendet auf **Linux** je Batch mit einem einzigen `sendmsg` (Socket-Option UDP_SEGMENT via
+  `SetRawSocketOption`, best-effort mit Fallback bei Ablehnung), auf allen anderen Plattformen eine
+  schlanke Einzelsende-Schleife — auf dem Draht identisch, GSO spart nur Syscalls. Genutzt von den
+  async-Fassaden `Http3Client`/`Http3Server`. Die reine Gruppierung ist deterministisch getestet
+  (Rekonstruktion = ursprüngliche Datagramm-Folge, Segment-/Byte-Caps).
+- ✅ **Window-Auto-Tuning (empfangsseitige Flow-Control-Fenster nach BDP)**: ein festes Fenster
+  drosselt eine schnelle Verbindung auf ≈ Fenster/RTT — das BDP wächst mit der RTT. `ReceiveWindowTuner`
+  (Quic.Streams) wendet die Chromium/quiche-Heuristik an: bei JEDEM fälligen Fenster-Update (Kredit
+  unter halbem Fenster) wird die Zeit seit dem letzten Update gemessen; ist sie < 2×SmoothedRtt, war
+  der Sender schneller als eine RTT am Fensterrand ⇒ Fenster verdoppeln (bis 16 MiB je Stream / 24 MiB
+  je Verbindung). Verdrahtet in `CollectFlowControlFrames` — je Stream (`StreamReceiveBuffer.WindowTuner`)
+  und für das Verbindungsfenster (`_connWindowTuner`); Startwerte bleiben die konfigurierten
+  initial_max_data*. 5 Tests (Heuristik: Wachstum bei schneller/kein Wachstum bei langsamer Drainage,
+  Deckelung, Limit ≥ Startwert; QUIC-Ende-zu-Ende: Verbindungsfenster wächst unter Dauertransfer).
+  **Live:** Cloudflare-GET auch mit `--small` (48-KiB-Startfenster) über echte RTT, curl 200-KB-POST-
+  Upload byte-genau geechot.
 - ✅ **async API — Task-basierte Fassaden über echten Sockets** (`src/Http3/Http3Client.cs` /
   `Http3Server.cs`): der deterministische, transport-agnostische Kern bleibt unangetastet (alle Tests
   weiter synchron in-process); obendrauf besitzen die Fassaden den UDP-Socket und eine Hintergrund-
@@ -679,9 +746,10 @@ wirklich offen sind die Performance-Punkte: Zero-Allocation-Pfad, UDP-Batching, 
    Mindestens: packet_sent/received, frames, loss, recovery-Metriken.
 4. **Lossy-UDP-Proxy** im Testprojekt (Drop/Reorder/Duplicate/Delay konfigurierbar,
    seed-basiert deterministisch) für Recovery-Tests ohne externe Tools.
-5. **Interop-Ziele:** cloudflare-quic.com ✅, quic.nginx.org, www.google.com (Client-Seite);
-   `curl --http3` ✅ (ngtcp2/LibreSSL unter Windows + OpenSSL-QUIC unter WSL/Debian),
-   Firefox/Chrome (Server-Seite). Später ggf. quic-interop-runner-Testfälle manuell nachstellen.
+5. **Interop-Ziele (Client-Seite) ✅ 8 Stacks:** quiche (Cloudflare), nginx, Google QUIC, mvfst (Meta),
+   lsquic (LiteSpeed), msquic (Microsoft/outlook), quic-go (Caddy), Akamai — je Status 2xx/3xx mit voller
+   Cert-Prüfung. **Server-Seite:** `curl --http3` ✅ (ngtcp2/LibreSSL unter Windows + OpenSSL-QUIC unter
+   WSL/Debian); Firefox/Chrome offen (brauchen vertrauenswürdige Zertifikate).
 6. **State-Machine-Tests in-process:** eigener Client gegen eigenen Server ohne echtes
    Netzwerk (In-Memory-„UDP"), damit Handshake-Tests in Millisekunden laufen.
 
@@ -788,11 +856,13 @@ WebTransport (draft-13) — siehe Phase 7.)*
 3. ✅ ClientHello bauen, Initial-Paket an cloudflare-quic.com senden, ServerHello zurückparsen —
    ab hier gibt es bei jedem Schritt echtes Server-Feedback statt Trockenübungen.
 
-**Als Nächstes (Stand 2026-07-23):** Die Phasen 0–7 sind komplett (RFC-9114-Feature-Audit
-abgeschlossen). Offen sind nur noch der Rest der Transport-Error-Matrix in Phase 8
-(connection-level FLOW_CONTROL_ERROR, TRANSPORT_PARAMETER_ERROR, Parser-Fuzzer) sowie
-der Phase-9-Rest (Performance: Zero-Allocation-Pfad, UDP-Batching, Window-Auto-Tuning — die
-async API `Http3Client`/`Http3Server` und der `curl --http3`-Interop-Test sind umgesetzt).
+**Als Nächstes (Stand 2026-07-23):** ALLE Phasen (0–9) sind abgeschlossen — RFC-9114-Feature-Audit,
+Transport-Error-Matrix, alle Extensions (Priorities/WebSockets/Datagramme/WebTransport komplett inkl.
+RESET_STREAM_AT), PQ-Krypto (ML-KEM-Hybrid + ML-DSA), async API, curl-Interop und die Performance-Kür
+(Zero-Alloc, UDP-Batching/GSO, Window-Auto-Tuning). Die Client-Interop ist gegen **8 unabhängige
+QUIC-Stacks** bestätigt (quiche/nginx/Google/mvfst/lsquic/msquic/quic-go/Akamai — Matrix bei M2).
+Verbleibende Kür: Browser-Interop (Firefox/Chrome, brauchen vertrauenswürdige Zertifikate) oder die
+Rückführung nach Hermod (Deduplizierung der WebSocket-Kopien).
 
 ## Referenzen
 

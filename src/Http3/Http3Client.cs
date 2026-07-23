@@ -57,6 +57,7 @@ public sealed class Http3Client : IAsyncDisposable
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
     private readonly Dictionary<ulong, TaskCompletionSource<Http3Response>> _pending = [];
+    private readonly UdpBatchSender _sender = new();
 
     private UdpClient? _udp;
     private Task? _pumpTask;
@@ -257,8 +258,8 @@ public sealed class Http3Client : IAsyncDisposable
     {
         if (_udp is null)
             return;
-        foreach (byte[] datagram in _connection.GetDatagramsToSend())
-            _udp.Send(datagram);
+        // Verbundener Socket (remote = null) ⇒ Send; auf Linux via GSO gebündelt (RFC-neutral, nur Syscalls).
+        _sender.Send(_udp.Client, _connection.GetDatagramsToSend(), remote: null);
     }
 
     /// <summary>

@@ -4,7 +4,8 @@ Ein HTTP/3-Stack (QUIC + TLS 1.3 + HTTP/3) in reinem C# auf .NET 10, direkt auf 
 aufsetzend – **ohne große Abhängigkeiten**, nur die .NET Base Class Library.
 
 Der Implementierungsplan mit allen Phasen, Meilensteinen und der Krypto-Roadmap steht in
-[PLAN.md](PLAN.md).
+[PLAN.md](PLAN.md); die Interop-Nachweise (8 fremde QUIC-Stacks) und wie man sie **jederzeit
+wiederholt** in [INTEROP.md](INTEROP.md) (`dotnet run --project samples/H3Get -- --interop`).
 
 ## Status
 
@@ -36,7 +37,9 @@ Der Implementierungsplan mit allen Phasen, Meilensteinen und der Krypto-Roadmap 
 | reset-at | **RESET_STREAM_AT** (draft-ietf-quic-reliable-stream-reset): Stream-Reset mit garantierter Teilzustellung (`reset_stream_at`-TP + Frame 0x24) | ✅ fertig |
 | async | **async API**: `Http3Client`/`Http3Server` — Task-Fassaden mit eigenem UDP-Socket + Hintergrund-Pump (`ConnectAsync`/`GetAsync`/`SendAsync`, `Http3RequestException`, CID-Demux inkl. Migration) | ✅ fertig |
 | curl | **`curl --http3`-Interop (Server-Seite)**: ngtcp2/LibreSSL (Windows-curl 8.21) **und** OpenSSL-QUIC (WSL/Debian-curl 8.14) — GET/POST/300 KB/103+Trailer | ✅ fertig |
-| 9 | Performance & Nice-to-have (Zero-Alloc, UDP-Batching), Rest-Fehlercodes | offen |
+| 8+ | **Transport-Error-Matrix komplett**: connection-level FLOW_CONTROL_ERROR, TRANSPORT_PARAMETER_ERROR (§7.3-Authentifizierung + §7.4/§18.2-Wertebereiche), §10.2.3-Close-Zustellung, Parser-Fuzzer | ✅ fertig |
+| 9 | **Performance**: Zero-Alloc-Hot-Paths (`ByteQueue`, 300-KB-Download 51→7 MiB), UDP-Batching (GSO via `UdpBatchSender`), Window-Auto-Tuning (`ReceiveWindowTuner`, BDP) | ✅ fertig |
+| interop | **Client-Interop gegen 8 fremde QUIC-Stacks**: quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — je 2xx/3xx mit voller Cert-Prüfung | ✅ fertig |
 
 ### X25519 & HelloRetryRequest (Interop)
 
@@ -46,6 +49,12 @@ Der Implementierungsplan mit allen Phasen, Meilensteinen und der Krypto-Roadmap 
   `message_hash`-Transcript-Behandlung — in-process getestet (Client bietet nur P-256, Server verlangt
   X25519 → HRR → Abschluss mit X25519)
 - **Live:** gegen `cloudflare-quic.com` wird **X25519** ausgehandelt (`Handshake abgeschlossen (Gruppe X25519)`)
+- **Client-Interop-Matrix (live, volle Cert-Prüfung ohne `-k`):** der Client holt Status 2xx/3xx von **8
+  unabhängigen QUIC-Stacks** — quiche (Cloudflare), nginx, Google, mvfst (Meta), lsquic (LiteSpeed),
+  **msquic** (Microsoft, `outlook.office.com` — P-256 + AES-256 + RSA), quic-go (Caddy) und Akamai
+  (AES-256). Deckt beide KEX (X25519 + P-256), beide Suiten (AES-128/256-GCM) und beide Cert-Typen
+  (ECDSA + RSA-PSS) live ab. Ganze Tabelle + Ein-Befehl-Wiederholung: **[INTEROP.md](INTEROP.md)**
+  (`dotnet run --project samples/H3Get -- --interop`).
 - **X448** (RFC 7748, Curve448, Named Group 0x001e): Schlüsselaustausch-Primitiv aus BouncyCastle
   (`X448KeyExchange`, wie X25519 gekapselt), 56-Byte-Key/-Secret. RFC 7748 §5.2 byte-genau; die Named Groups
   sind durch die ganze API durchgereicht (`keyExchangeGroups`/`preferredGroups`). Live über UDP:
@@ -498,7 +507,7 @@ Bausteine in `src/Quic/Crypto/`: `TlsHkdf`, `TrafficKeys`, `InitialSecrets`,
 ## Struktur
 
 ```
-src/Quic.Core/     Gemeinsame Primitive (VarInt aus RFC 9000 §16, Buffer-Reader/Writer) — von allen Schichten genutzt
+src/Quic.Core/     Gemeinsame Primitive (VarInt aus RFC 9000 §16, Buffer-Reader/Writer, ByteQueue/GsoBatcher) — von allen Schichten genutzt
 src/Quic.Tls/      QUIC-TLS-Bindung: TLS 1.3 im QUIC-Profil (Messages, Key-Schedule, ECDHE), kein
                    Record-Layer — ohne Rückverweis auf Quic (referenziert nur Quic.Core)
 src/Quic/          QUIC-Transport (Crypto, Packets, Frames, Streams, Connection); nutzt Quic.Tls
@@ -506,9 +515,9 @@ src/Http3.Qpack/   QPACK (Static Table, Huffman, Encoder/Decoder)
 src/Http3/         HTTP/3 (Frames, Client-/Server-Verbindung, Malformed-Validierung, Priorities,
                    Extended-CONNECT-Tunnel) + WebSocket/ (RFC 6455) + WebTransport/ (draft-13)
                    + async API (Http3Client/Http3Server: Task-Fassaden mit Socket + Hintergrund-Pump)
-tests/Http3.Tests/ NUnit-Tests (378), u. a. mit RFC-Testvektoren und „bösen" Roh-QUIC-Peers
+tests/Http3.Tests/ NUnit-Tests (403), u. a. mit RFC-Testvektoren und „bösen" Roh-QUIC-Peers
 samples/H3Get/     HTTP/3-Client: GET/POST gegen cloudflare-quic.com oder den eigenen Server
-                   (u. a. --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
+                   (u. a. --interop [Matrix gegen 8 fremde Stacks], --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
                    --rotate-cid, --qpack-dynamic, --mlkem, --x448, --chacha20, --loss, --hold, -k)
 samples/H3Server/  HTTP/3-Server: self-signed Cert, Handler über UDP (Routen: /, /big, POST /echo,
                    /hints mit 103 + Trailer; CONNECT websocket/datagram-echo, WebTransport /wt;

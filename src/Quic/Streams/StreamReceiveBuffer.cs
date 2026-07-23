@@ -66,6 +66,13 @@ public sealed class StreamReceiveBuffer
     public ulong MaxData { get; set; } = ulong.MaxValue;
 
     /// <summary>
+    /// Auto-Tuning des empfangsseitigen Stream-Fensters (Phase 9). <c>null</c> = festes Fenster (etwa
+    /// bei Streams ohne gesetztes Limit); wird vom Endpoint beim Öffnen mit dem passenden Startwert und
+    /// Wachstumslimit belegt.
+    /// </summary>
+    public ReceiveWindowTuner? WindowTuner { get; set; }
+
+    /// <summary>
     /// Für die Flow-Control-Abrechnung „verbrauchter" Offset. Nach einem RESET(_AT) zählt die Final Size
     /// vollständig als verbraucht (§4.5), auch wenn der Lese-Offset (bei RESET_STREAM_AT) noch bei der
     /// Reliable Size verharrt, während die Anwendung die zuverlässig zugestellten Bytes abholt.
@@ -284,25 +291,47 @@ public sealed class StreamReceiveBuffer
     /// <summary>
     /// Liefert den nächsten zusammenhängenden, noch nicht gelesenen Abschnitt und rückt den
     /// Lese-Offset vor. Leeres Array, wenn (noch) keine zusammenhängenden Daten anliegen.
+    /// Zero-Alloc-Pfad: der häufige Leer-Fall (jeder Pump-Durchlauf fragt jeden Stream) kostet
+    /// nichts; sonst wird die Gesamtlänge vorab bestimmt und genau EIN Ergebnis-Array gefüllt.
     /// </summary>
     public byte[] ReadAvailable()
     {
-        using var ms = new MemoryStream();
+        if (_fragments.Count == 0)
+            return [];
+
+        // Erster Durchlauf: zusammenhängende Länge ab dem Lese-Offset bestimmen (ohne zu kopieren).
+        ulong cursor = _readOffset;
+        int total = 0;
+        foreach ((ulong start, byte[] data) in _fragments)
+        {
+            if (start > cursor)
+                break; // Lücke
+            ulong end = start + (ulong)data.Length;
+            if (end > cursor)
+                total += (int)(end - cursor);
+            cursor = Math.Max(cursor, end);
+        }
+        if (total == 0)
+            return [];
+
+        // Zweiter Durchlauf: genau ein Ergebnis-Array füllen, konsumierte Fragmente entfernen.
+        byte[] result = new byte[total];
+        int written = 0;
         while (_fragments.Count > 0)
         {
             (ulong start, byte[] data) = First();
             if (start > _readOffset)
-                break; // Lücke
-
+                break;
             int skip = (int)(_readOffset - start);
             if (skip < data.Length)
             {
-                ms.Write(data, skip, data.Length - skip);
+                data.AsSpan(skip).CopyTo(result.AsSpan(written));
+                written += data.Length - skip;
                 _readOffset = start + (ulong)data.Length;
             }
             _fragments.Remove(start);
         }
-        return ms.ToArray();
+        return result;
     }
 
     private (ulong, byte[]) First()

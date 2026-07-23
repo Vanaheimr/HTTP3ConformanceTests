@@ -39,6 +39,7 @@ public sealed class QuicClientConnection : QuicEndpoint
     private readonly ConnectionId _originalDcid;
     private bool _dcidLearned;
     private bool _retryHandled;
+    private ConnectionId _retryScid; // SCID des Retry-Pakets (für die §7.3-Prüfung von retry_source_connection_id)
     private List<uint> _offeredVersions = [];
     private readonly List<Frame> _applicationFrames = [];
 
@@ -201,9 +202,36 @@ public sealed class QuicClientConnection : QuicEndpoint
             return;
 
         _retryHandled = true;
+        _retryScid = retrySource;            // für die §7.3-Prüfung von retry_source_connection_id
         _dcidLearned = true;                 // DCID nur einmal ändern (RFC 9000 §7.2): jetzt = Retry-SCID
         ApplyRetry(retrySource, token);      // neue Initial-Schlüssel + Token + CRYPTO-Offset 0
         _tls.ResendClientHello();
+    }
+
+    /// <summary>
+    /// Client-Seite der Parameter-Authentifizierung (RFC 9000 §7.3): zusätzlich zur Basisprüfung MUSS
+    /// der Server original_destination_connection_id senden (= die DCID unseres allerersten Initials)
+    /// und retry_source_connection_id GENAU DANN, wenn ein Retry stattfand (mit der SCID des
+    /// Retry-Pakets) — das verhindert, dass ein Angreifer Retry-Pakete fälscht oder unterschlägt.
+    /// </summary>
+    internal override string? ValidatePeerTransportParameters(TransportParameters p)
+    {
+        if (base.ValidatePeerTransportParameters(p) is { } baseProblem)
+            return baseProblem;
+        if (p.OriginalDestinationConnectionIdValue is not { } odcid)
+            return "missing original_destination_connection_id"; // §7.3: Abwesenheit vom Server ist fatal
+        if (!odcid.Span.SequenceEqual(_originalDcid.Span))
+            return "original_destination_connection_id mismatch";
+        if (_retryHandled)
+        {
+            if (p.RetrySourceConnectionIdValue is not { } rscid)
+                return "missing retry_source_connection_id after Retry";
+            if (!rscid.Span.SequenceEqual(_retryScid.Span))
+                return "retry_source_connection_id mismatch";
+        }
+        else if (p.RetrySourceConnectionIdValue is not null)
+            return "retry_source_connection_id without Retry";
+        return null;
     }
 
     protected override void OnHandshakeDoneReceived() => HandshakeConfirmed = true;

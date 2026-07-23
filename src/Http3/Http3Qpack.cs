@@ -190,7 +190,7 @@ internal sealed class Http3Qpack
 
             byte[] chunk = stream.Read();
             if (chunk.Length > 0)
-                peer.Buffer.AddRange(chunk);
+                peer.Buffer.Append(chunk);
             RoutePeerStream(peer);
 
             // RFC 9114 §6.2.1 / RFC 9204 §4.2: Control-, Encoder- und Decoder-Stream dürfen NIE enden —
@@ -210,11 +210,11 @@ internal sealed class Http3Qpack
         // Stream-Typ (erster VarInt) einmalig lesen.
         if (peer.Type is null)
         {
-            var reader = new BufferReader(peer.Buffer.ToArray());
+            var reader = new BufferReader(peer.Buffer.Span);
             if (!reader.TryReadVarInt(out ulong type))
                 return; // Typ-VarInt noch unvollständig
             peer.Type = type;
-            peer.Buffer.RemoveRange(0, reader.Position);
+            peer.Buffer.Consume(reader.Position);
 
             // Stream-Erzeugungsregeln (einmalig beim Lesen des Typs prüfen):
             switch (type)
@@ -247,34 +247,33 @@ internal sealed class Http3Qpack
         switch (peer.Type)
         {
             case Http3StreamType.QpackEncoder:
-                byte[] pending = peer.Buffer.ToArray();
-                if (_decoder.ProcessEncoderInstructions(pending, out int consumed))
-                    peer.Buffer.RemoveRange(0, consumed);
+                if (_decoder.ProcessEncoderInstructions(peer.Buffer.Span, out int consumed))
+                    peer.Buffer.Consume(consumed);
                 break;
 
             case Http3StreamType.QpackDecoder: // Section-Acks / Insert Count Increment des Peers.
-                int ackConsumed = _encoder.ProcessDecoderInstructions(peer.Buffer.ToArray());
-                peer.Buffer.RemoveRange(0, ackConsumed);
+                int ackConsumed = _encoder.ProcessDecoderInstructions(peer.Buffer.Span);
+                peer.Buffer.Consume(ackConsumed);
                 break;
 
             case Http3StreamType.Control:
                 if (peer.Buffer.Count > 0 &&
-                    Http3Frames.TryReadAll(peer.Buffer.ToArray(), out List<Http3Frame> frames, out int used))
+                    Http3Frames.TryReadAll(peer.Buffer.Memory, out List<Http3Frame> frames, out int used))
                 {
                     foreach (Http3Frame frame in frames)
                         if (!HandleControlFrame(frame))
                             return; // Verbindungsfehler gemeldet
-                    peer.Buffer.RemoveRange(0, used);
+                    peer.Buffer.Consume(used);
                 }
                 break;
 
             case WebTransport.WebTransportConstants.UniStreamType when OnWebTransportUniStream is not null:
                 // WebTransport-Uni-Stream (draft §4.1): 0x54 ‖ Session-ID ‖ Nutzdaten. Session-ID lesen,
                 // dann den Stream an den WebTransport-Manager übergeben (der liest fortan direkt).
-                var wtReader = new BufferReader(peer.Buffer.ToArray());
+                var wtReader = new BufferReader(peer.Buffer.Span);
                 if (!wtReader.TryReadVarInt(out ulong wtSessionId))
                     break; // Session-ID noch unvollständig
-                byte[] wtLeftover = peer.Buffer.Skip(wtReader.Position).ToArray();
+                byte[] wtLeftover = peer.Buffer.Span[wtReader.Position..].ToArray();
                 _webTransportUniStreams.Add(peer.Stream.Id.Value); // ab jetzt der WebTransport-Manager
                 _peerStreams.Remove(peer.Stream.Id.Value);
                 OnWebTransportUniStream(peer.Stream, wtSessionId, wtLeftover);
@@ -501,6 +500,6 @@ internal sealed class Http3Qpack
     {
         public QuicStream Stream { get; } = stream;
         public ulong? Type { get; set; }
-        public List<byte> Buffer { get; } = [];
+        public ByteQueue Buffer { get; } = new();
     }
 }

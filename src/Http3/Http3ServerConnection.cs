@@ -492,7 +492,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
 
             byte[] chunk = state.Stream.Read();
             if (chunk.Length > 0)
-                state.Buffer.AddRange(chunk);
+                state.Buffer.Append(chunk);
 
             // WebTransport-CONNECT-Stream (draft §6/§5.6): nach der 2xx-Antwort tragen die DATA-Frames
             // Capsules (Session-Steuerung/Flow Control). Nicht als HTTP-Frames weiterverarbeiten.
@@ -517,11 +517,11 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             }
 
             if (state.Buffer.Count > 0 &&
-                Http3Frames.TryReadAll(state.Buffer.ToArray(), out List<Http3Frame> frames, out int consumed))
+                Http3Frames.TryReadAll(state.Buffer.Memory, out List<Http3Frame> frames, out int consumed))
             {
                 foreach (Http3Frame frame in frames)
                     state.Pending.Enqueue(frame);
-                state.Buffer.RemoveRange(0, consumed);
+                state.Buffer.Consume(consumed);
             }
 
             // Frame-Zustandsmaschine des Request-Streams (RFC 9114 §4.1, §7.2): HEADERS, dann Content
@@ -598,7 +598,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     /// </summary>
     private WtBidiResult ClassifyWebTransportBidi(RequestState state)
     {
-        var reader = new BufferReader(state.Buffer.ToArray());
+        var reader = new BufferReader(state.Buffer.Span);
         if (!reader.TryReadVarInt(out ulong signal))
             return WtBidiResult.NeedMore; // erstes VarInt noch unvollständig
         if (signal != WebTransportConstants.BidiStreamSignal)
@@ -606,7 +606,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         if (!reader.TryReadVarInt(out ulong sessionId))
             return WtBidiResult.NeedMore; // Session-ID noch unvollständig
 
-        byte[] leftover = state.Buffer.Skip(reader.Position).ToArray();
+        byte[] leftover = state.Buffer.Span[reader.Position..].ToArray();
         _webTransport.ClaimStream(state.Stream, sessionId, leftover, bidirectional: true);
         return WtBidiResult.Claimed;
     }
@@ -618,19 +618,19 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     private void ProcessWebTransportConnectStream(RequestState state, WebTransportSession session)
     {
         if (state.Buffer.Count > 0 &&
-            Http3Frames.TryReadAll(state.Buffer.ToArray(), out List<Http3Frame> frames, out int consumed))
+            Http3Frames.TryReadAll(state.Buffer.Memory, out List<Http3Frame> frames, out int consumed))
         {
             foreach (Http3Frame frame in frames)
                 if (frame.Type == Http3FrameType.Data)
-                    state.CapsuleBuffer.AddRange(frame.Payload.ToArray());
-            state.Buffer.RemoveRange(0, consumed);
+                    state.CapsuleBuffer.Append(frame.Payload.Span);
+            state.Buffer.Consume(consumed);
         }
         if (state.CapsuleBuffer.Count > 0)
         {
-            List<WebTransportCapsule> capsules = WebTransportCapsule.ReadAll(state.CapsuleBuffer.ToArray(), out int used);
+            List<WebTransportCapsule> capsules = WebTransportCapsule.ReadAll(state.CapsuleBuffer.Memory, out int used);
             foreach (WebTransportCapsule capsule in capsules)
                 session.HandleCapsule(capsule);
-            state.CapsuleBuffer.RemoveRange(0, used);
+            state.CapsuleBuffer.Consume(used);
         }
         if ((state.Stream.IsReceiveComplete || state.Stream.IsResetByPeer) && !session.IsClosed)
             session.OnConnectStreamClosed(); // §6: CONNECT-Stream geschlossen ⇒ Session beendet
@@ -683,7 +683,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         if (state.WebTransportSession is not null)
         {
             if (frame.Type == Http3FrameType.Data)
-                state.CapsuleBuffer.AddRange(frame.Payload.ToArray());
+                state.CapsuleBuffer.Append(frame.Payload.Span);
             return true;
         }
 
@@ -1051,7 +1051,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     private sealed class RequestState(QuicStream stream)
     {
         public QuicStream Stream { get; } = stream;
-        public List<byte> Buffer { get; } = [];
+        public ByteQueue Buffer { get; } = new();
         public Queue<Http3Frame> Pending { get; } = new();
         public Http3Request? Request { get; set; }
         public List<byte> Body { get; } = [];             // eingesammelte DATA-Frame-Nutzlasten (Request-Rumpf)
@@ -1061,7 +1061,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         public bool PriorityUpdated { get; set; }  // PRIORITY_UPDATE empfangen ⇒ übertrumpft den Header (RFC 9218 §7)
         public Http3Tunnel? Tunnel { get; set; }   // Extended-CONNECT-Tunnel (RFC 8441/9220), sonst null
         public WebTransportSession? WebTransportSession { get; set; } // WebTransport-Session (draft-webtrans-http3)
-        public List<byte> CapsuleBuffer { get; } = []; // Capsule-Protokoll-Bytes des WT-CONNECT-Streams
+        public ByteQueue CapsuleBuffer { get; } = new(); // Capsule-Protokoll-Bytes des WT-CONNECT-Streams
         public bool Responded { get; set; }
     }
 }

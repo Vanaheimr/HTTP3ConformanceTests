@@ -50,6 +50,11 @@ string? postBody = args.FirstOrDefault(a => a.StartsWith("--post=", StringCompar
 var rng = new Random(1234);
 int dropped = 0;
 
+// --interop: die Client-Interop-Matrix gegen fremde öffentliche HTTP/3-Server durchprüfen (jeweils
+// frische Verbindung, VOLLE Zertifikatskette). Ein Befehl, jederzeit wiederholbar — s. INTEROP.md.
+if (args.Contains("--interop"))
+    return RunInteropMatrix();
+
 Console.WriteLine($"== HTTP/3 from Scratch — GET https://{host}{path}"
                   + (lossPercent > 0 ? $" (künstlicher Paketverlust {lossPercent} %)" : "") + " ==\n");
 
@@ -632,3 +637,115 @@ static string ExtractTitle(string html)
     int b = html.IndexOf("</title>", StringComparison.OrdinalIgnoreCase);
     return a >= 0 && b > a ? html[(a + 7)..b].Trim() : "(kein Titel)";
 }
+
+// ---- Interop-Matrix (--interop) -------------------------------------------------------------
+// Prüft den Client gegen mehrere öffentliche HTTP/3-Server unterschiedlicher QUIC-Stacks — jeder mit
+// eigener frischer Verbindung und VOLLER Zertifikatsprüfung (Kette + Hostname). Kein -k. Wiederholbar
+// per `dotnet run --project samples/H3Get -- --interop`. Details/Historie: INTEROP.md.
+static int RunInteropMatrix()
+{
+    (string Host, string Stack)[] targets =
+    [
+        ("cloudflare-quic.com",   "quiche (Cloudflare)"),
+        ("quic.nginx.org",        "nginx QUIC"),
+        ("www.google.com",        "Google QUIC"),
+        ("www.facebook.com",      "mvfst (Meta)"),
+        ("www.litespeedtech.com", "lsquic (LiteSpeed)"),
+        ("outlook.office.com",    "msquic (Microsoft)"),
+        ("caddyserver.com",       "quic-go (Caddy)"),
+        ("www.akamai.com",        "Akamai QUIC"),
+    ];
+
+    Console.WriteLine("== HTTP/3 from Scratch — Interop-Matrix (volle Zertifikatsprüfung) ==\n");
+    Console.WriteLine($"{"Ziel",-24} {"Stack",-20} {"Gruppe/Suite/Cert",-34} Ergebnis");
+    Console.WriteLine(new string('-', 100));
+
+    int ok = 0;
+    foreach ((string targetHost, string stack) in targets)
+    {
+        string crypto, result;
+        bool success = TryInterop(targetHost, out crypto, out result);
+        if (success) ok++;
+        Console.WriteLine($"{targetHost,-24} {stack,-20} {crypto,-34} {(success ? "✓ " : "✗ ")}{result}");
+    }
+
+    Console.WriteLine(new string('-', 100));
+    Console.WriteLine($"\n{ok}/{targets.Length} Stacks erreichbar (2xx/3xx = HTTP/3-Stack läuft durch; "
+                      + "3xx/4xx sind reguläre Antworten wie Redirect/Bot-Schutz).");
+    return ok > 0 ? 0 : 1;
+}
+
+// Ein einzelner Interop-Versuch: frische Verbindung, GET /, volle Cert-Prüfung. Liefert Krypto-Profil
+// und Ergebnistext; Rückgabe true, sobald ein HTTP/3-Status empfangen wurde.
+static bool TryInterop(string targetHost, out string crypto, out string result)
+{
+    crypto = "—";
+    result = "";
+    try
+    {
+        var addresses = Dns.GetHostAddresses(targetHost).Where(a => a.AddressFamily == AddressFamily.InterNetwork).ToArray();
+        if (addresses.Length == 0) { result = "keine IPv4-Adresse"; return false; }
+        var remote = new IPEndPoint(addresses[0], 443);
+
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { ReceiveTimeout = 400 };
+        try { socket.IOControl(unchecked((int)0x9800000C), [0, 0, 0, 0], null); } catch { /* nicht-Windows */ }
+
+        using var conn = new Http3ClientConnection(targetHost, new TransportParameters(), CertificateValidationOptions.Default);
+        conn.Start();
+
+        void Pump()
+        {
+            conn.CheckTimeouts();
+            foreach (byte[] dg in conn.GetDatagramsToSend())
+                socket.SendTo(dg, remote);
+            byte[] buffer = new byte[2048];
+            for (int i = 0; i < 32; i++)
+            {
+                try
+                {
+                    EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                    int n = socket.ReceiveFrom(buffer, ref from);
+                    conn.ProcessDatagram(buffer.AsSpan(0, n));
+                }
+                catch (SocketException) { break; }
+            }
+        }
+
+        for (int round = 0; round < 40 && !conn.HandshakeConfirmed; round++)
+            Pump();
+        if (!conn.HandshakeConfirmed) { result = "Handshake fehlgeschlagen (bietet evtl. kein HTTP/3)"; return false; }
+
+        crypto = $"{conn.Quic.NegotiatedGroup}/{conn.Quic.NegotiatedCipherSuite}/{CertKind(conn.Quic.ServerCertificate?.PublicKey.Oid.Value)}";
+
+        conn.InitializeHttp3();
+        for (int round = 0; round < 3; round++) Pump();
+
+        ulong streamId = conn.SendRequest(Http3Request.Get(targetHost, "/"));
+        Http3Response? response = null;
+        for (int round = 0; round < 200 && response is null; round++)
+        {
+            Pump();
+            conn.TryGetResponse(streamId, out response);
+        }
+        conn.Close();
+        foreach (byte[] dg in conn.GetDatagramsToSend()) socket.SendTo(dg, remote);
+
+        if (response is null) { result = "keine Antwort"; return false; }
+        result = $"HTTP/3 {response.Status}";
+        return true;
+    }
+    catch (CertificateValidationException ex) { result = $"Cert ungültig: {ex.Message}"; return false; }
+    catch (Exception ex) { result = $"{ex.GetType().Name}: {ex.Message}"; return false; }
+}
+
+// Der Public-Key-Algorithmus eines Zertifikats aus der SPKI-OID (für die Krypto-Spalte der Matrix).
+static string CertKind(string? oid) => oid switch
+{
+    "1.2.840.10045.2.1"    => "ECDSA",
+    "1.2.840.113549.1.1.1" => "RSA",
+    "1.3.101.112"          => "Ed25519",
+    "1.3.101.113"          => "Ed448",
+    "2.16.840.1.101.3.4.3.17" or "2.16.840.1.101.3.4.3.18" or "2.16.840.1.101.3.4.3.19" => "ML-DSA",
+    null                   => "?",
+    _                      => oid,
+};

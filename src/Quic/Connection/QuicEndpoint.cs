@@ -112,6 +112,11 @@ public abstract class QuicEndpoint : IDisposable
     private ulong _connSendUsed;
     private ulong _connSendLimit;
     private ulong _localConnMaxData;
+    private ReceiveWindowTuner? _connWindowTuner; // Auto-Tuning des Verbindungs-Empfangsfensters (Phase 9)
+
+    // Auto-Tuning-Obergrenzen: bis hierhin dürfen die Empfangsfenster wachsen (BDP großer, latenter Pfade).
+    private const ulong MaxStreamReceiveWindow = 16UL * 1024 * 1024;
+    private const ulong MaxConnReceiveWindow = 24UL * 1024 * 1024;
 
     private readonly LossRecovery _recovery = new();
     private readonly Pacer _pacer = new();
@@ -156,6 +161,8 @@ public abstract class QuicEndpoint : IDisposable
         Version = version;
         LocalParams = transportParameters ?? new TransportParameters();
         _localConnMaxData = LocalParams.InitialMaxDataValue;
+        if (LocalParams.InitialMaxDataValue > 0)
+            _connWindowTuner = new ReceiveWindowTuner(LocalParams.InitialMaxDataValue, MaxConnReceiveWindow);
         Scid = new ConnectionId(RandomNumberGenerator.GetBytes(8));
         _cids = new ConnectionIdManager(Scid); // lokale Handshake-CID = Sequenz 0
         _addressValidated = !IsServer;         // der Client sieht die Server-Adresse als validiert an
@@ -466,7 +473,10 @@ public abstract class QuicEndpoint : IDisposable
     {
         if (StreamMap.TryGetValue(id.Value, out QuicStream? existing))
             return existing;
-        var stream = new QuicStream(id, PeerSendLimitFor(id), ReceiveWindowFor(id));
+        ulong receiveWindow = ReceiveWindowFor(id);
+        var stream = new QuicStream(id, PeerSendLimitFor(id), receiveWindow);
+        if (receiveWindow > 0)
+            stream.Receive.WindowTuner = new ReceiveWindowTuner(receiveWindow, MaxStreamReceiveWindow); // Auto-Tuning (Phase 9)
         StreamMap[id.Value] = stream;
         return stream;
     }
@@ -985,31 +995,39 @@ public abstract class QuicEndpoint : IDisposable
 
     private void CollectFlowControlFrames(List<Frame> frames)
     {
+        long now = _clock.Elapsed.Ticks;
+        long rttTicks = _recovery.Rtt.SmoothedRtt.Ticks;
+
         foreach ((ulong id, QuicStream stream) in StreamMap)
         {
-            ulong window = ReceiveWindowFor(stream.Id);
-            if (window == 0 || stream.Receive.HighestReceivedOffset == 0)
+            if (stream.Receive.WindowTuner is not { } tuner || stream.Receive.HighestReceivedOffset == 0)
                 continue;
             StreamReceiveBuffer recv = stream.Receive;
-            if (recv.MaxData - recv.BytesConsumed < window / 2)
+            if (recv.MaxData - recv.BytesConsumed < tuner.Size / 2)
             {
-                recv.MaxData = recv.BytesConsumed + window;
+                tuner.NoteWindowUpdate(now, rttTicks); // Auto-Tuning: bei schneller Drainage Fenster verdoppeln
+                recv.MaxData = recv.BytesConsumed + tuner.Size;
                 frames.Add(new MaxStreamDataFrame(id, recv.MaxData));
             }
         }
 
-        ulong connWindow = LocalParams.InitialMaxDataValue;
-        if (connWindow == 0)
+        if (_connWindowTuner is not { } connTuner)
             return;
         ulong totalConsumed = 0;
         foreach (QuicStream s in StreamMap.Values)
             totalConsumed += s.Receive.BytesConsumed;
-        if (_localConnMaxData - totalConsumed < connWindow / 2)
+        if (_localConnMaxData - totalConsumed < connTuner.Size / 2)
         {
-            _localConnMaxData = totalConsumed + connWindow;
+            connTuner.NoteWindowUpdate(now, rttTicks);
+            _localConnMaxData = totalConsumed + connTuner.Size;
             frames.Add(new MaxDataFrame(_localConnMaxData));
         }
     }
+
+    /// <summary>
+    /// Aktuelle (ggf. auto-getunte) Größe des Verbindungs-Empfangsfensters — für Diagnose/Tests.
+    /// </summary>
+    internal ulong ConnectionReceiveWindowSize => _connWindowTuner?.Size ?? _localConnMaxData;
 
     // ---- Empfangen -------------------------------------------------------------------------
 
@@ -1348,7 +1366,10 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Baut ein Paket, das nur das CONNECTION_CLOSE trägt, auf dem höchsten verfügbaren Schutzniveau.
+    /// Baut das CONNECTION_CLOSE-Datagramm. Mit 1-RTT-Keys genügt ein Short-Header-Paket; WÄHREND des
+    /// Handshakes wird das Close dagegen auf ALLEN verfügbaren Long-Header-Leveln koalesziert gesendet
+    /// (RFC 9000 §10.2.3): der Peer hat womöglich nur die Initial-Keys (etwa wenn wir seinen ersten
+    /// Flight ablehnen, bevor er unseren je sah) und könnte ein reines Handshake-Close nie lesen.
     /// </summary>
     private byte[]? BuildClosePacket()
     {
@@ -1356,27 +1377,38 @@ public abstract class QuicEndpoint : IDisposable
             return null;
         byte[] payload = FrameParser.Serialize([_closeFrame]);
 
+        // §10.2.3: NACH bestätigtem Handshake MUSS das Close als 1-RTT-Paket gehen. VORHER wäre ein
+        // reines 1-RTT-Close riskant: der Peer hat womöglich nur Initial-/Handshake-Keys (etwa wenn
+        // wir seinen allerersten Flight ablehnen) und könnte es nie entschlüsseln.
         int app = (int)EncryptionLevel.Application;
-        if (WriteKeys[app] is { } appKeys)
+        if (WriteKeys[app] is { } appKeys && HandshakeIsConfirmed)
         {
             ulong pn = Spaces[app].NextPacketNumber();
             return ShortHeader.Build(appKeys, Dcid, pn, PacketNumber.EncodeLength(pn, Spaces[app].LargestAckedByPeer), payload, keyPhase: _sendKeyPhase);
+        }
+
+        var datagram = new List<byte>();
+        int init = (int)EncryptionLevel.Initial;
+        if (WriteKeys[init] is { } initKeys)
+        {
+            ulong pn = Spaces[init].NextPacketNumber();
+            datagram.AddRange(InitialPacketFactory.BuildPadded(initKeys, Version, Dcid, Scid, InitialToken, pn,
+                PacketNumber.EncodeLength(pn, Spaces[init].LargestAckedByPeer), payload));
         }
         int hs = (int)EncryptionLevel.Handshake;
         if (WriteKeys[hs] is { } hsKeys)
         {
             ulong pn = Spaces[hs].NextPacketNumber();
-            return LongHeader.Build(hsKeys, LongPacketType.Handshake, Version, Dcid, Scid, default, pn,
-                PacketNumber.EncodeLength(pn, Spaces[hs].LargestAckedByPeer), payload);
+            datagram.AddRange(LongHeader.Build(hsKeys, LongPacketType.Handshake, Version, Dcid, Scid, default, pn,
+                PacketNumber.EncodeLength(pn, Spaces[hs].LargestAckedByPeer), payload));
         }
-        int init = (int)EncryptionLevel.Initial;
-        if (WriteKeys[init] is { } initKeys)
+        if (datagram.Count == 0 && WriteKeys[app] is { } onlyAppKeys)
         {
-            ulong pn = Spaces[init].NextPacketNumber();
-            return InitialPacketFactory.BuildPadded(initKeys, Version, Dcid, Scid, InitialToken, pn,
-                PacketNumber.EncodeLength(pn, Spaces[init].LargestAckedByPeer), payload);
+            // Rückfall: nur noch 1-RTT-Keys vorhanden (Initial/Handshake schon verworfen).
+            ulong pn = Spaces[app].NextPacketNumber();
+            return ShortHeader.Build(onlyAppKeys, Dcid, pn, PacketNumber.EncodeLength(pn, Spaces[app].LargestAckedByPeer), payload, keyPhase: _sendKeyPhase);
         }
-        return null;
+        return datagram.Count > 0 ? [.. datagram] : null;
     }
 
     private void HandleStreamFrame(StreamFrame sf)
@@ -1401,9 +1433,40 @@ public abstract class QuicEndpoint : IDisposable
                 CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size");
                 return;
         }
+        if (ConnectionFlowControlViolated())             // §4.1: Summe über alle Streams > MAX_DATA
+            return;
 
         OnStreamOpened(id, isNew);
     }
+
+    /// <summary>
+    /// Prüft das VERBINDUNGS-Flow-Control-Limit auf der Empfangsseite (RFC 9000 §4.1): die Summe der
+    /// höchsten empfangenen Offsets aller Streams (bei RESET zählt die Final Size, §4.5) darf das von
+    /// uns per initial_max_data/MAX_DATA gewährte Fenster nicht überschreiten — sonst
+    /// FLOW_CONTROL_ERROR. Liefert <c>true</c>, wenn die Verbindung deswegen geschlossen wurde.
+    /// </summary>
+    private bool ConnectionFlowControlViolated()
+    {
+        ulong totalReceived = 0;
+        foreach (QuicStream s in StreamMap.Values)
+            totalReceived += s.Receive.HighestReceivedOffset;
+        if (totalReceived <= _localConnMaxData)
+            return false;
+        CloseWithTransportError(TransportError.FlowControlError, "connection flow control exceeded");
+        return true;
+    }
+
+    /// <summary>
+    /// Test-Seam: hebt das eigene Verbindungs-Sende-Limit über das vom Peer gewährte an, um
+    /// peer-seitige FLOW_CONTROL_ERROR-Pfade zu provozieren (Transport-Error-Matrix-Tests).
+    /// </summary>
+    internal void OverrideConnSendLimitForTest(ulong limit) => _connSendLimit = limit;
+
+    /// <summary>
+    /// Test-Seam: die aktuelle DCID (für die §7.3-Validator-Tests, die passende/unpassende
+    /// initial_source_connection_id-Werte konstruieren müssen).
+    /// </summary>
+    internal ConnectionId DcidForTest => Dcid;
 
     /// <summary>
     /// Das von uns gewährte Stream-Limit (Anzahl) für die Kategorie von <paramref name="id"/>.
@@ -1438,11 +1501,12 @@ public abstract class QuicEndpoint : IDisposable
         {
             case StreamReceiveResult.FlowControlError:   // §4.1: Final Size über dem gewährten Fenster
                 CloseWithTransportError(TransportError.FlowControlError, "reset final size exceeds flow control");
-                break;
+                return;
             case StreamReceiveResult.FinalSizeError:     // §4.5: Final Size widersprüchlich
                 CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size in RESET_STREAM");
-                break;
+                return;
         }
+        ConnectionFlowControlViolated(); // §4.5: die Final Size zählt voll gegen das Verbindungsfenster
     }
 
     /// <summary>
@@ -1471,17 +1535,18 @@ public abstract class QuicEndpoint : IDisposable
         {
             case StreamReceiveResult.FrameEncodingError: // draft §4: Reliable Size > Final Size
                 CloseWithTransportError(TransportError.FrameEncodingError, "RESET_STREAM_AT reliable size exceeds final size");
-                break;
+                return;
             case StreamReceiveResult.FlowControlError:   // §4.1: Final Size über dem gewährten Fenster
                 CloseWithTransportError(TransportError.FlowControlError, "reset final size exceeds flow control");
-                break;
+                return;
             case StreamReceiveResult.FinalSizeError:     // §4.5: Final Size widersprüchlich
                 CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size in RESET_STREAM_AT");
-                break;
+                return;
             case StreamReceiveResult.StreamStateError:   // draft §5.2: Fehlercode geändert
                 CloseWithTransportError(TransportError.StreamStateError, "RESET_STREAM_AT changed error code");
-                break;
+                return;
         }
+        ConnectionFlowControlViolated(); // §4.5: die Final Size zählt voll gegen das Verbindungsfenster
     }
 
     /// <summary>
@@ -1801,16 +1866,42 @@ public abstract class QuicEndpoint : IDisposable
     {
         if (PeerParams is not null || TlsHandshake?.PeerQuicTransportParameters is not { } bytes)
             return;
-        if (TransportParameters.TryDecode(bytes, out TransportParameters? p) && p is not null)
+        if (!TransportParameters.TryDecode(bytes, out TransportParameters? p) || p is null)
         {
-            PeerParams = p;
-            _connSendLimit = p.InitialMaxDataValue;
-            _idle.Negotiate(LocalParams.MaxIdleTimeoutMs, p.MaxIdleTimeoutMs); // effektiver Idle-Timeout (RFC 9000 §10.1)
-            ApplyPeerStatelessResetToken();
-            foreach (QuicStream s in StreamMap.Values)
-                if (s.Send.MaxData == 0)
-                    s.Send.MaxData = PeerSendLimitFor(s.Id);
+            // RFC 9000 §7.4: fehlerhafte/ungültige Transport-Parameter ⇒ TRANSPORT_PARAMETER_ERROR.
+            CloseWithTransportError(TransportError.TransportParameterError, "invalid transport parameters");
+            return;
         }
+        if (ValidatePeerTransportParameters(p) is { } problem)
+        {
+            CloseWithTransportError(TransportError.TransportParameterError, problem);
+            return;
+        }
+
+        PeerParams = p;
+        _connSendLimit = p.InitialMaxDataValue;
+        _idle.Negotiate(LocalParams.MaxIdleTimeoutMs, p.MaxIdleTimeoutMs); // effektiver Idle-Timeout (RFC 9000 §10.1)
+        ApplyPeerStatelessResetToken();
+        foreach (QuicStream s in StreamMap.Values)
+            if (s.Send.MaxData == 0)
+                s.Send.MaxData = PeerSendLimitFor(s.Id);
+    }
+
+    /// <summary>
+    /// Authentifiziert die Peer-Transport-Parameter (RFC 9000 §7.3): initial_source_connection_id MUSS
+    /// vorhanden sein und der Source Connection ID des Peers aus dessen Initial-Paket entsprechen (das
+    /// ist zu diesem Zeitpunkt unsere <see cref="Dcid"/>) — das bindet die im Handshake ausgehandelten
+    /// Parameter kryptografisch an die unverschlüsselt übertragenen Connection IDs. Rollen-spezifische
+    /// Prüfungen (ODCID/Retry beim Client, server-only-Parameter beim Server) ergänzen die Subklassen.
+    /// Rückgabe: Fehlerbeschreibung oder <c>null</c>, wenn alles stimmt.
+    /// </summary>
+    internal virtual string? ValidatePeerTransportParameters(TransportParameters p)
+    {
+        if (!p.SawInitialSourceConnectionId)
+            return "missing initial_source_connection_id"; // §7.3: Abwesenheit ist ein Verbindungsfehler
+        if (!p.InitialSourceConnectionIdValue.Span.SequenceEqual(Dcid.Span))
+            return "initial_source_connection_id mismatch";
+        return null;
     }
 
     public virtual void Dispose()
