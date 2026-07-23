@@ -25,38 +25,38 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 /// <summary>
-/// Hilfen rund um die CertificateVerify-Nachricht (RFC 8446 §4.4.3). Der signierte Inhalt ist
-/// <c>64×0x20 ‖ Kontext-String ‖ 0x00 ‖ Transcript-Hash</c>; der Nachrichten-Rumpf ist
-/// <c>SignatureScheme (2) ‖ Signatur&lt;0..2^16-1&gt;</c>.
+/// Helpers around the CertificateVerify message (RFC 8446 §4.4.3). The signed content is
+/// <c>64×0x20 ‖ context string ‖ 0x00 ‖ transcript hash</c>; the message body is
+/// <c>SignatureScheme (2) ‖ signature&lt;0..2^16-1&gt;</c>.
 /// </summary>
 public static class CertificateVerify
 {
     /// <summary>
-    /// Kontext-String, wenn der Server signiert.
+    /// Context string when the server signs.
     /// </summary>
     public const string ServerContext = "TLS 1.3, server CertificateVerify";
 
     /// <summary>
-    /// Kontext-String, wenn der Client signiert (Client-Authentifizierung).
+    /// Context string when the client signs (client authentication).
     /// </summary>
     public const string ClientContext = "TLS 1.3, client CertificateVerify";
 
     /// <summary>
-    /// Baut den zu signierenden bzw. zu verifizierenden Inhalt (RFC 8446 §4.4.3).
+    /// Builds the content to sign or verify (RFC 8446 §4.4.3).
     /// </summary>
     public static byte[] BuildSignatureContent(string context, ReadOnlySpan<byte> transcriptHash)
     {
         byte[] label = Encoding.ASCII.GetBytes(context);
         byte[] content = new byte[64 + label.Length + 1 + transcriptHash.Length];
-        content.AsSpan(0, 64).Fill(0x20); // 64 Leerzeichen
+        content.AsSpan(0, 64).Fill(0x20); // 64 spaces
         label.CopyTo(content, 64);
-        content[64 + label.Length] = 0x00; // Trennbyte
+        content[64 + label.Length] = 0x00; // separator byte
         transcriptHash.CopyTo(content.AsSpan(64 + label.Length + 1));
         return content;
     }
 
     /// <summary>
-    /// Zerlegt den CertificateVerify-Rumpf in (Signaturverfahren, Signatur).
+    /// Splits the CertificateVerify body into (signature scheme, signature).
     /// </summary>
     public static bool TryParse(ReadOnlySpan<byte> body, out SignatureScheme scheme, out byte[] signature)
     {

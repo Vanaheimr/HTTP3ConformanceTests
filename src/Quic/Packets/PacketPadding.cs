@@ -18,10 +18,10 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Sorgt dafür, dass Paketnummer und Nutzlast zusammen lang genug für das Header-Protection-Sample sind
-/// (RFC 9001 §5.4.2). Das 16-Byte-Sample beginnt 4 Bytes hinter dem Beginn des Paketnummernfelds; damit
-/// es (zusammen mit dem 16-Byte-AEAD-Tag) im Paket liegt, muss <c>Paketnummernlänge + Nutzlast ≥ 4</c>
-/// gelten. Fehlende Bytes werden mit PADDING (0x00) aufgefüllt.
+/// Ensures that packet number and payload together are long enough for the header-protection sample
+/// (RFC 9001 §5.4.2). The 16-byte sample starts 4 bytes past the beginning of the packet-number
+/// field; for it to lie inside the packet (together with the 16-byte AEAD tag),
+/// <c>packet-number length + payload ≥ 4</c> must hold. Missing bytes are filled with PADDING (0x00).
 /// </summary>
 public static class PacketPadding
 {
@@ -31,7 +31,7 @@ public static class PacketPadding
         int length = Math.Max(payload.Length, minPayload);
         byte[] result = new byte[length];
         payload.CopyTo(result);
-        // Der Rest bleibt 0 ⇒ PADDING-Frames.
+        // The remainder stays 0 ⇒ PADDING frames.
         return result;
     }
 }

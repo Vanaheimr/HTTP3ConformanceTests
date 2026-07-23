@@ -24,20 +24,20 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 /// <summary>
-/// Eine einzelne TLS-Handshake-Nachricht: Typ, Rumpf und die vollständigen Bytes (für den Transcript).
+/// A single TLS handshake message: type, body and the complete bytes (for the transcript).
 /// </summary>
 public readonly record struct HandshakeMessage(HandshakeType Type, ReadOnlyMemory<byte> Body, ReadOnlyMemory<byte> Full);
 
 /// <summary>
-/// Zerlegt einen (ggf. aus mehreren CRYPTO-Frames reassemblierten) Byte-Strom in einzelne
-/// Handshake-Nachrichten. Jede Nachricht ist <c>Typ (1) ‖ Länge (3) ‖ Rumpf</c> (RFC 8446 §4).
+/// Splits a byte stream (possibly reassembled from multiple CRYPTO frames) into individual
+/// handshake messages. Each message is <c>type (1) ‖ length (3) ‖ body</c> (RFC 8446 §4).
 /// </summary>
 public static class HandshakeMessages
 {
     /// <summary>
-    /// Liest so viele vollständige Nachrichten wie möglich. <paramref name="consumed"/> gibt an, wie
-    /// viele Bytes verbraucht wurden – der Rest ist eine noch unvollständige Nachricht (mehr CRYPTO-
-    /// Daten nötig). Gibt <c>false</c> nur bei strukturell unmöglichen Längen zurück.
+    /// Reads as many complete messages as possible. <paramref name="consumed"/> indicates how many
+    /// bytes were consumed – the rest is a still-incomplete message (more CRYPTO data needed).
+    /// Returns <c>false</c> only for structurally impossible lengths.
     /// </summary>
     public static bool TryReadAll(ReadOnlyMemory<byte> buffer, out List<HandshakeMessage> messages, out int consumed)
     {
@@ -52,7 +52,7 @@ public static class HandshakeMessages
             int length = (reader.ReadByte() << 16) | (reader.ReadByte() << 8) | reader.ReadByte();
 
             if (reader.Remaining < length)
-                break; // Nachricht noch nicht vollständig -> auf weitere CRYPTO-Daten warten
+                break; // message not yet complete -> wait for more CRYPTO data
 
             reader.TrySkip(length);
             int end = reader.Position;

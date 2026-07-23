@@ -30,15 +30,15 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Frame-/Stream-Zustandsmaschine von HTTP/3 (RFC 9114 §4.1, §6.2, §7.2): Protokollverstöße der
-/// Gegenseite MÜSSEN als Verbindungsfehler mit dem passenden H3-Fehlercode (§8.1) beantwortet werden —
-/// als CONNECTION_CLOSE Typ 0x1d (Application Error). Der „böse" Peer wird jeweils mit einer rohen
-/// QUIC-Verbindung nachgestellt, die von Hand HTTP/3-Bytes schreibt.
+/// Frame/stream state machine of HTTP/3 (RFC 9114 §4.1, §6.2, §7.2): protocol violations by the
+/// peer MUST be answered as connection errors with the matching H3 error code (§8.1) —
+/// as a CONNECTION_CLOSE type 0x1d (application error). The "evil" peer is emulated with a raw
+/// QUIC connection that writes HTTP/3 bytes by hand.
 /// </summary>
 [TestFixture]
 public class Http3FrameStateMachineTests
 {
-    // ---- Verstöße des Clients ⇒ der SERVER muss schließen ---------------------------------
+    // ---- Client violations ⇒ the SERVER must close -----------------------------------------
 
     [Test]
     public void DataBeforeHeaders_OnRequestStream_IsFrameUnexpected()
@@ -48,7 +48,7 @@ public class Http3FrameStateMachineTests
 
     [Test]
     public void ReservedHttp2FrameType_OnRequestStream_IsFrameUnexpected()
-        => AssertServerCloses( // 0x06 war HTTP/2 PING — in HTTP/3 reserviert (§7.2.8)
+        => AssertServerCloses( // 0x06 was HTTP/2 PING — reserved in HTTP/3 (§7.2.8)
             client => client.OpenBidirectionalStream().Write(Http3Frames.Build(0x06, [])),
             Http3Error.FrameUnexpected);
 
@@ -96,7 +96,7 @@ public class Http3FrameStateMachineTests
         {
             QuicStream control = client.OpenUnidirectionalStream();
             control.Write([(byte)Http3StreamType.Control]);
-            control.Write(Http3Frames.Build(Http3FrameType.Settings, BuildSettingsPayload((0x02, 0)))); // reserviert
+            control.Write(Http3Frames.Build(Http3FrameType.Settings, BuildSettingsPayload((0x02, 0)))); // reserved
         }, Http3Error.SettingsError);
 
     [Test]
@@ -116,7 +116,7 @@ public class Http3FrameStateMachineTests
             QuicStream control = client.OpenUnidirectionalStream();
             control.Write([(byte)Http3StreamType.Control]);
             control.Write(Http3Frames.Build(Http3FrameType.Settings, []));
-            control.Finish(); // §6.2.1: der Control-Stream darf NIE enden
+            control.Finish(); // §6.2.1: the control stream must NEVER end
         }, Http3Error.ClosedCriticalStream);
 
     [Test]
@@ -124,12 +124,12 @@ public class Http3FrameStateMachineTests
         => AssertServerCloses(client =>
         {
             QuicStream stream = client.OpenBidirectionalStream();
-            // Frame-Kopf verspricht 10 Nutzlast-Bytes, es folgen nur 3 — dann sauberes FIN (§7.1).
+            // The frame header promises 10 payload bytes, only 3 follow — then a clean FIN (§7.1).
             stream.Write([(byte)Http3FrameType.Data, 10, 1, 2, 3]);
             stream.Finish();
         }, Http3Error.FrameError);
 
-    // ---- Toleranz: Grease MUSS ignoriert werden (§7.2.8, §7.2.4.1, §9) --------------------
+    // ---- Tolerance: grease MUST be ignored (§7.2.8, §7.2.4.1, §9) -------------------------
 
     [Test]
     public void GreaseFrameAndGreaseSetting_AreIgnored_RequestSucceeds()
@@ -141,12 +141,12 @@ public class Http3FrameStateMachineTests
         using QuicClientConnection c = client;
         using Http3ServerConnection s = server;
 
-        // Control-Stream mit SETTINGS samt Grease-Setting (0x1f·N + 0x21).
+        // Control stream with SETTINGS including a grease setting (0x1f·N + 0x21).
         QuicStream control = client.OpenUnidirectionalStream();
         control.Write([(byte)Http3StreamType.Control]);
         control.Write(Http3Frames.Build(Http3FrameType.Settings, BuildSettingsPayload((0x1f * 7 + 0x21, 42))));
 
-        // Request-Stream: erst ein Grease-Frame (0x21), dann echte HEADERS (statisch kodiert), FIN.
+        // Request stream: first a grease frame (0x21), then real HEADERS (statically encoded), FIN.
         QuicStream request = client.OpenBidirectionalStream();
         request.Write(Http3Frames.Build(0x21, [0xaa, 0xbb]));
         byte[] headerBlock = QpackEncoder.Encode(
@@ -162,11 +162,11 @@ public class Http3FrameStateMachineTests
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.That(handled, Is.True, "Der Request muss trotz Grease-Frame/-Setting beantwortet werden.");
-        Assert.That(server.IsClosing, Is.False, "Grease darf KEIN Verbindungsfehler sein (§9).");
+        Assert.That(handled, Is.True, "The request must be answered despite the grease frame/setting.");
+        Assert.That(server.IsClosing, Is.False, "Grease must NOT be a connection error (§9).");
     }
 
-    // ---- Verstöße des Servers ⇒ der CLIENT muss schließen ---------------------------------
+    // ---- Server violations ⇒ the CLIENT must close -----------------------------------------
 
     [Test]
     public void MaxPushId_SentToClient_IsFrameUnexpected()
@@ -175,7 +175,7 @@ public class Http3FrameStateMachineTests
             QuicStream control = server.OpenUnidirectionalStream();
             control.Write([(byte)Http3StreamType.Control]);
             control.Write(Http3Frames.Build(Http3FrameType.Settings, []));
-            control.Write(Http3Frames.Build(Http3FrameType.MaxPushId, [0x08])); // §7.2.7: nur Client→Server
+            control.Write(Http3Frames.Build(Http3FrameType.MaxPushId, [0x08])); // §7.2.7: client→server only
         }, Http3Error.FrameUnexpected);
 
     [Test]
@@ -185,14 +185,14 @@ public class Http3FrameStateMachineTests
             QuicStream control = server.OpenUnidirectionalStream();
             control.Write([(byte)Http3StreamType.Control]);
             control.Write(Http3Frames.Build(Http3FrameType.Settings, []));
-            control.Write(Http3Frames.Build(Http3FrameType.GoAway, [0x03])); // 0b11 = server-uni ⇒ illegal (§7.2.6)
+            control.Write(Http3Frames.Build(Http3FrameType.GoAway, [0x03])); // 0b11 = server uni ⇒ illegal (§7.2.6)
         }, Http3Error.IdError);
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     /// <summary>
-    /// Roher QUIC-Client gegen unseren HTTP/3-Server: <paramref name="misbehave"/> schreibt die bösen
-    /// Bytes, danach MUSS der Server mit dem H3-Fehlercode <paramref name="expectedError"/> schließen.
+    /// Raw QUIC client against our HTTP/3 server: <paramref name="misbehave"/> writes the evil
+    /// bytes, after which the server MUST close with the H3 error code <paramref name="expectedError"/>.
     /// </summary>
     private static void AssertServerCloses(Action<QuicClientConnection> misbehave, ulong expectedError)
     {
@@ -205,15 +205,15 @@ public class Http3FrameStateMachineTests
         for (int round = 0; round < 10 && !server.IsClosing; round++)
             Pump(client, server);
 
-        Assert.That(server.IsClosing, Is.True, "Der Server muss die Verbindung schließen.");
+        Assert.That(server.IsClosing, Is.True, "The server must close the connection.");
         Assert.That(client.PeerCloseFrame, Is.Not.Null);
-        Assert.That(client.PeerCloseFrame!.IsApplicationError, Is.True, "H3-Fehler sind Application Errors (Typ 0x1d).");
+        Assert.That(client.PeerCloseFrame!.IsApplicationError, Is.True, "H3 errors are application errors (type 0x1d).");
         Assert.That(client.PeerCloseFrame.ErrorCode, Is.EqualTo(expectedError));
     }
 
     /// <summary>
-    /// Roher QUIC-Server gegen unseren HTTP/3-Client: <paramref name="misbehave"/> schreibt die bösen
-    /// Bytes, danach MUSS der Client mit dem H3-Fehlercode <paramref name="expectedError"/> schließen.
+    /// Raw QUIC server against our HTTP/3 client: <paramref name="misbehave"/> writes the evil
+    /// bytes, after which the client MUST close with the H3 error code <paramref name="expectedError"/>.
     /// </summary>
     private static void AssertClientCloses(Action<QuicServerConnection> misbehave, ulong expectedError)
     {
@@ -231,11 +231,11 @@ public class Http3FrameStateMachineTests
         misbehave(server);
         for (int round = 0; round < 10 && !client.IsClosing; round++)
             Pump(client, server);
-        Pump(client, server); // das CONNECTION_CLOSE des Clients noch zustellen
+        Pump(client, server); // still deliver the client's CONNECTION_CLOSE
 
-        Assert.That(client.IsClosing, Is.True, "Der Client muss die Verbindung schließen.");
+        Assert.That(client.IsClosing, Is.True, "The client must close the connection.");
         Assert.That(server.PeerCloseFrame, Is.Not.Null);
-        Assert.That(server.PeerCloseFrame!.IsApplicationError, Is.True, "H3-Fehler sind Application Errors (Typ 0x1d).");
+        Assert.That(server.PeerCloseFrame!.IsApplicationError, Is.True, "H3 errors are application errors (type 0x1d).");
         Assert.That(server.PeerCloseFrame.ErrorCode, Is.EqualTo(expectedError));
     }
 

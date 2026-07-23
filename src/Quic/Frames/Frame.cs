@@ -24,21 +24,21 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// Basistyp aller QUIC-Frames (RFC 9000, §19). Ein Paket-Payload ist eine reine Aneinanderreihung
-/// von Frames ohne Rahmen – die Frames sind nicht selbstbeschreibend, der Empfänger muss jeden Typ
-/// kennen (unbekannte Typen ⇒ FRAME_ENCODING_ERROR).
+/// Base type of all QUIC frames (RFC 9000, §19). A packet payload is a plain concatenation of
+/// frames without any framing – the frames are not self-describing, the receiver must know every
+/// type (unknown types ⇒ FRAME_ENCODING_ERROR).
 /// </summary>
 public abstract record Frame
 {
     /// <summary>
-    /// Serialisiert das Frame (inklusive Frame-Typ) in <paramref name="writer"/>.
+    /// Serialises the frame (including the frame type) into <paramref name="writer"/>.
     /// </summary>
     public abstract void Write(ref BufferWriter writer);
 }
 
 /// <summary>
-/// Eine oder mehrere aufeinanderfolgende PADDING-Frames (Typ 0x00), zusammengefasst als Lauflänge.
-/// Dienen dazu, ein Paket auf eine Mindestgröße zu bringen (z. B. Client-Initial ≥ 1200 Byte).
+/// One or more consecutive PADDING frames (type 0x00), combined as a run length.
+/// Used to bring a packet up to a minimum size (e.g. client Initial ≥ 1200 bytes).
 /// </summary>
 public sealed record PaddingFrame(int Length) : Frame
 {
@@ -46,7 +46,7 @@ public sealed record PaddingFrame(int Length) : Frame
 }
 
 /// <summary>
-/// PING-Frame (Typ 0x01): löst beim Empfänger ein ACK aus; dient als Keep-Alive/Path-Probe.
+/// PING frame (type 0x01): elicits an ACK from the receiver; serves as keep-alive/path probe.
 /// </summary>
 public sealed record PingFrame : Frame
 {
@@ -55,7 +55,7 @@ public sealed record PingFrame : Frame
 }
 
 /// <summary>
-/// HANDSHAKE_DONE-Frame (Typ 0x1e): der Server bestätigt den abgeschlossenen Handshake.
+/// HANDSHAKE_DONE frame (type 0x1e): the server confirms the completed handshake.
 /// </summary>
 public sealed record HandshakeDoneFrame : Frame
 {

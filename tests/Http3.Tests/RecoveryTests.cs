@@ -94,12 +94,12 @@ public class NewRenoTests
         var cc = new NewRenoCongestionControl();
         int window = cc.CongestionWindow;
 
-        cc.OnPacketSent(window); // Fenster genau ausgefüllt
+        cc.OnPacketSent(window); // window exactly filled
         Assert.That(cc.Available, Is.EqualTo(0));
-        Assert.That(cc.CanSend(1), Is.False);   // nichts Neues mehr erlaubt
+        Assert.That(cc.CanSend(1), Is.False);   // nothing new allowed anymore
         Assert.That(cc.CanSend(0), Is.True);
 
-        cc.OnPacketAcked(window, sentTimeTicks: 1); // wieder freigegeben
+        cc.OnPacketAcked(window, sentTimeTicks: 1); // released again
         Assert.That(cc.Available > 0, Is.True);
         Assert.That(cc.CanSend(1), Is.True);
     }
@@ -109,12 +109,12 @@ public class NewRenoTests
     {
         var cc = new NewRenoCongestionControl();
         cc.OnPacketSent(20_000);
-        cc.OnPacketsLost(20_000, largestLostSentTimeTicks: 100, nowTicks: 200); // ssthresh gesetzt, nicht Slow Start
+        cc.OnPacketsLost(20_000, largestLostSentTimeTicks: 100, nowTicks: 200); // ssthresh set, not slow start
 
         cc.OnPersistentCongestion();
 
         Assert.That(cc.CongestionWindow, Is.EqualTo(NewRenoCongestionControl.MinimumWindow));
-        Assert.That(cc.InSlowStart, Is.True); // cwnd < ssthresh ⇒ wieder Slow Start
+        Assert.That(cc.InSlowStart, Is.True); // cwnd < ssthresh ⇒ slow start again
     }
 }
 
@@ -127,7 +127,7 @@ public class PacerTests
     {
         var pacer = new Pacer();
         pacer.Refill(nowTicks: 0, congestionWindow: 12000, smoothedRtt: TimeSpan.FromMilliseconds(100));
-        Assert.That(pacer.AvailableBytes, Is.EqualTo(12000)); // Burst-Cap = min(cwnd, 10·MDS) = 12000
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(12000)); // burst cap = min(cwnd, 10·MDS) = 12000
     }
 
     [Test]
@@ -135,9 +135,9 @@ public class PacerTests
     {
         var pacer = new Pacer();
         pacer.Refill(0, congestionWindow: 12000, smoothedRtt: TimeSpan.FromMilliseconds(120));
-        pacer.OnBytesSent(12000); // Budget auf 0
+        pacer.OnBytesSent(12000); // budget down to 0
 
-        // Rate = 1.25 · 12000 / 1_200_000 Ticks = 0.0125 Byte/Tick; über 10 ms (100_000 Ticks) → 1250 Byte.
+        // Rate = 1.25 · 12000 / 1_200_000 ticks = 0.0125 bytes/tick; over 10 ms (100_000 ticks) → 1250 bytes.
         pacer.Refill(Ticks(10), congestionWindow: 12000, smoothedRtt: TimeSpan.FromMilliseconds(120));
         Assert.That(pacer.AvailableBytes, Is.EqualTo(1250));
     }
@@ -149,7 +149,7 @@ public class PacerTests
         pacer.Refill(0, 12000, TimeSpan.FromMilliseconds(100));
         pacer.OnBytesSent(12000);
 
-        // Sehr lange Pause: würde weit über den Burst hinaus akkumulieren – wird gedeckelt.
+        // Very long pause: would accumulate far beyond the burst — gets capped.
         pacer.Refill(Ticks(100_000), 12000, TimeSpan.FromMilliseconds(100));
         Assert.That(pacer.AvailableBytes, Is.EqualTo(12000));
     }
@@ -159,7 +159,7 @@ public class PacerTests
     {
         var pacer = new Pacer();
         pacer.Refill(0, congestionWindow: 1_000_000, smoothedRtt: TimeSpan.FromMilliseconds(50));
-        Assert.That(pacer.AvailableBytes, Is.EqualTo(12000)); // 10 · 1200, unabhängig vom großen cwnd
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(12000)); // 10 · 1200, regardless of the large cwnd
     }
 
     [Test]
@@ -167,10 +167,10 @@ public class PacerTests
     {
         var pacer = new Pacer();
         pacer.Refill(0, congestionWindow: 2000, smoothedRtt: TimeSpan.FromMilliseconds(100));
-        Assert.That(pacer.AvailableBytes, Is.EqualTo(2400)); // Burst-Cap = max(2·MDS, min(cwnd, 10·MDS)) = 2400
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(2400)); // burst cap = max(2·MDS, min(cwnd, 10·MDS)) = 2400
 
-        pacer.OnBytesSent(3000); // mehr gesendet als Budget
-        Assert.That(pacer.AvailableBytes, Is.EqualTo(0)); // negativ, aber als 0 gemeldet
+        pacer.OnBytesSent(3000); // sent more than the budget
+        Assert.That(pacer.AvailableBytes, Is.EqualTo(0)); // negative, but reported as 0
     }
 }
 
@@ -191,12 +191,12 @@ public class LossRecoveryTests
         var lr = new LossRecovery();
         var crypto = new CryptoFrame(0, new byte[] { 1, 2, 3 });
 
-        // Pakete 0..3 senden; 0 trägt ein CRYPTO-Frame.
+        // Send packets 0..3; 0 carries a CRYPTO frame.
         lr.OnPacketSent(0, Packet(0, 1000, crypto));
         for (ulong pn = 1; pn <= 3; pn++)
             lr.OnPacketSent(0, Packet(pn, 1000 + (long)pn));
 
-        // ACK für Paket 3 → Paket 0 liegt 3 hinter dem größten Bestätigten ⇒ verloren.
+        // ACK for packet 3 → packet 0 is 3 behind the largest acknowledged ⇒ lost.
         var ack = AckFrame.FromPacketNumbers([3]);
         List<Frame> lost = lr.OnAckReceived(0, ack, TimeSpan.Zero, nowTicks: 2000);
 
@@ -209,7 +209,7 @@ public class LossRecoveryTests
         var lr = new LossRecovery();
         lr.OnPacketSent(0, Packet(0, tick: 0));
 
-        // "now" = 100 ms später (in Ticks).
+        // "now" = 100 ms later (in ticks).
         long now = TimeSpan.FromMilliseconds(100).Ticks;
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([0]), TimeSpan.Zero, now);
 
@@ -233,7 +233,7 @@ public class LossRecoveryTests
     private static long Ms(double ms) => TimeSpan.FromMilliseconds(ms).Ticks;
 
     /// <summary>
-    /// Nicht-ack-eliciting Paket (löst keine RTT-Stichprobe aus), um Verluste gezielt auszulösen.
+    /// Non-ack-eliciting packet (triggers no RTT sample) to trigger losses deliberately.
     /// </summary>
     private static SentPacket Trigger(ulong pn, long tick) => new()
     {
@@ -249,21 +249,21 @@ public class LossRecoveryTests
     {
         var lr = new LossRecovery { MaxAckDelay = TimeSpan.FromMilliseconds(25) };
 
-        // Erste RTT-Stichprobe: Paket 0 senden, 100 ms später bestätigen ⇒ smoothed_rtt = 100 ms,
-        // rttvar = 50 ms ⇒ PC-Dauer = (100 + 200 + 25) · 3 = 975 ms.
+        // First RTT sample: send packet 0, acknowledge 100 ms later ⇒ smoothed_rtt = 100 ms,
+        // rttvar = 50 ms ⇒ PC duration = (100 + 200 + 25) · 3 = 975 ms.
         lr.OnPacketSent(0, Packet(0, tick: 0));
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([0]), TimeSpan.Zero, Ms(100));
         long cwndBefore = lr.Congestion.CongestionWindow;
 
-        // Ack-eliciting Pakete 1..8 über 1050 ms verteilt (alle nach der ersten Stichprobe gesendet).
+        // Ack-eliciting packets 1..8 spread over 1050 ms (all sent after the first sample).
         for (ulong pn = 1; pn <= 8; pn++)
             lr.OnPacketSent(0, Packet(pn, Ms(200 + (pn - 1) * 150)));
 
-        // Ein späteres, nicht-ack-eliciting Paket 20 bestätigen ⇒ 1..8 gelten per Paketschwelle als verloren.
+        // Acknowledge a later, non-ack-eliciting packet 20 ⇒ 1..8 count as lost per the packet threshold.
         lr.OnPacketSent(0, Trigger(20, Ms(1400)));
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([20]), TimeSpan.Zero, Ms(1400));
 
-        // Spanne 1..8 = 1050 ms > 975 ms ⇒ Persistent Congestion ⇒ Fenster kollabiert auf das Minimum.
+        // Span 1..8 = 1050 ms > 975 ms ⇒ persistent congestion ⇒ the window collapses to the minimum.
         Assert.That(lr.Congestion.CongestionWindow, Is.EqualTo(NewRenoCongestionControl.MinimumWindow));
         Assert.That(lr.Congestion.CongestionWindow < cwndBefore, Is.True);
     }
@@ -273,15 +273,15 @@ public class LossRecoveryTests
     {
         var lr = new LossRecovery { MaxAckDelay = TimeSpan.FromMilliseconds(25) };
         lr.OnPacketSent(0, Packet(0, tick: 0));
-        lr.OnAckReceived(0, AckFrame.FromPacketNumbers([0]), TimeSpan.Zero, Ms(100)); // PC-Dauer = 975 ms
+        lr.OnAckReceived(0, AckFrame.FromPacketNumbers([0]), TimeSpan.Zero, Ms(100)); // PC duration = 975 ms
 
-        // Pakete 1..5 nur über 200 ms verteilt ⇒ Spanne < PC-Dauer.
+        // Packets 1..5 spread over only 200 ms ⇒ span < PC duration.
         for (ulong pn = 1; pn <= 5; pn++)
             lr.OnPacketSent(0, Packet(pn, Ms(200 + (pn - 1) * 50)));
         lr.OnPacketSent(0, Trigger(20, Ms(500)));
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([20]), TimeSpan.Zero, Ms(500));
 
-        // Kein PC: Fenster nur durch das Congestion-Event halbiert, aber nicht auf das Minimum kollabiert.
+        // No PC: the window is only halved by the congestion event, not collapsed to the minimum.
         Assert.That(lr.Congestion.CongestionWindow > NewRenoCongestionControl.MinimumWindow, Is.True);
     }
 
@@ -290,13 +290,13 @@ public class LossRecoveryTests
     {
         var lr = new LossRecovery { MaxAckDelay = TimeSpan.FromMilliseconds(25) };
 
-        // Ohne je eine RTT-Stichprobe: lange Verlustserie 1..8, ausgelöst durch nicht-ack-eliciting Paket 20.
+        // Without ever an RTT sample: long loss run 1..8, triggered by non-ack-eliciting packet 20.
         for (ulong pn = 1; pn <= 8; pn++)
             lr.OnPacketSent(0, Packet(pn, Ms(200 + (pn - 1) * 150)));
         lr.OnPacketSent(0, Trigger(20, Ms(1400)));
         lr.OnAckReceived(0, AckFrame.FromPacketNumbers([20]), TimeSpan.Zero, Ms(1400));
 
-        // PC darf ohne vorherige RTT-Stichprobe nicht greifen (RFC 9002 §7.6.2).
+        // PC must not take effect without a prior RTT sample (RFC 9002 §7.6.2).
         Assert.That(lr.Congestion.CongestionWindow > NewRenoCongestionControl.MinimumWindow, Is.True);
     }
 }

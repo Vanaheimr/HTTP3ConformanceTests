@@ -24,8 +24,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Die Zero-Alloc-/UDP-Batching-Bausteine der Phase 9: <see cref="ByteQueue"/> (Anhängen/Konsumieren
-/// ohne O(n)-Shifting) und <see cref="GsoBatcher"/> (Datagramm-Gruppierung für UDP_SEGMENT).
+/// The zero-alloc/UDP-batching building blocks of phase 9: <see cref="ByteQueue"/> (append/consume
+/// without O(n) shifting) and <see cref="GsoBatcher"/> (datagram grouping for UDP_SEGMENT).
 /// </summary>
 [TestFixture]
 public class ZeroAllocBufferTests
@@ -43,10 +43,10 @@ public class ZeroAllocBufferTests
         Assert.That(q.Count, Is.EqualTo(5));
         Assert.That(q.Span.ToArray(), Is.EqualTo(new byte[] { 1, 2, 3, 4, 5 }));
 
-        q.Consume(2); // 1,2 raus
+        q.Consume(2); // 1,2 out
         Assert.That(q.Span.ToArray(), Is.EqualTo(new byte[] { 3, 4, 5 }));
 
-        q.Append([6, 7]); // nach Teil-Konsum weiter anhängen (interner Head > 0)
+        q.Append([6, 7]); // keep appending after a partial consume (internal head > 0)
         Assert.That(q.Span.ToArray(), Is.EqualTo(new byte[] { 3, 4, 5, 6, 7 }));
 
         q.Consume(5);
@@ -57,7 +57,7 @@ public class ZeroAllocBufferTests
     [Test]
     public void ByteQueue_ManyAppendConsumeCycles_MatchReferenceQueue()
     {
-        // Gegen eine triviale Referenz (System-Queue) fuzzen — deterministischer Seed.
+        // Fuzz against a trivial reference (System queue) — deterministic seed.
         var q = new ByteQueue();
         var reference = new Queue<byte>();
         var rng = new Random(4242);
@@ -97,24 +97,24 @@ public class ZeroAllocBufferTests
     [Test]
     public void GsoBatcher_GroupsEqualSizedRuns_WithSmallerTrailingSegment()
     {
-        // Drei gleich große (1200) + ein kleineres (500) ⇒ EIN Batch, Segmentgröße 1200, 4 Segmente.
+        // Three equally sized (1200) + one smaller (500) ⇒ ONE batch, segment size 1200, 4 segments.
         var datagrams = new[] { Bytes(1200, 1), Bytes(1200, 2), Bytes(1200, 3), Bytes(500, 4) };
         List<GsoBatch> batches = Collect(datagrams, out List<byte[]> reconstructed);
 
         Assert.That(batches, Has.Count.EqualTo(1));
         Assert.That(batches[0].SegmentSize, Is.EqualTo(1200));
         Assert.That(batches[0].SegmentCount, Is.EqualTo(4));
-        Assert.That(reconstructed, Is.EqualTo(datagrams)); // byte-genau rekonstruierbar
+        Assert.That(reconstructed, Is.EqualTo(datagrams)); // reconstructible byte for byte
     }
 
     [Test]
     public void GsoBatcher_StartsNewBatch_OnLargerDatagram()
     {
-        // Ein kleineres MUSS ein Segment-Lauf beenden; ein GRÖSSERES beginnt einen neuen Batch.
+        // A smaller one MUST end a segment run; a LARGER one starts a new batch.
         var datagrams = new[] { Bytes(800, 1), Bytes(1200, 2), Bytes(1200, 3) };
         List<GsoBatch> batches = Collect(datagrams, out List<byte[]> reconstructed);
 
-        // 800 ist kleiner ⇒ eigener 1-Segment-Batch; dann 1200,1200 als Zweier-Batch.
+        // 800 is smaller ⇒ its own 1-segment batch; then 1200,1200 as a batch of two.
         Assert.That(batches, Has.Count.EqualTo(2));
         Assert.That(batches[0].SegmentCount, Is.EqualTo(1));
         Assert.That(batches[1].SegmentCount, Is.EqualTo(2));
@@ -125,7 +125,7 @@ public class ZeroAllocBufferTests
     [Test]
     public void GsoBatcher_RespectsSegmentAndByteCaps()
     {
-        // 200 gleich große 20-Byte-Datagramme ⇒ Batches à höchstens MaxSegments (64) Segmente.
+        // 200 equally sized 20-byte datagrams ⇒ batches of at most MaxSegments (64) segments each.
         var datagrams = Enumerable.Range(0, 200).Select(k => Bytes(20, (byte)k)).ToArray();
         List<GsoBatch> batches = Collect(datagrams, out List<byte[]> reconstructed);
 
@@ -143,7 +143,7 @@ public class ZeroAllocBufferTests
         Assert.That(reconstructed, Is.EqualTo(new[] { Bytes(1200, 9) }));
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static byte[] Bytes(int length, byte fill)
     {
@@ -153,8 +153,8 @@ public class ZeroAllocBufferTests
     }
 
     /// <summary>
-    /// Sammelt die Batches UND rekonstruiert daraus die ursprüngliche Datagramm-Folge — jeder Batch
-    /// wird gemäß Segmentgröße wieder zerschnitten (genau das tut der Kernel bei UDP_SEGMENT).
+    /// Collects the batches AND reconstructs the original datagram sequence from them — each batch
+    /// is cut up again according to the segment size (exactly what the kernel does for UDP_SEGMENT).
     /// </summary>
     private static List<GsoBatch> Collect(IReadOnlyList<byte[]> datagrams, out List<byte[]> reconstructed)
     {

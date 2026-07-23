@@ -29,9 +29,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// End-to-End: unser HTTP/3-Client spricht in-process mit unserem HTTP/3-Server (beide from scratch).
-/// Die Datagramme werden direkt zwischen beiden ausgetauscht (kein echtes Netzwerk). Validiert den
-/// vollständigen Server-Pfad: QUIC-Server-Handshake, HTTP/3-Server, QPACK-kodierte Antwort.
+/// End to end: our HTTP/3 client talks in-process to our HTTP/3 server (both from scratch).
+/// The datagrams are exchanged directly between the two (no real network). Validates the
+/// complete server path: QUIC server handshake, HTTP/3 server, QPACK-encoded response.
 /// </summary>
 [TestFixture]
 public class Http3ClientServerTests
@@ -45,10 +45,10 @@ public class Http3ClientServerTests
         {
             Status = 200,
             Headers = [new HeaderField("content-type", "text/plain")],
-            Body = System.Text.Encoding.UTF8.GetBytes($"Hello from scratch! Du hast {request.Path} angefragt."),
+            Body = System.Text.Encoding.UTF8.GetBytes($"Hello from scratch! You requested {request.Path}."),
         };
 
-        // Der Client vertraut dem selbstsignierten Testzertifikat als Custom-Trust-Root und prüft es real.
+        // The client trusts the self-signed test certificate as a custom trust root and validates it for real.
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         using var server = new Http3ServerConnection(cert, Handler);
         using var client = new Http3ClientConnection("localhost", certificateValidation: validation);
@@ -58,7 +58,7 @@ public class Http3ClientServerTests
         bool requestSent = false;
         Http3Response? response = null;
 
-        // Datagramme direkt zwischen Client und Server pendeln lassen.
+        // Shuttle datagrams directly between client and server.
         for (int round = 0; round < 20 && response is null; round++)
         {
             client.CheckTimeouts();
@@ -91,8 +91,8 @@ public class Http3ClientServerTests
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
 
-        // ~150 KB deterministischer Rumpf – groß genug, um den cwnd-/Pacing-begrenzten Sendepfad
-        // über viele Pakete zu treiben (Slow Start, Pacing-Budget, MTU-Paketierung).
+        // ~150 KB deterministic body — big enough to drive the cwnd-/pacing-limited send path
+        // across many packets (slow start, pacing budget, MTU packetization).
         byte[] body = new byte[150_000];
         for (int i = 0; i < body.Length; i++)
             body[i] = (byte)(i * 31 + 7);
@@ -140,10 +140,10 @@ public class Http3ClientServerTests
         Assert.That(response, Is.Not.Null);
         Assert.That(response!.Status, Is.EqualTo(200));
         Assert.That(response.Body.Length, Is.EqualTo(body.Length));
-        Assert.That(body.AsSpan().SequenceEqual(response.Body), Is.True, "Der empfangene Rumpf muss byte-genau stimmen.");
+        Assert.That(body.AsSpan().SequenceEqual(response.Body), Is.True, "The received body must match byte for byte.");
 
-        // Der MTU-begrenzte Emitter darf keine überdimensionierten Datagramme erzeugen.
-        Assert.That(maxServerDatagram <= 1300, Is.True, $"Server-Datagramm zu groß: {maxServerDatagram} Bytes.");
+        // The MTU-limited emitter must not produce oversized datagrams.
+        Assert.That(maxServerDatagram <= 1300, Is.True, $"Server datagram too large: {maxServerDatagram} bytes.");
     }
 
     [Test]
@@ -151,10 +151,10 @@ public class Http3ClientServerTests
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
 
-        byte[] requestBody = System.Text.Encoding.UTF8.GetBytes("Hallo Server, hier kommt ein POST-Rumpf!");
+        byte[] requestBody = System.Text.Encoding.UTF8.GetBytes("Hello server, here comes a POST body!");
         Http3Request? seenRequest = null;
 
-        // Echo-Handler: spiegelt den Request-Rumpf zurück (beweist Empfang UND Antwortpfad).
+        // Echo handler: mirrors the request body back (proves reception AND the response path).
         Http3Response Handler(Http3Request request)
         {
             seenRequest = request;
@@ -194,18 +194,18 @@ public class Http3ClientServerTests
                 client.TryGetResponse(requestStream, out response);
         }
 
-        // Der Server hat Methode, Header und den vollständigen Rumpf gesehen (RFC 9114 §4.1).
+        // The server saw the method, the headers and the complete body (RFC 9114 §4.1).
         Assert.That(seenRequest, Is.Not.Null);
         Assert.That(seenRequest!.Method, Is.EqualTo("POST"));
         Assert.That(seenRequest.Path, Is.EqualTo("/echo"));
         Assert.That(seenRequest.AdditionalHeaders.FirstOrDefault(h => h.Name == "content-type").Value, Is.EqualTo("text/plain"));
         Assert.That(seenRequest.AdditionalHeaders.FirstOrDefault(h => h.Name == "content-length").Value, Is.EqualTo(requestBody.Length.ToString()));
-        Assert.That(requestBody.AsSpan().SequenceEqual(seenRequest.Body), Is.True, "Der Request-Rumpf muss byte-genau ankommen.");
+        Assert.That(requestBody.AsSpan().SequenceEqual(seenRequest.Body), Is.True, "The request body must arrive byte for byte.");
 
-        // Und das Echo kam vollständig zurück.
+        // And the echo came back completely.
         Assert.That(response, Is.Not.Null);
         Assert.That(response!.Status, Is.EqualTo(200));
-        Assert.That(requestBody.AsSpan().SequenceEqual(response.Body), Is.True, "Das Echo muss byte-genau stimmen.");
+        Assert.That(requestBody.AsSpan().SequenceEqual(response.Body), Is.True, "The echo must match byte for byte.");
     }
 
     [Test]
@@ -213,8 +213,8 @@ public class Http3ClientServerTests
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
 
-        // ~120 KB Upload – treibt erstmals den CLIENT-Sendepfad (cwnd, Pacing, MTU-Paketierung,
-        // Flow Control) über viele Pakete; bisher testeten nur Downloads die Gegenrichtung.
+        // ~120 KB upload — drives the CLIENT send path (cwnd, pacing, MTU packetization,
+        // flow control) across many packets for the first time; so far only downloads tested the reverse direction.
         byte[] requestBody = new byte[120_000];
         for (int i = 0; i < requestBody.Length; i++)
             requestBody[i] = (byte)(i * 17 + 3);
@@ -223,7 +223,7 @@ public class Http3ClientServerTests
         Http3Response Handler(Http3Request request)
         {
             seenBodyLength = request.Body.Length;
-            // Antwort mit Prüfsumme statt Echo (hält die Antwort klein und beweist Byte-Genauigkeit).
+            // Respond with a checksum instead of an echo (keeps the response small and proves byte accuracy).
             byte[] hash = System.Security.Cryptography.SHA256.HashData(request.Body);
             return new Http3Response { Status = 200, Body = hash };
         }
@@ -263,10 +263,10 @@ public class Http3ClientServerTests
         Assert.That(seenBodyLength, Is.EqualTo(requestBody.Length));
         Assert.That(response, Is.Not.Null);
         Assert.That(response!.Status, Is.EqualTo(200));
-        Assert.That(System.Security.Cryptography.SHA256.HashData(requestBody).AsSpan().SequenceEqual(response.Body), Is.True, "Die SHA-256-Prüfsumme des Uploads muss stimmen — der Rumpf kam byte-genau an.");
+        Assert.That(System.Security.Cryptography.SHA256.HashData(requestBody).AsSpan().SequenceEqual(response.Body), Is.True, "The SHA-256 checksum of the upload must match — the body arrived byte for byte.");
 
-        // Auch der Client-Emitter bleibt MTU-begrenzt.
-        Assert.That(maxClientDatagram <= 1300, Is.True, $"Client-Datagramm zu groß: {maxClientDatagram} Bytes.");
+        // The client emitter too stays MTU-limited.
+        Assert.That(maxClientDatagram <= 1300, Is.True, $"Client datagram too large: {maxClientDatagram} bytes.");
     }
 
     [Test]
@@ -275,8 +275,8 @@ public class Http3ClientServerTests
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         Http3Response Handler(Http3Request request) => new() { Status = 200, Body = [] };
 
-        // Server kündigt einen kurzen Idle-Timeout an (300 ms). Nach dem Handshake ist die In-Process-RTT
-        // winzig ⇒ 3·PTO ≪ 300 ms, also dominiert der ausgehandelte Wert.
+        // The server announces a short idle timeout (300 ms). After the handshake the in-process RTT
+        // is tiny ⇒ 3·PTO ≪ 300 ms, so the negotiated value dominates.
         var serverParams = new TransportParameters { MaxIdleTimeoutMs = 300 };
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         using var server = new Http3ServerConnection(cert, Handler, serverParams);
@@ -291,14 +291,14 @@ public class Http3ClientServerTests
                 client.ProcessDatagram(dg);
         }
 
-        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake must come about.");
         Assert.That(server.IsIdleTimedOut, Is.False);
 
-        // Ohne weiteren Paketaustausch verstreicht mehr als der ausgehandelte Idle-Timeout.
+        // Without further packet exchange more than the negotiated idle timeout passes.
         Thread.Sleep(600);
         server.CheckTimeouts();
 
-        Assert.That(server.IsIdleTimedOut, Is.True, "Der Server muss die Verbindung nach dem Idle-Timeout schließen.");
-        Assert.That(server.GetDatagramsToSend(), Is.Empty); // still geschlossen ⇒ keine Datagramme mehr
+        Assert.That(server.IsIdleTimedOut, Is.True, "The server must close the connection after the idle timeout.");
+        Assert.That(server.GetDatagramsToSend(), Is.Empty); // closed silently ⇒ no more datagrams
     }
 }

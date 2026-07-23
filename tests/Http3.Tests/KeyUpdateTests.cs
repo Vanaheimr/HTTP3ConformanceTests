@@ -30,8 +30,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Tests für 1-RTT-Key-Updates (RFC 9001 §6): die „quic ku"-Ableitung der nächsten Generation sowie ein
-/// vollständiger Update-Umlauf zwischen unserem Client und Server über das Key-Phase-Bit.
+/// Tests for 1-RTT key updates (RFC 9001 §6): the "quic ku" derivation of the next generation as well
+/// as a complete update round trip between our client and server via the key-phase bit.
 /// </summary>
 [TestFixture]
 public class KeyUpdateTests
@@ -49,7 +49,7 @@ public class KeyUpdateTests
         Assert.That(next.Secret, Is.Not.EqualTo(tk.Secret)); // secret_<n+1> = HKDF-Expand-Label(secret_<n>, "quic ku", …)
         Assert.That(next.Key, Is.Not.EqualTo(tk.Key));
         Assert.That(next.Iv, Is.Not.EqualTo(tk.Iv));
-        Assert.That(next.HeaderProtectionKey, Is.EqualTo(tk.HeaderProtectionKey)); // HP-Key bleibt unverändert (RFC 9001 §6.1)
+        Assert.That(next.HeaderProtectionKey, Is.EqualTo(tk.HeaderProtectionKey)); // HP key stays unchanged (RFC 9001 §6.1)
     }
 
     private static (QuicClientConnection client, QuicServerConnection server) Handshaken(ServerCertificate cert)
@@ -60,8 +60,8 @@ public class KeyUpdateTests
         client.Start();
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
-        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
-        Pump(client, server); // Restdaten (HANDSHAKE_DONE-ACK etc.) abfließen lassen
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake must come about.");
+        Pump(client, server); // let the remaining data (HANDSHAKE_DONE ACK etc.) drain
         return (client, server);
     }
 
@@ -84,23 +84,23 @@ public class KeyUpdateTests
         Assert.That(client.CurrentKeyPhase, Is.False);
         Assert.That(server.CurrentKeyPhase, Is.False);
 
-        // Client leitet den Key Update ein: Send-Phase kippt sofort auf 1.
+        // The client initiates the key update: the send phase flips to 1 immediately.
         Assert.That(client.InitiateKeyUpdate(), Is.True);
         Assert.That(client.CurrentKeyPhase, Is.True);
 
-        // Stream-Daten unter den neuen Schlüsseln senden.
+        // Send stream data under the new keys.
         QuicStream stream = client.OpenBidirectionalStream();
         stream.Write([10, 20, 30, 40, 50]);
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        // Server erkennt das gekippte Key-Phase-Bit, rotiert Read- und Send-Keys.
-        Assert.That(server.CurrentKeyPhase, Is.True, "Server muss auf die neue Key-Phase gewechselt sein.");
+        // The server detects the flipped key-phase bit, rotates read and send keys.
+        Assert.That(server.CurrentKeyPhase, Is.True, "The server must have switched to the new key phase.");
         Assert.That(server.KeyUpdateCount >= 1, Is.True);
-        // Der Client rotiert seine Read-Keys, sobald der Server mit der neuen Phase antwortet.
+        // The client rotates its read keys as soon as the server answers with the new phase.
         Assert.That(client.CurrentKeyPhase, Is.True);
 
-        // Entscheidend: die Anwendungsdaten kamen unter den rotierten Schlüsseln korrekt an.
+        // Crucially: the application data arrived correctly under the rotated keys.
         Assert.That(server.Streams.ContainsKey(stream.Id.Value), Is.True);
         Assert.That(server.Streams[stream.Id.Value].Read(), Is.EqualTo([10, 20, 30, 40, 50]));
     }
@@ -113,7 +113,7 @@ public class KeyUpdateTests
         using var _ = client;
         using var __ = server;
 
-        // Erster Update (Phase → 1).
+        // First update (phase → 1).
         client.InitiateKeyUpdate();
         QuicStream s1 = client.OpenBidirectionalStream();
         s1.Write([1, 1, 1]);
@@ -122,7 +122,7 @@ public class KeyUpdateTests
         Assert.That(client.CurrentKeyPhase, Is.True);
         Assert.That(server.CurrentKeyPhase, Is.True);
 
-        // Zweiter Update (Phase → 0, Secret-Generation 2).
+        // Second update (phase → 0, secret generation 2).
         Assert.That(client.InitiateKeyUpdate(), Is.True);
         Assert.That(client.CurrentKeyPhase, Is.False);
         QuicStream s2 = client.OpenBidirectionalStream();
@@ -130,7 +130,7 @@ public class KeyUpdateTests
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.That(server.CurrentKeyPhase, Is.False, "Nach dem zweiten Update muss die Phase wieder 0 sein.");
+        Assert.That(server.CurrentKeyPhase, Is.False, "After the second update the phase must be 0 again.");
         Assert.That(server.Streams[s2.Id.Value].Read(), Is.EqualTo([2, 2, 2, 2]));
     }
 
@@ -142,17 +142,17 @@ public class KeyUpdateTests
         using var _ = client;
         using var __ = server;
 
-        // Server leitet den Update ein.
+        // The server initiates the update.
         Assert.That(server.InitiateKeyUpdate(), Is.True);
         Assert.That(server.CurrentKeyPhase, Is.True);
 
-        // Server sendet Daten mit neuer Phase; der Client muss den Update erkennen.
+        // The server sends data with the new phase; the client must detect the update.
         QuicStream stream = server.OpenUnidirectionalStream();
         stream.Write([7, 7, 7]);
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.That(client.CurrentKeyPhase, Is.True, "Client muss den Key Update des Servers erkannt haben.");
+        Assert.That(client.CurrentKeyPhase, Is.True, "The client must have detected the server's key update.");
         Assert.That(server.CurrentKeyPhase, Is.True);
     }
 }

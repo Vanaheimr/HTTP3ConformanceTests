@@ -24,12 +24,12 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// QPACK-Encoder mit dynamischer Tabelle (RFC 9204). Zustandsbehaftet: hält die dynamische Tabelle und
-/// erzeugt beim Kodieren einer Header-Liste sowohl die <b>Encoder-Stream-Instruktionen</b> (Inserts) als
-/// auch die <b>Field Section</b>. Die Instruktionen müssen vor der Field Section beim Decoder ankommen.
-/// <para>Vereinfachungen: Base = Required Insert Count (alle Referenzen pre-base, kein Post-Base);
-/// Insert-Instruktionen nutzen Static-Name-Referenzen oder literale Namen (keine dynamischen Name-Refs,
-/// keine Duplicate). Der Decoder beherrscht dennoch die vollständige Kodierung (u. a. RFC-Vektoren).</para>
+/// QPACK encoder with a dynamic table (RFC 9204). Stateful: holds the dynamic table and, when
+/// encoding a header list, produces both the <b>encoder-stream instructions</b> (inserts) and the
+/// <b>field section</b>. The instructions must reach the decoder before the field section.
+/// <para>Simplifications: base = required insert count (all references pre-base, no post-base);
+/// insert instructions use static name references or literal names (no dynamic name refs,
+/// no duplicates). The decoder nevertheless masters the complete encoding (incl. RFC vectors).</para>
 /// </summary>
 public sealed class QpackDynamicEncoder
 {
@@ -37,21 +37,21 @@ public sealed class QpackDynamicEncoder
     private readonly record struct Rep(RepKind Kind, ulong Index, string Name, string Value);
 
     private readonly QpackDynamicTable _table = new();
-    private readonly Dictionary<ulong, List<ulong>> _outstandingSections = []; // Stream-ID → referenzierte absolute Indizes
-    private ulong _knownReceivedCount; // vom Decoder bestätigte Insert-Anzahl (RFC 9204 §2.1.4)
+    private readonly Dictionary<ulong, List<ulong>> _outstandingSections = []; // stream ID → referenced absolute indices
+    private ulong _knownReceivedCount; // insert count confirmed by the decoder (RFC 9204 §2.1.4)
 
     /// <summary>
-    /// Die dynamische Tabelle des Encoders (Diagnose/Test).
+    /// The encoder's dynamic table (diagnostics/test).
     /// </summary>
     public QpackDynamicTable Table => _table;
 
     /// <summary>
-    /// Vom Decoder bestätigte Insert-Anzahl (Known Received Count). Diagnose.
+    /// Insert count confirmed by the decoder (known received count). Diagnostics.
     /// </summary>
     public ulong KnownReceivedCount => _knownReceivedCount;
 
     /// <summary>
-    /// Setzt die dynamische Tabellenkapazität und liefert die zugehörige Encoder-Stream-Instruktion.
+    /// Sets the dynamic table capacity and returns the corresponding encoder-stream instruction.
     /// </summary>
     public byte[] SetCapacity(ulong capacity)
     {
@@ -67,19 +67,19 @@ public sealed class QpackDynamicEncoder
     }
 
     /// <summary>
-    /// Kodiert eine Header-Liste ohne Section-Tracking (Stream-ID 0). Für einfache Round-Trips/Tests.
+    /// Encodes a header list without section tracking (stream ID 0). For simple round-trips/tests.
     /// </summary>
     public (byte[] Instructions, byte[] FieldSection) Encode(IReadOnlyList<HeaderField> headers)
         => Encode(0, headers);
 
     /// <summary>
-    /// Kodiert eine Header-Liste für den Stream <paramref name="streamId"/>. Liefert (Encoder-Stream-
-    /// Instruktionen, Field Section). Referenzierte dynamische Einträge werden festgehalten (gegen Eviction),
-    /// bis eine Section-Acknowledgment für diesen Stream eintrifft.
+    /// Encodes a header list for the stream <paramref name="streamId"/>. Returns (encoder-stream
+    /// instructions, field section). Referenced dynamic entries are pinned (against eviction) until
+    /// a section acknowledgment for this stream arrives.
     /// </summary>
     public (byte[] Instructions, byte[] FieldSection) Encode(ulong streamId, IReadOnlyList<HeaderField> headers)
     {
-        ReleaseSection(streamId); // etwaige alte Referenzen dieses Streams freigeben
+        ReleaseSection(streamId); // release any old references of this stream
 
         var instructions = new BufferWriter(64);
         var reps = new List<Rep>(headers.Count);
@@ -122,9 +122,9 @@ public sealed class QpackDynamicEncoder
             }
 
             ulong requiredInsertCount = maxReferencedAbsolute >= 0 ? (ulong)maxReferencedAbsolute + 1 : 0;
-            ulong baseValue = requiredInsertCount; // Base = RIC ⇒ alle dynamischen Referenzen sind pre-base
+            ulong baseValue = requiredInsertCount; // base = RIC ⇒ all dynamic references are pre-base
 
-            // Referenzierte Einträge festhalten, bis die Section-Acknowledgment für diesen Stream eintrifft.
+            // Pin the referenced entries until the section acknowledgment for this stream arrives.
             if (referenced.Count > 0)
             {
                 foreach (ulong abs in referenced)
@@ -146,8 +146,8 @@ public sealed class QpackDynamicEncoder
     }
 
     /// <summary>
-    /// Verarbeitet die Decoder-Stream-Instruktionen des Peers (RFC 9204 §4.4) und gibt die Anzahl verbrauchter
-    /// Bytes zurück (eine angeschnittene Instruktion am Ende bleibt liegen).
+    /// Processes the peer's decoder-stream instructions (RFC 9204 §4.4) and returns the number of
+    /// consumed bytes (a truncated instruction at the end is left in place).
     /// </summary>
     public int ProcessDecoderInstructions(ReadOnlySpan<byte> data)
     {
@@ -165,7 +165,7 @@ public sealed class QpackDynamicEncoder
                 if (ok)
                 {
                     ReleaseSection(streamId);
-                    _knownReceivedCount = _table.InsertCount; // bestätigte Section ⇒ alle bisherigen Inserts empfangen
+                    _knownReceivedCount = _table.InsertCount; // acknowledged section ⇒ all previous inserts received
                 }
             }
             else if ((first & 0x40) != 0) // Stream Cancellation: 0 1 StreamID(6+)
@@ -182,7 +182,7 @@ public sealed class QpackDynamicEncoder
             }
 
             if (!ok)
-                break; // angeschnitten – auf mehr Daten warten
+                break; // truncated – wait for more data
             consumed = reader.Position;
         }
         return consumed;
@@ -217,11 +217,11 @@ public sealed class QpackDynamicEncoder
         ulong encodedInsertCount = 0;
         if (requiredInsertCount != 0)
         {
-            ulong fullRange = 2 * _table.MaxEntries; // MaxEntries ≥ 1, wenn es dynamische Einträge gibt
+            ulong fullRange = 2 * _table.MaxEntries; // MaxEntries ≥ 1 when dynamic entries exist
             encodedInsertCount = requiredInsertCount % fullRange + 1;
         }
         QpackPrimitives.EncodeInteger(ref w, encodedInsertCount, 8, 0x00);
-        // Base = RIC ⇒ Sign = 0, Delta Base = 0.
+        // Base = RIC ⇒ sign = 0, delta base = 0.
         QpackPrimitives.EncodeInteger(ref w, 0, 7, 0x00);
     }
 

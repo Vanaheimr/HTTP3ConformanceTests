@@ -25,11 +25,11 @@ using System.Buffers.Binary;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 
 /// <summary>
-/// Wachsender Schreibpuffer (Big-Endian) zum Zusammenbauen ausgehender QUIC-Pakete.
+/// Growing write buffer (big-endian) for assembling outgoing QUIC packets.
 /// <para>
-/// Der Backing-Store wird aus dem <see cref="ArrayPool{Byte}"/> geliehen und bei Bedarf
-/// verdoppelt. <see cref="Dispose"/> gibt ihn zurück – daher stets mit <c>using</c> verwenden.
-/// Als <c>struct</c> ausgelegt; per <c>ref</c> übergeben, um Kopien (und doppeltes Dispose) zu vermeiden.
+/// The backing store is rented from the <see cref="ArrayPool{Byte}"/> and doubled on demand.
+/// <see cref="Dispose"/> returns it – therefore always use with <c>using</c>.
+/// Designed as a <c>struct</c>; pass by <c>ref</c> to avoid copies (and double dispose).
 /// </para>
 /// </summary>
 public struct BufferWriter : IDisposable
@@ -50,12 +50,12 @@ public struct BufferWriter : IDisposable
     }
 
     /// <summary>
-    /// Anzahl bislang geschriebener Bytes.
+    /// Number of bytes written so far.
     /// </summary>
     public readonly int Length => _written;
 
     /// <summary>
-    /// Die bisher geschriebenen Bytes als Slice (gültig bis zur nächsten Schreib-/Dispose-Operation).
+    /// The bytes written so far as a slice (valid until the next write/dispose operation).
     /// </summary>
     public readonly ReadOnlySpan<byte> WrittenSpan
         => _buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _written);
@@ -89,7 +89,7 @@ public struct BufferWriter : IDisposable
     }
 
     /// <summary>
-    /// Schreibt einen QUIC-VarInt (RFC 9000 §16).
+    /// Writes a QUIC VarInt (RFC 9000 §16).
     /// </summary>
     public void WriteVarInt(ulong value)
     {
@@ -107,7 +107,7 @@ public struct BufferWriter : IDisposable
     }
 
     /// <summary>
-    /// Schreibt <paramref name="count"/> Bytes mit dem Wert <paramref name="value"/> (z. B. PADDING).
+    /// Writes <paramref name="count"/> bytes with the value <paramref name="value"/> (e.g. PADDING).
     /// </summary>
     public void WriteRepeated(byte value, int count)
     {
@@ -119,9 +119,9 @@ public struct BufferWriter : IDisposable
     }
 
     /// <summary>
-    /// Reserviert <paramref name="count"/> Bytes und gibt einen beschreibbaren Span darauf zurück.
-    /// Nützlich, um z. B. eine Länge nachträglich einzutragen. Der Span ist nur bis zur nächsten
-    /// Schreiboperation (mögliche Reallokation) gültig.
+    /// Reserves <paramref name="count"/> bytes and returns a writable span onto them.
+    /// Useful e.g. for filling in a length afterwards. The span is only valid until the next
+    /// write operation (possible reallocation).
     /// </summary>
     public Span<byte> GetSpan(int count)
     {
@@ -132,9 +132,9 @@ public struct BufferWriter : IDisposable
     }
 
     /// <summary>
-    /// Liefert einen beschreibbaren Span auf bereits geschriebene Bytes zum nachträglichen Patchen
-    /// (z. B. ein Längenfeld eintragen, dessen Wert erst nach dem Schreiben des Inhalts feststeht).
-    /// Nur unmittelbar vor der nächsten Schreiboperation gültig.
+    /// Returns a writable span onto already-written bytes for patching afterwards
+    /// (e.g. filling in a length field whose value is only known after writing the content).
+    /// Only valid immediately before the next write operation.
     /// </summary>
     public readonly Span<byte> PatchSpan(int offset, int count)
     {
@@ -144,14 +144,14 @@ public struct BufferWriter : IDisposable
     }
 
     /// <summary>
-    /// Stellt Platz für <paramref name="additional"/> weitere Bytes sicher und gibt den Backing-Store zurück.
+    /// Ensures space for <paramref name="additional"/> more bytes and returns the backing store.
     /// </summary>
     private byte[] EnsureCapacity(int additional)
     {
         ObjectDisposedException.ThrowIf(_disposed, typeof(BufferWriter));
 
-        // Lazy-Init: Ein per 'new BufferWriter()' (impliziter struct-Default-Ctor) erzeugter
-        // Writer hat noch keinen geliehenen Puffer.
+        // Lazy init: a writer created via 'new BufferWriter()' (implicit struct default ctor)
+        // has no rented buffer yet.
         _buffer ??= ArrayPool<byte>.Shared.Rent(Math.Max(DefaultCapacity, additional));
 
         int required = _written + additional;

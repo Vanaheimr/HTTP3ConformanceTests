@@ -18,38 +18,38 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 
 /// <summary>
-/// Byte-Warteschlange für den Zero-Alloc-Pfad (Phase 9): hinten anhängen, vorne konsumieren —
-/// beides amortisiert O(1) und ohne Allokation im eingeschwungenen Zustand. Ersetzt die früheren
-/// <c>List&lt;byte&gt;</c>-Puffer, deren <c>RemoveRange(0, n)</c> bei jedem Konsum ALLE Restbytes
-/// verschob (O(n²) über einen Transfer) und deren Auslesen (<c>ToArray</c>) je Pump-Durchlauf den
-/// gesamten Inhalt kopierte. Der Backing-Store wächst bei Bedarf (Verdopplung) und wird
-/// wiederverwendet; Kompaktion (Restbytes an den Anfang schieben) geschieht nur, wenn hinten kein
-/// Platz mehr ist — amortisiert O(1) je Byte.
+/// Byte queue for the zero-alloc path (phase 9): append at the back, consume at the front —
+/// both amortised O(1) and without allocation in the steady state. Replaces the former
+/// <c>List&lt;byte&gt;</c> buffers, whose <c>RemoveRange(0, n)</c> shifted ALL remaining bytes on
+/// every consume (O(n²) over a transfer) and whose read-out (<c>ToArray</c>) copied the entire
+/// content per pump pass. The backing store grows on demand (doubling) and is reused;
+/// compaction (moving the remaining bytes to the front) only happens when there is no more
+/// room at the back — amortised O(1) per byte.
 /// </summary>
 public sealed class ByteQueue
 {
     private byte[] _buffer = [];
-    private int _head; // Index des ersten ungelesenen Bytes
-    private int _tail; // Index der ersten freien Position
+    private int _head; // index of the first unread byte
+    private int _tail; // index of the first free position
 
     /// <summary>
-    /// Anzahl der gepufferten (noch nicht konsumierten) Bytes.
+    /// Number of buffered (not yet consumed) bytes.
     /// </summary>
     public int Count => _tail - _head;
 
     /// <summary>
-    /// Die gepufferten Bytes als Span — gültig bis zum nächsten <see cref="Append"/>/<see cref="Consume"/>.
+    /// The buffered bytes as a span — valid until the next <see cref="Append"/>/<see cref="Consume"/>.
     /// </summary>
     public ReadOnlySpan<byte> Span => _buffer.AsSpan(_head, _tail - _head);
 
     /// <summary>
-    /// Die gepufferten Bytes als Memory (für Parser mit <c>ReadOnlyMemory</c>-Signatur) — gültig bis
-    /// zur nächsten Mutation.
+    /// The buffered bytes as memory (for parsers with a <c>ReadOnlyMemory</c> signature) — valid
+    /// until the next mutation.
     /// </summary>
     public ReadOnlyMemory<byte> Memory => _buffer.AsMemory(_head, _tail - _head);
 
     /// <summary>
-    /// Hängt Bytes hinten an.
+    /// Appends bytes at the back.
     /// </summary>
     public void Append(ReadOnlySpan<byte> data)
     {
@@ -61,7 +61,7 @@ public sealed class ByteQueue
     }
 
     /// <summary>
-    /// Konsumiert die vordersten <paramref name="count"/> Bytes (rückt nur den Lese-Index vor).
+    /// Consumes the frontmost <paramref name="count"/> bytes (only advances the read index).
     /// </summary>
     public void Consume(int count)
     {
@@ -69,16 +69,16 @@ public sealed class ByteQueue
             throw new ArgumentOutOfRangeException(nameof(count));
         _head += count;
         if (_head == _tail)
-            _head = _tail = 0; // leer ⇒ Indizes zurücksetzen (bester Fall: nie kompaktieren)
+            _head = _tail = 0; // empty ⇒ reset the indices (best case: never compact)
     }
 
     /// <summary>
-    /// Verwirft den gesamten Inhalt (Backing-Store bleibt zur Wiederverwendung erhalten).
+    /// Discards the entire content (the backing store is kept for reuse).
     /// </summary>
     public void Clear() => _head = _tail = 0;
 
     /// <summary>
-    /// Kopiert den Inhalt in ein frisches Array (nur für Übergaben, die Besitz übernehmen müssen).
+    /// Copies the content into a fresh array (only for hand-offs that must take ownership).
     /// </summary>
     public byte[] ToArray() => Span.ToArray();
 
@@ -89,8 +89,8 @@ public sealed class ByteQueue
         int count = Count;
         if (count + needed <= _buffer.Length)
         {
-            // Hinten voll, aber vorne ist Platz frei ⇒ kompaktieren statt wachsen
-            // (Buffer.BlockCopy ist überlappungssicher, wie memmove).
+            // Back is full, but there is free room at the front ⇒ compact instead of growing
+            // (Buffer.BlockCopy is overlap-safe, like memmove).
             Buffer.BlockCopy(_buffer, _head, _buffer, 0, count);
         }
         else

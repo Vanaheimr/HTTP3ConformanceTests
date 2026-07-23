@@ -24,7 +24,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// Ein zusammenhängender, bestätigter Paketnummernbereich [Smallest, Largest] (inklusive).
+/// A contiguous, acknowledged packet-number range [Smallest, Largest] (inclusive).
 /// </summary>
 public readonly record struct PacketNumberRange(ulong Largest, ulong Smallest)
 {
@@ -32,14 +32,14 @@ public readonly record struct PacketNumberRange(ulong Largest, ulong Smallest)
 }
 
 /// <summary>
-/// Die drei ECN-Zähler eines ACK-Frames vom Typ 0x03 (RFC 9000 §19.3.2).
+/// The three ECN counters of a type-0x03 ACK frame (RFC 9000 §19.3.2).
 /// </summary>
 public readonly record struct EcnCounts(ulong Ect0, ulong Ect1, ulong CongestionExperienced);
 
 /// <summary>
-/// ACK-Frame (Typ 0x02/0x03, RFC 9000 §19.3). Bestätigt empfangene Pakete als absteigend sortierte,
-/// nicht überlappende Bereiche. Die Wire-Kodierung nutzt relative Gap-/Längenwerte; dieses Modell
-/// hält stattdessen die absoluten Bereiche und rechnet beim Schreiben/Lesen um.
+/// ACK frame (type 0x02/0x03, RFC 9000 §19.3). Acknowledges received packets as descending-sorted,
+/// non-overlapping ranges. The wire encoding uses relative gap/length values; this model instead
+/// keeps the absolute ranges and converts when writing/reading.
 /// </summary>
 public sealed record AckFrame(
     IReadOnlyList<PacketNumberRange> Ranges,
@@ -47,19 +47,19 @@ public sealed record AckFrame(
     EcnCounts? Ecn = null) : Frame
 {
     /// <summary>
-    /// Größte bestätigte Paketnummer (aus dem ersten, höchsten Bereich).
+    /// Largest acknowledged packet number (from the first, highest range).
     /// </summary>
     public ulong LargestAcknowledged => Ranges[0].Largest;
 
     /// <summary>
-    /// Baut ein ACK-Frame aus einer Menge empfangener Paketnummern, indem aufeinanderfolgende
-    /// Nummern zu Bereichen zusammengefasst werden (absteigend sortiert).
+    /// Builds an ACK frame from a set of received packet numbers by merging consecutive numbers
+    /// into ranges (sorted descending).
     /// </summary>
     public static AckFrame FromPacketNumbers(IEnumerable<ulong> packetNumbers, ulong ackDelay = 0)
     {
         List<ulong> sorted = packetNumbers.Distinct().OrderByDescending(x => x).ToList();
         if (sorted.Count == 0)
-            throw new ArgumentException("Mindestens eine Paketnummer erforderlich.", nameof(packetNumbers));
+            throw new ArgumentException("At least one packet number is required.", nameof(packetNumbers));
 
         var ranges = new List<PacketNumberRange>();
         int i = 0;
@@ -103,7 +103,7 @@ public sealed record AckFrame(
     }
 
     /// <summary>
-    /// Parst den Frame-Rumpf. <paramref name="hasEcn"/> ergibt sich aus dem Typ (0x03).
+    /// Parses the frame body. <paramref name="hasEcn"/> follows from the type (0x03).
     /// </summary>
     public static bool TryReadBody(ref BufferReader reader, bool hasEcn, out AckFrame? frame)
     {
@@ -124,9 +124,9 @@ public sealed record AckFrame(
             if (!reader.TryReadVarInt(out ulong gap) || !reader.TryReadVarInt(out ulong ackRangeLength))
                 return false;
 
-            // largest_next = previous_smallest - gap - 2; jede berechnete Nummer muss >= 0 bleiben.
+            // largest_next = previous_smallest - gap - 2; every computed number must stay >= 0.
             if (smallest < gap + 2)
-                return false; // FRAME_ENCODING_ERROR: negativer Paketnummernwert
+                return false; // FRAME_ENCODING_ERROR: negative packet-number value
             ulong nextLargest = smallest - gap - 2;
             if (ackRangeLength > nextLargest)
                 return false;

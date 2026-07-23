@@ -24,9 +24,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// CRYPTO-Frame (Typ 0x06, RFC 9000 §19.6): transportiert TLS-Handshake-Bytes als geordneten
-/// Byte-Strom je Encryption-Level. Funktional wie ein STREAM-Frame, aber ohne Stream-ID, ohne
-/// Flow Control und ohne FIN.
+/// CRYPTO frame (type 0x06, RFC 9000 §19.6): transports TLS handshake bytes as an ordered byte
+/// stream per encryption level. Functionally like a STREAM frame, but without a stream ID, without
+/// flow control and without FIN.
 /// </summary>
 public sealed record CryptoFrame(ulong Offset, ReadOnlyMemory<byte> Data) : Frame
 {
@@ -39,7 +39,7 @@ public sealed record CryptoFrame(ulong Offset, ReadOnlyMemory<byte> Data) : Fram
     }
 
     /// <summary>
-    /// Parst den Frame-Rumpf (nach dem bereits gelesenen Typ-Feld).
+    /// Parses the frame body (after the type field has already been read).
     /// </summary>
     public static bool TryReadBody(ref BufferReader reader, out CryptoFrame? frame)
     {

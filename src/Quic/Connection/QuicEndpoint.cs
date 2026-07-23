@@ -26,7 +26,6 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
-using System.Diagnostics;
 using System.Security.Cryptography;
 
 #endregion
@@ -34,11 +33,11 @@ using System.Security.Cryptography;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 
 /// <summary>
-/// Gemeinsame Basis von <see cref="QuicClientConnection"/> und <see cref="QuicServerConnection"/>:
-/// Encryption-Levels, Packet-Number-Spaces, CRYPTO-Reassemblierung, Schlüsselinstallation, Streams,
-/// Flow Control und Loss Recovery – alles richtungsunabhängig. Die Rollenunterschiede (Schlüssel-
-/// richtung, Connection-ID-Vergabe, Stream-Perspektive, HANDSHAKE_DONE) sind über <see cref="IsServer"/>
-/// und die überschreibbaren Hooks abgebildet.
+/// Shared base of <see cref="QuicClientConnection"/> and <see cref="QuicServerConnection"/>:
+/// encryption levels, packet-number spaces, CRYPTO reassembly, key installation, streams,
+/// flow control and loss recovery – all direction-independent. The role differences (key
+/// direction, connection-ID assignment, stream perspective, HANDSHAKE_DONE) are mapped via
+/// <see cref="IsServer"/> and the overridable hooks.
 /// </summary>
 public abstract class QuicEndpoint : IDisposable
 {
@@ -50,7 +49,7 @@ public abstract class QuicEndpoint : IDisposable
     protected ConnectionId Dcid;
 
     /// <summary>
-    /// Die TLS-Engine dieser Rolle. Beim Server erst nach dem ersten Client-Initial gesetzt.
+    /// The TLS engine of this role. On the server, only set after the first client Initial.
     /// </summary>
     protected ITlsHandshake? TlsHandshake;
 
@@ -63,38 +62,38 @@ public abstract class QuicEndpoint : IDisposable
     private readonly CryptoStreamAssembler[] _recvCrypto = [new(), new(), new()];
     private readonly long[] _deliveredCrypto = new long[LevelCount];
     private readonly ulong[] _sendCryptoOffset = new ulong[LevelCount];
-    private readonly List<byte>[] _outgoingCrypto = [[], [], []]; // noch zu sendende CRYPTO je Level (bleibt gepuffert, bis gesendet)
+    private readonly List<byte>[] _outgoingCrypto = [[], [], []]; // CRYPTO still to send per level (stays buffered until sent)
     private bool _handshakeKeysInstalled;
     private bool _appKeysInstalled;
 
-    // Verwerfen der Initial-/Handshake-Schlüssel nach dem Handshake (RFC 9001 §4.9.1/§4.9.2), damit danach
-    // KEINE Initial-/Handshake-Pakete mehr gesendet werden (sonst sondiert ein PTO fälschlich diese Spaces).
+    // Discarding the Initial/Handshake keys after the handshake (RFC 9001 §4.9.1/§4.9.2), so that NO
+    // Initial/Handshake packets are sent afterwards (otherwise a PTO wrongly probes these spaces).
     private bool _initialKeysDiscarded;
     private bool _handshakeKeysDiscarded;
-    private bool _handshakePacketSent;      // Client: hat ≥1 Handshake-Paket gesendet
-    private bool _handshakePacketReceived;  // Server: hat ≥1 Handshake-Paket verarbeitet
-    private ulong? _firstOneRttPacketNumber; // PN des ersten mit 1-RTT-Keys gesendeten Pakets (RFC 9001 §4.1.2)
+    private bool _handshakePacketSent;      // client: has sent ≥1 Handshake packet
+    private bool _handshakePacketReceived;  // server: has processed ≥1 Handshake packet
+    private ulong? _firstOneRttPacketNumber; // PN of the first packet sent with 1-RTT keys (RFC 9001 §4.1.2)
 
-    // 0-RTT (RFC 9001 §4): eigener Schlüsselsatz aus dem client_early_traffic_secret. Nur Client→Server, daher
-    // beim Client der Schreib-, beim Server der Leseschlüssel; die Pakete laufen im Application-Packet-Number-Space.
+    // 0-RTT (RFC 9001 §4): its own key set from the client_early_traffic_secret. Client→server only, so
+    // on the client the write key, on the server the read key; the packets run in the application packet-number space.
     private PacketProtection? _zeroRttKeys;
     private bool _zeroRttInstalled;
-    private bool _zeroRttDataSent;         // Client: es wurden 0-RTT-Pakete gesendet
-    private ulong _zeroRttMaxPacketNumber; // höchste als 0-RTT gesendete PN (Grenze zu 1-RTT)
+    private bool _zeroRttDataSent;         // client: 0-RTT packets were sent
+    private ulong _zeroRttMaxPacketNumber; // highest PN sent as 0-RTT (boundary to 1-RTT)
     private bool _zeroRttRejectionHandled;
-    // Server: Deadline (Ticks), zu der die 0-RTT-Read-Keys nach dem ersten 1-RTT-Paket verworfen werden
-    // (RFC 9001 §4.9.3, RECOMMENDED 3×PTO). −1 = noch nicht scharfgeschaltet.
+    // Server: deadline (ticks) at which the 0-RTT read keys are discarded after the first 1-RTT packet
+    // (RFC 9001 §4.9.3, RECOMMENDED 3×PTO). −1 = not yet armed.
     private long _serverZeroRttDiscardDeadlineTicks = -1;
-    private bool _serverOneRttPacketReceived; // Server: hat ≥1 echtes 1-RTT-Paket empfangen (Obergrenze der 0-RTT-PNs bekannt)
+    private bool _serverOneRttPacketReceived; // server: has received ≥1 genuine 1-RTT packet (upper bound of the 0-RTT PNs known)
 
-    // Anti-Amplification (RFC 9000 §8.1): vor Adressvalidierung darf der Server höchstens 3× so viele Bytes
-    // senden, wie er empfangen hat. Für den Client ist die Adresse per Konstruktion validiert.
+    // Anti-amplification (RFC 9000 §8.1): before address validation the server may send at most 3× as
+    // many bytes as it received. For the client, the address is validated by construction.
     private long _amplificationReceived;
     private long _amplificationSent;
     private bool _addressValidated;
 
-    // 1-RTT-Key-Update (RFC 9001 §6): aktuelle Traffic Secrets, Key-Phase je Richtung und die für die
-    // Gegenrichtung vorbereiteten „nächsten" Read-Keys (sowie die kurz aufbewahrten vorigen für Reordering).
+    // 1-RTT key update (RFC 9001 §6): current traffic secrets, key phase per direction and the "next"
+    // read keys prepared for the opposite direction (plus the briefly retained previous ones for reordering).
     private TrafficKeys? _appWriteTk;
     private TrafficKeys? _appReadTk;
     private TrafficKeys? _nextAppReadTk;
@@ -102,7 +101,7 @@ public abstract class QuicEndpoint : IDisposable
     private PacketProtection? _prevAppReadKeys;
     private System.Security.Cryptography.HashAlgorithmName _appHash;
     private int _appHashLength;
-    private AeadAlgorithm _appAead; // AEAD der ausgehandelten Suite (AES-GCM oder ChaCha20-Poly1305)
+    private AeadAlgorithm _appAead; // AEAD of the negotiated suite (AES-GCM or ChaCha20-Poly1305)
     private bool _sendKeyPhase;
     private bool _recvKeyPhase;
     private uint _keyUpdateCount;
@@ -112,9 +111,9 @@ public abstract class QuicEndpoint : IDisposable
     private ulong _connSendUsed;
     private ulong _connSendLimit;
     private ulong _localConnMaxData;
-    private ReceiveWindowTuner? _connWindowTuner; // Auto-Tuning des Verbindungs-Empfangsfensters (Phase 9)
+    private ReceiveWindowTuner? _connWindowTuner; // auto-tuning of the connection receive window (phase 9)
 
-    // Auto-Tuning-Obergrenzen: bis hierhin dürfen die Empfangsfenster wachsen (BDP großer, latenter Pfade).
+    // Auto-tuning upper bounds: the receive windows may grow up to here (BDP of large, high-latency paths).
     private const ulong MaxStreamReceiveWindow = 16UL * 1024 * 1024;
     private const ulong MaxConnReceiveWindow = 24UL * 1024 * 1024;
 
@@ -122,56 +121,72 @@ public abstract class QuicEndpoint : IDisposable
     private readonly Pacer _pacer = new();
     private readonly IdleTimeout _idle = new();
     private bool _idleTimedOut;
-    private TimeSpan? _keepAliveInterval; // Keep-Alive-PING-Intervall (RFC 9000 §10.1.2); null = aus
+    private TimeSpan? _keepAliveInterval; // keep-alive PING interval (RFC 9000 §10.1.2); null = off
     private bool _pingPending;
-    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    // Monotonic connection clock via TimeProvider (default: the system clock). All timers below run
+    // on ticks elapsed since construction; a test-injected TimeProvider makes them deterministic.
+    private readonly TimeProvider _timeProvider;
+    private readonly long _startTimestamp;
     private readonly List<Frame>[] _retransmitQueue = [[], [], []];
-    private readonly Queue<byte[]> _pendingDatagrams = new(); // Rohdatagramme (Version Negotiation / Retry)
+    private readonly Queue<byte[]> _pendingDatagrams = new(); // raw datagrams (version negotiation / Retry)
     private bool _anyPacketProcessed;
 
     private ConnectionState _state = ConnectionState.Active;
-    private ConnectionCloseFrame? _closeFrame;   // das eigene CONNECTION_CLOSE (im Closing-Zustand)
-    private bool _closePacketPending;            // ob (erneut) ein Close-Paket zu senden ist
-    private long _closeDeadlineTicks = -1;       // Ende der Closing-/Draining-Periode
+    private ConnectionCloseFrame? _closeFrame;   // our own CONNECTION_CLOSE (in the closing state)
+    private bool _closePacketPending;            // whether a close packet is to be sent (again)
+    private long _closeDeadlineTicks = -1;       // end of the closing/draining period
 
-    private readonly ConnectionIdManager _cids;  // Connection-ID-Verwaltung (RFC 9000 §5.1)
+    private readonly ConnectionIdManager _cids;  // connection-ID management (RFC 9000 §5.1)
 
     /// <summary>
-    /// Optionaler Generator für aus der CID ableitbare Stateless-Reset-Tokens (RFC 9000 §10.3.1). Ist er gesetzt
-    /// (Server), werden ausgegebene Tokens per HMAC aus der CID gebildet und sind so nach Zustandsverlust
-    /// nachrechenbar, was das Senden eines Stateless Reset überhaupt erst ermöglicht.
+    /// Optional generator for stateless-reset tokens derivable from the CID (RFC 9000 §10.3.1). When
+    /// set (server), issued tokens are formed via HMAC from the CID and are thus recomputable after
+    /// state loss, which is what makes sending a stateless reset possible in the first place.
     /// </summary>
     protected StatelessResetTokenGenerator? StatelessResetTokens { get; set; }
-    private readonly List<Frame> _pendingControlFrames = []; // ausstehende Kontrollframes (NEW_/RETIRE_CONNECTION_ID, PATH_CHALLENGE/RESPONSE)
-    private ulong? _pathChallengePending; // die von uns gesendeten 8 PATH_CHALLENGE-Bytes, solange offen (RFC 9000 §8.2)
+    private readonly List<Frame> _pendingControlFrames = []; // pending control frames (NEW_/RETIRE_CONNECTION_ID, PATH_CHALLENGE/RESPONSE)
+    private ulong? _pathChallengePending; // the 8 PATH_CHALLENGE bytes we sent, while outstanding (RFC 9000 §8.2)
     private long _pathValidationDeadlineTicks = -1;
 
     /// <summary>
-    /// Retry-Token, das dem nächsten Initial beigelegt wird (leer, solange kein Retry empfangen wurde).
+    /// Retry token attached to the next Initial (empty while no Retry has been received).
     /// </summary>
     protected byte[] InitialToken = [];
 
     /// <summary>
-    /// Verbindungszustand (RFC 9000 §10.2): aktiv, schließend, entleerend oder geschlossen.
+    /// Connection state (RFC 9000 §10.2): active, closing, draining or closed.
     /// </summary>
     private enum ConnectionState { Active, Closing, Draining, Closed }
 
-    protected QuicEndpoint(TransportParameters? transportParameters, uint version)
+    protected QuicEndpoint(TransportParameters? transportParameters, uint version, TimeProvider? timeProvider = null)
     {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _startTimestamp = _timeProvider.GetTimestamp();
         Version = version;
         LocalParams = transportParameters ?? new TransportParameters();
         _localConnMaxData = LocalParams.InitialMaxDataValue;
         if (LocalParams.InitialMaxDataValue > 0)
             _connWindowTuner = new ReceiveWindowTuner(LocalParams.InitialMaxDataValue, MaxConnReceiveWindow);
         Scid = new ConnectionId(RandomNumberGenerator.GetBytes(8));
-        _cids = new ConnectionIdManager(Scid); // lokale Handshake-CID = Sequenz 0
-        _addressValidated = !IsServer;         // der Client sieht die Server-Adresse als validiert an
-        _idle.Negotiate(LocalParams.MaxIdleTimeoutMs, peerMs: 0); // Peer-Wert folgt nach dem Handshake
-        _idle.Start(_clock.Elapsed.Ticks);
+        _cids = new ConnectionIdManager(Scid); // local handshake CID = sequence 0
+        _addressValidated = !IsServer;         // the client regards the server address as validated
+        _idle.Negotiate(LocalParams.MaxIdleTimeoutMs, peerMs: 0); // the peer value follows after the handshake
+        _idle.Start(NowTicks);
     }
 
     /// <summary>
-    /// <c>true</c> für die Server-Rolle. Steuert Schlüsselrichtung und Stream-Perspektive.
+    /// The clock this connection runs on (RFC 9002 timers, idle timeout, pacing). Exposed so the
+    /// facades above can share the same time source.
+    /// </summary>
+    public TimeProvider TimeProvider => _timeProvider;
+
+    /// <summary>
+    /// Monotonic ticks elapsed since construction, from the injected <see cref="TimeProvider"/>.
+    /// </summary>
+    private long NowTicks => _timeProvider.GetElapsedTime(_startTimestamp).Ticks;
+
+    /// <summary>
+    /// <c>true</c> for the server role. Controls key direction and stream perspective.
     /// </summary>
     protected abstract bool IsServer { get; }
 
@@ -180,29 +195,29 @@ public abstract class QuicEndpoint : IDisposable
     public TransportParameters? PeerTransportParameters => PeerParams;
 
     /// <summary>
-    /// Aktuelles Congestion Window in Bytes (RFC 9002 §7). Diagnose.
+    /// Current congestion window in bytes (RFC 9002 §7). Diagnostics.
     /// </summary>
     public long CongestionWindow => _recovery.Congestion.CongestionWindow;
 
     /// <summary>
-    /// Aktuell unbestätigte, congestion-kontrollierte Bytes im Flug. Diagnose.
+    /// Currently unacknowledged, congestion-controlled bytes in flight. Diagnostics.
     /// </summary>
     public long BytesInFlight => _recovery.Congestion.BytesInFlight;
 
     /// <summary>
-    /// Anzahl im Application-Space empfangener CE-markierter Pakete (RFC 9000 §13.4). Diagnose/Test.
+    /// Number of CE-marked packets received in the application space (RFC 9000 §13.4). Diagnostics/test.
     /// </summary>
     public ulong ApplicationReceivedCeCount => Spaces[(int)EncryptionLevel.Application].ReceivedCeCount;
 
     /// <summary>
-    /// <c>true</c>, sobald die Verbindung wegen Idle-Timeout still geschlossen wurde (RFC 9000 §10.1).
+    /// <c>true</c> once the connection was closed silently due to the idle timeout (RFC 9000 §10.1).
     /// </summary>
     public bool IsIdleTimedOut => _idleTimedOut;
 
     /// <summary>
-    /// Keep-Alive-Intervall (RFC 9000 §10.1.2): Ist es gesetzt, sendet die Verbindung nach so viel
-    /// Inaktivität ein PING, um den Idle-Timeout auf beiden Seiten zurückzusetzen. Sollte deutlich kleiner
-    /// als der ausgehandelte Idle-Timeout sein. <c>null</c> = deaktiviert.
+    /// Keep-alive interval (RFC 9000 §10.1.2): when set, the connection sends a PING after that much
+    /// inactivity to reset the idle timeout on both sides. Should be considerably smaller than the
+    /// negotiated idle timeout. <c>null</c> = disabled.
     /// </summary>
     public TimeSpan? KeepAliveInterval
     {
@@ -210,35 +225,35 @@ public abstract class QuicEndpoint : IDisposable
         set => _keepAliveInterval = value;
     }
 
-    // ---- Connection-ID-Rotation (RFC 9000 §5.1) --------------------------------------------
+    // ---- Connection-ID rotation (RFC 9000 §5.1) --------------------------------------------
 
     /// <summary>
-    /// Anzahl aktiver, von uns ausgegebener Connection IDs (die der Peer als DCID nutzen darf).
+    /// Number of active connection IDs issued by us (which the peer may use as DCID).
     /// </summary>
     public int LocalConnectionIdCount => _cids.LocalCount;
 
     /// <summary>
-    /// Anzahl bekannter, vom Peer ausgegebener Connection IDs (die wir als DCID nutzen können).
+    /// Number of known connection IDs issued by the peer (which we can use as DCID).
     /// </summary>
     public int RemoteConnectionIdCount => _cids.RemoteCount;
 
     /// <summary>
-    /// Aktuell zum Senden genutzte Destination Connection ID.
+    /// Destination connection ID currently used for sending.
     /// </summary>
     public ConnectionId DestinationConnectionId => Dcid;
 
     /// <summary>
-    /// Gibt dem Peer per NEW_CONNECTION_ID (RFC 9000 §19.15) eine zusätzliche Connection ID (8 Byte) samt
-    /// Stateless-Reset-Token, sofern dessen <c>active_connection_id_limit</c> es zulässt. Erfordert
-    /// installierte 1-RTT-Schlüssel. Gibt die neue ID zurück oder <c>null</c>, wenn nichts ausgegeben wurde.
+    /// Gives the peer an additional connection ID (8 bytes) incl. stateless-reset token via
+    /// NEW_CONNECTION_ID (RFC 9000 §19.15), provided its <c>active_connection_id_limit</c> permits it.
+    /// Requires installed 1-RTT keys. Returns the new ID or <c>null</c> when nothing was issued.
     /// </summary>
     public ConnectionId? IssueConnectionId()
     {
         if (!_appKeysInstalled)
             return null;
         var newCid = new ConnectionId(RandomNumberGenerator.GetBytes(8));
-        // Token aus der CID ableiten (falls ein Generator gesetzt ist), damit es nach Zustandsverlust für einen
-        // Stateless Reset neu berechenbar bleibt; sonst zufällig.
+        // Derive the token from the CID (when a generator is set), so it stays recomputable for a
+        // stateless reset after state loss; otherwise random.
         byte[] token = StatelessResetTokens?.ComputeToken(newCid.Span) ?? RandomNumberGenerator.GetBytes(16);
         ulong limit = PeerParams?.ActiveConnectionIdLimitValue ?? 2;
         if (_cids.Issue(newCid, token, limit) is not { } frame)
@@ -248,8 +263,8 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Wechselt die Destination Connection ID auf eine zuvor vom Peer angebotene (RFC 9000 §5.1) und zieht
-    /// die bisherige per RETIRE_CONNECTION_ID zurück. Gibt <c>true</c> zurück, wenn eine weitere ID verfügbar war.
+    /// Switches the destination connection ID to one previously offered by the peer (RFC 9000 §5.1)
+    /// and retires the previous one via RETIRE_CONNECTION_ID. Returns <c>true</c> when a further ID was available.
     /// </summary>
     public bool RotateDestinationConnectionId()
     {
@@ -261,26 +276,26 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// <c>true</c>, wenn <paramref name="cid"/> eine unserer aktiven lokalen Connection IDs ist (für CID-basiertes Demuxing).
+    /// <c>true</c> when <paramref name="cid"/> is one of our active local connection IDs (for CID-based demuxing).
     /// </summary>
     public bool OwnsConnectionId(ConnectionId cid) => _cids.IsLocalConnectionId(cid);
 
-    // ---- Pfadvalidierung / Connection Migration (RFC 9000 §8.2, §9) -------------------------
+    // ---- Path validation / connection migration (RFC 9000 §8.2, §9) -------------------------
 
     /// <summary>
-    /// Es läuft eine Pfadvalidierung (PATH_CHALLENGE gesendet, PATH_RESPONSE ausstehend).
+    /// A path validation is in progress (PATH_CHALLENGE sent, PATH_RESPONSE outstanding).
     /// </summary>
     public bool PathValidationPending => _pathChallengePending is not null;
 
     /// <summary>
-    /// <c>true</c>, sobald die letzte Pfadvalidierung mit passendem PATH_RESPONSE bestätigt wurde.
+    /// <c>true</c> once the last path validation was confirmed with a matching PATH_RESPONSE.
     /// </summary>
     public bool PathValidated { get; private set; }
 
     /// <summary>
-    /// Startet eine Pfadvalidierung (RFC 9000 §8.2): sendet ein PATH_CHALLENGE mit 8 zufälligen Bytes und
-    /// erwartet ein passendes PATH_RESPONSE. Grundlage jeder Connection Migration (RFC 9000 §9) – der neue
-    /// Pfad gilt erst nach erfolgreicher Validierung als erreichbar.
+    /// Starts a path validation (RFC 9000 §8.2): sends a PATH_CHALLENGE with 8 random bytes and
+    /// expects a matching PATH_RESPONSE. The basis of every connection migration (RFC 9000 §9) – the
+    /// new path only counts as reachable after successful validation.
     /// </summary>
     public void InitiatePathValidation()
     {
@@ -288,45 +303,45 @@ public abstract class QuicEndpoint : IDisposable
         _pathChallengePending = data;
         PathValidated = false;
         _pendingControlFrames.Add(new PathChallengeFrame(data));
-        _pathValidationDeadlineTicks = _clock.Elapsed.Ticks + (3 * _recovery.Rtt.GetProbeTimeout(_recovery.MaxAckDelay)).Ticks;
+        _pathValidationDeadlineTicks = NowTicks + (3 * _recovery.Rtt.GetProbeTimeout(_recovery.MaxAckDelay)).Ticks;
     }
 
     /// <summary>
-    /// <c>true</c>, während wir nach einem eigenen CONNECTION_CLOSE im Closing-Zustand sind (RFC 9000 §10.2.1).
+    /// <c>true</c> while we are in the closing state after our own CONNECTION_CLOSE (RFC 9000 §10.2.1).
     /// </summary>
     public bool IsClosing => _state == ConnectionState.Closing;
 
     /// <summary>
-    /// <c>true</c>, während wir nach einem empfangenen CONNECTION_CLOSE im Draining-Zustand sind (§10.2.2).
+    /// <c>true</c> while we are in the draining state after a received CONNECTION_CLOSE (§10.2.2).
     /// </summary>
     public bool IsDraining => _state == ConnectionState.Draining;
 
     /// <summary>
-    /// <c>true</c>, sobald die Closing-/Draining-Periode (3·PTO) abgelaufen und die Verbindung endgültig zu ist.
+    /// <c>true</c> once the closing/draining period (3·PTO) has expired and the connection is finally shut.
     /// </summary>
     public bool IsClosed => _state == ConnectionState.Closed;
 
     /// <summary>
-    /// Das vom Peer empfangene CONNECTION_CLOSE (Fehlercode + Grund), falls vorhanden.
+    /// The CONNECTION_CLOSE received from the peer (error code + reason), if any.
     /// </summary>
     public ConnectionCloseFrame? PeerCloseFrame { get; private set; }
 
     /// <summary>
-    /// <c>true</c>, wenn ein Stateless Reset des Peers erkannt wurde (RFC 9000 §10.3). Führt in Draining.
+    /// <c>true</c> when a peer stateless reset was detected (RFC 9000 §10.3). Leads to draining.
     /// </summary>
     public bool StatelessResetReceived { get; private set; }
 
     /// <summary>
-    /// Schließt die Verbindung sofort (RFC 9000 §10.2): sendet ein CONNECTION_CLOSE (Transport-Fehler
-    /// <paramref name="error"/>, Standard NO_ERROR = anständiger Abbau) und geht in den Closing-Zustand.
-    /// Danach werden nur noch CONNECTION_CLOSE-Pakete gesendet, bis nach 3·PTO der Closed-Zustand folgt.
+    /// Closes the connection immediately (RFC 9000 §10.2): sends a CONNECTION_CLOSE (transport error
+    /// <paramref name="error"/>, default NO_ERROR = orderly teardown) and enters the closing state.
+    /// After that only CONNECTION_CLOSE packets are sent until the closed state follows after 3·PTO.
     /// </summary>
     public void Close(TransportError error = TransportError.NoError, string reason = "")
         => EnterClosing(ConnectionCloseFrame.Transport(error, reason));
 
     /// <summary>
-    /// Schließt die Verbindung mit einem ANWENDUNGS-Fehlercode (CONNECTION_CLOSE Typ 0x1d,
-    /// RFC 9000 §19.19) — z. B. einem HTTP/3-Fehlercode aus RFC 9114 §8.1.
+    /// Closes the connection with an APPLICATION error code (CONNECTION_CLOSE type 0x1d,
+    /// RFC 9000 §19.19) — e.g. an HTTP/3 error code from RFC 9114 §8.1.
     /// </summary>
     public void CloseApplication(ulong errorCode, string reason = "")
         => EnterClosing(new ConnectionCloseFrame(errorCode, IsApplicationError: true, 0, reason));
@@ -338,119 +353,120 @@ public abstract class QuicEndpoint : IDisposable
         _closeFrame = closeFrame;
         _state = ConnectionState.Closing;
         _closePacketPending = true;
-        _closeDeadlineTicks = _clock.Elapsed.Ticks + CloseTimeout().Ticks;
+        _closeDeadlineTicks = NowTicks + CloseTimeout().Ticks;
     }
 
     /// <summary>
-    /// Closing-/Draining-Dauer nach RFC 9000 §10.2: dreimal der aktuelle Probe Timeout.
+    /// Closing/draining duration per RFC 9000 §10.2: three times the current probe timeout.
     /// </summary>
     private TimeSpan CloseTimeout() => 3 * _recovery.Rtt.GetProbeTimeout(_recovery.MaxAckDelay);
 
     /// <summary>
-    /// Nach Ablauf der Closing-/Draining-Periode in den endgültigen Closed-Zustand wechseln.
+    /// After the closing/draining period expires, transition to the final closed state.
     /// </summary>
     private void MaybeTransitionToClosed()
     {
         if (_state is ConnectionState.Closing or ConnectionState.Draining &&
-            _closeDeadlineTicks >= 0 && _clock.Elapsed.Ticks >= _closeDeadlineTicks)
+            _closeDeadlineTicks >= 0 && NowTicks >= _closeDeadlineTicks)
             _state = ConnectionState.Closed;
     }
 
     /// <summary>
-    /// Prüft den Idle-Timeout (RFC 9000 §10.1). Bei Ablauf wird die Verbindung still geschlossen
-    /// (Zustand verworfen): danach werden keine Datagramme mehr erzeugt oder verarbeitet. Periodisch
-    /// aufrufen. Gibt <c>true</c> zurück, sobald der Timeout eingetreten ist.
+    /// Checks the idle timeout (RFC 9000 §10.1). On expiry the connection is closed silently
+    /// (state discarded): after that no more datagrams are produced or processed. Call
+    /// periodically. Returns <c>true</c> once the timeout has occurred.
     /// </summary>
     public bool CheckIdleTimeout()
     {
-        MaybeTransitionToClosed(); // Closing/Draining nach 3·PTO abschließen (RFC 9000 §10.2)
+        MaybeTransitionToClosed(); // finish closing/draining after 3·PTO (RFC 9000 §10.2)
 
-        // Pfadvalidierung ohne Antwort verfällt (RFC 9000 §8.2): PathValidated bleibt dann false.
+        // A path validation without an answer lapses (RFC 9000 §8.2): PathValidated then stays false.
         if (_pathChallengePending is not null && _pathValidationDeadlineTicks >= 0 &&
-            _clock.Elapsed.Ticks >= _pathValidationDeadlineTicks)
+            NowTicks >= _pathValidationDeadlineTicks)
         {
             _pathChallengePending = null;
             _pathValidationDeadlineTicks = -1;
         }
         if (!_idleTimedOut &&
-            _idle.IsExpired(_clock.Elapsed.Ticks, _recovery.Rtt.GetProbeTimeout(_recovery.MaxAckDelay)))
+            _idle.IsExpired(NowTicks, _recovery.Rtt.GetProbeTimeout(_recovery.MaxAckDelay)))
             _idleTimedOut = true;
         return _idleTimedOut;
     }
 
-    // ---- Rollen-Hooks (Standard: kein Verhalten) -------------------------------------------
+    // ---- Role hooks (default: no behaviour) ------------------------------------------------
 
     /// <summary>
-    /// Wird für jedes empfangene Long-Header-Paket vor der Entschlüsselung aufgerufen.
+    /// Called for every received long-header packet before decryption.
     /// </summary>
     protected virtual void OnLongHeaderPacket(LongPacketType type, LongHeaderPrefix prefix) { }
 
     /// <summary>
-    /// Fügt vor den übrigen 1-RTT-Frames rollen­spezifische Kontrollframes ein (Server: HANDSHAKE_DONE).
+    /// Inserts role-specific control frames before the remaining 1-RTT frames (server: HANDSHAKE_DONE).
     /// </summary>
     protected virtual void AddApplicationControlFrames(List<Frame> frames) { }
 
     /// <summary>
-    /// Ein HANDSHAKE_DONE wurde empfangen (nur der Client reagiert darauf).
+    /// A HANDSHAKE_DONE was received (only the client reacts to it).
     /// </summary>
     protected virtual void OnHandshakeDoneReceived() { }
 
     /// <summary>
-    /// Eines unserer 1-RTT-Pakete wurde bestätigt. Der Client DARF den Handshake daraufhin als bestätigt ansehen
-    /// (RFC 9001 §4.1.2), auch ohne HANDSHAKE_DONE. Der Server nutzt das nicht (er bestätigt beim Abschluss).
+    /// One of our 1-RTT packets was acknowledged. The client MAY thereupon regard the handshake as
+    /// confirmed (RFC 9001 §4.1.2), even without HANDSHAKE_DONE. The server does not use this (it
+    /// confirms at completion).
     /// </summary>
     protected virtual void OnOneRttPacketAcknowledged() { }
 
     /// <summary>
-    /// Ein 1-RTT-Frame wurde verarbeitet (Client: für Inspektion sammeln).
+    /// A 1-RTT frame was processed (client: collect for inspection).
     /// </summary>
     protected virtual void OnApplicationFrameHandled(Frame frame) { }
 
     /// <summary>
-    /// Ein Stream wurde (ggf. neu) beliefert (Server: neue Request-Streams verfolgen).
+    /// A stream was (possibly newly) supplied (server: track new request streams).
     /// </summary>
     protected virtual void OnStreamOpened(StreamId id, bool isNew) { }
 
     /// <summary>
-    /// Ein Version-Negotiation-Paket wurde empfangen (nur der Client reagiert darauf).
+    /// A version-negotiation packet was received (only the client reacts to it).
     /// </summary>
     protected virtual void HandleVersionNegotiationPacket(ReadOnlySpan<byte> datagram) { }
 
     /// <summary>
-    /// Ein Retry-Paket wurde empfangen (nur der Client reagiert darauf).
+    /// A Retry packet was received (only the client reacts to it).
     /// </summary>
     protected virtual void HandleRetryPacket(ReadOnlySpan<byte> datagram) { }
 
     /// <summary>
-    /// Ein Long-Header-Paket mit nicht unterstützter Version kam an (nur der Server reagiert – mit VN).
+    /// A long-header packet with an unsupported version arrived (only the server reacts – with VN).
     /// </summary>
     protected virtual void HandleUnsupportedVersion(ReadOnlySpan<byte> datagram) { }
 
     /// <summary>
-    /// Reiht ein bereits fertiges Rohdatagramm (Version Negotiation / Retry) zum Senden ein.
+    /// Enqueues an already-finished raw datagram (version negotiation / Retry) for sending.
     /// </summary>
     protected void EnqueueDatagram(byte[] datagram) => _pendingDatagrams.Enqueue(datagram);
 
     /// <summary>
-    /// Markiert die Peer-Adresse als validiert (RFC 9000 §8.1) – z. B. nachdem ein gültiges Retry-Token
-    /// zurückkam. Hebt das Anti-Amplification-Limit auf.
+    /// Marks the peer address as validated (RFC 9000 §8.1) – e.g. after a valid Retry token came
+    /// back. Lifts the anti-amplification limit.
     /// </summary>
     protected void MarkAddressValidated() => _addressValidated = true;
 
     /// <summary>
-    /// <c>true</c>, sobald die Peer-Adresse validiert ist (kein Anti-Amplification-Limit mehr). Diagnose.
+    /// <c>true</c> once the peer address is validated (no more anti-amplification limit). Diagnostics.
     /// </summary>
     public bool AddressValidated => _addressValidated;
 
     /// <summary>
-    /// <c>true</c>, sobald mindestens ein Paket erfolgreich verarbeitet wurde (für die VN-Regeln, RFC 9000 §6.2).
+    /// <c>true</c> once at least one packet was processed successfully (for the VN rules, RFC 9000 §6.2).
     /// </summary>
     protected bool AnyPacketProcessed => _anyPacketProcessed;
 
     /// <summary>
-    /// Reagiert clientseitig auf einen Retry: neue Initial-Schlüssel aus <paramref name="newDcid"/> ableiten
-    /// (RFC 9001 §5.2), Retry-Token merken und den Initial-CRYPTO-Offset zurücksetzen, damit der ClientHello
-    /// erneut ab Offset 0 gesendet wird.
+    /// Reacts to a Retry on the client side: derive new Initial keys from <paramref name="newDcid"/>
+    /// (RFC 9001 §5.2), remember the Retry token and reset the Initial CRYPTO offset so the
+    /// ClientHello is sent again from offset 0.
     /// </summary>
     protected void ApplyRetry(ConnectionId newDcid, byte[] token)
     {
@@ -460,7 +476,7 @@ public abstract class QuicEndpoint : IDisposable
         _sendCryptoOffset[(int)EncryptionLevel.Initial] = 0;
     }
 
-    // ---- Öffnen von Streams ----------------------------------------------------------------
+    // ---- Opening streams -------------------------------------------------------------------
 
     protected QuicStream OpenLocalStream(bool bidirectional)
     {
@@ -476,12 +492,12 @@ public abstract class QuicEndpoint : IDisposable
         ulong receiveWindow = ReceiveWindowFor(id);
         var stream = new QuicStream(id, PeerSendLimitFor(id), receiveWindow);
         if (receiveWindow > 0)
-            stream.Receive.WindowTuner = new ReceiveWindowTuner(receiveWindow, MaxStreamReceiveWindow); // Auto-Tuning (Phase 9)
+            stream.Receive.WindowTuner = new ReceiveWindowTuner(receiveWindow, MaxStreamReceiveWindow); // auto-tuning (phase 9)
         StreamMap[id.Value] = stream;
         return stream;
     }
 
-    // "Lokal initiiert" aus Sicht dieser Rolle (Client: client-initiiert, Server: server-initiiert).
+    // "Locally initiated" from this role's point of view (client: client-initiated, server: server-initiated).
     private bool LocallyInitiated(StreamId id) => IsServer ? id.IsServerInitiated : id.IsClientInitiated;
 
     private ulong ReceiveWindowFor(StreamId id)
@@ -502,19 +518,19 @@ public abstract class QuicEndpoint : IDisposable
                 : PeerParams.InitialMaxStreamDataBidiLocalValue;
     }
 
-    // ---- Senden ----------------------------------------------------------------------------
+    // ---- Sending ---------------------------------------------------------------------------
 
     /// <summary>
-    /// Erzeugt die aktuell zu sendenden Datagramme (CRYPTO, ACKs, Stream-Daten, Flow Control).
+    /// Produces the datagrams currently to send (CRYPTO, ACKs, stream data, flow control).
     /// </summary>
     public IReadOnlyList<byte[]> GetDatagramsToSend()
     {
         var datagrams = new List<byte[]>();
         MaybeTransitionToClosed();
         if (_idleTimedOut || _state is ConnectionState.Draining or ConnectionState.Closed)
-            return datagrams; // im Draining/Closed nichts senden (RFC 9000 §10.2.2)
+            return datagrams; // send nothing while draining/closed (RFC 9000 §10.2.2)
 
-        // Im Closing-Zustand ausschließlich (wiederholt) das CONNECTION_CLOSE senden (RFC 9000 §10.2.1).
+        // In the closing state, send exclusively (repeatedly) the CONNECTION_CLOSE (RFC 9000 §10.2.1).
         if (_state == ConnectionState.Closing)
         {
             if (_closePacketPending && BuildClosePacket() is { } closePacket)
@@ -525,39 +541,39 @@ public abstract class QuicEndpoint : IDisposable
             return datagrams;
         }
 
-        // Rohdatagramme (Version Negotiation / Retry) vorab senden – unabhängig vom TLS-Zustand.
+        // Send raw datagrams (version negotiation / Retry) up front – independent of the TLS state.
         while (_pendingDatagrams.Count > 0)
             datagrams.Add(_pendingDatagrams.Dequeue());
         if (TlsHandshake is null)
             return datagrams;
 
-        // Keep-Alive (RFC 9000 §10.1.2): nach genug Inaktivität ein PING einplanen, das den Idle-Timeout
-        // beidseitig zurücksetzt (das PING ist ack-eliciting und wird vom Peer bestätigt).
+        // Keep-alive (RFC 9000 §10.1.2): after enough inactivity, schedule a PING that resets the
+        // idle timeout on both sides (the PING is ack-eliciting and is acknowledged by the peer).
         if (_keepAliveInterval is { } keepAlive && _appKeysInstalled &&
-            _idle.ShouldSendKeepAlive(_clock.Elapsed.Ticks, keepAlive))
+            _idle.ShouldSendKeepAlive(NowTicks, keepAlive))
             _pingPending = true;
 
-        // Pacing-Budget für diesen Aufruf anhand der verstrichenen Zeit und der aktuellen Rate nachfüllen.
-        _pacer.Refill(_clock.Elapsed.Ticks, _recovery.Congestion.CongestionWindow, _recovery.Rtt.SmoothedRtt);
+        // Refill the pacing budget for this call based on the elapsed time and the current rate.
+        _pacer.Refill(NowTicks, _recovery.Congestion.CongestionWindow, _recovery.Rtt.SmoothedRtt);
 
-        // Ausgehende CRYPTO in die persistenten Puffer übernehmen (bleibt erhalten, falls das
-        // Anti-Amplification-Budget das Senden zurückstellt).
+        // Take outgoing CRYPTO into the persistent buffers (kept in case the
+        // anti-amplification budget defers sending).
         while (TlsHandshake.TryGetOutgoingCrypto(out EncryptionLevel level, out byte[] data))
             _outgoingCrypto[(int)level].AddRange(data);
 
-        // Anti-Amplification-Budget (RFC 9000 §8.1): unbegrenzt, sobald die Adresse validiert ist.
+        // Anti-amplification budget (RFC 9000 §8.1): unlimited once the address is validated.
         long amplificationBudget = _addressValidated ? long.MaxValue : Math.Max(0, 3 * _amplificationReceived - _amplificationSent);
 
-        MaybeInstallZeroRttKeys();      // Client: Early-Secret steht schon nach Start bereit
-        MaybeHandleZeroRttRejection();  // abgelehntes 0-RTT sofort über 1-RTT nachholen
+        MaybeInstallZeroRttKeys();      // client: the early secret is ready right after Start
+        MaybeHandleZeroRttRejection();  // catch up rejected 0-RTT immediately over 1-RTT
 
         AppendLevelPackets(EncryptionLevel.Initial, datagrams, ref amplificationBudget);
         AppendLevelPackets(EncryptionLevel.Handshake, datagrams, ref amplificationBudget);
-        BuildZeroRttPackets(datagrams);     // Client: früh gequeuete Anwendungsdaten als 0-RTT (vor 1-RTT-Keys)
-        BuildApplicationPackets(datagrams); // 1-RTT erst nach dem Handshake ⇒ Adresse dann bereits validiert
+        BuildZeroRttPackets(datagrams);     // client: early-queued application data as 0-RTT (before 1-RTT keys)
+        BuildApplicationPackets(datagrams); // 1-RTT only after the handshake ⇒ the address is validated by then
 
-        // Nach dem gerade gebauten Flight die nicht mehr benötigten Schlüssel verwerfen (RFC 9001 §4.9):
-        // Initial, sobald der Client sein Handshake-Paket gesendet hat; Handshake, sobald der Handshake bestätigt ist.
+        // After the just-built flight, discard the keys no longer needed (RFC 9001 §4.9):
+        // Initial once the client sent its Handshake packet; Handshake once the handshake is confirmed.
         MaybeDiscardInitialKeys();
         MaybeDiscardHandshakeKeys();
         MaybeDiscardServerZeroRttKeys();
@@ -566,17 +582,17 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// CRYPTO-Nutzlast pro Initial-/Handshake-Paket. Konservativ gewählt, damit Header (Long Header + ggf.
-    /// Token), ein evtl. mitgesendeter ACK und der AEAD-Tag zusammen die ~1200-Byte-MTU nicht sprengen –
-    /// große ClientHellos (PQ-Hybrid) oder Zertifikatsketten werden so über mehrere Pakete verteilt.
+    /// CRYPTO payload per Initial/Handshake packet. Chosen conservatively so that header (long header +
+    /// possible token), a possibly co-sent ACK and the AEAD tag together do not exceed the ~1200-byte
+    /// MTU – large ClientHellos (PQ hybrid) or certificate chains are thus spread over several packets.
     /// </summary>
     private const int MaxCryptoDataPerPacket = 1000;
 
     /// <summary>
-    /// Emittiert die Pakete eines Encryption-Levels (RFC 9000 §12.2/§13). Passt die ausgehende CRYPTO nicht in
-    /// ein MTU-großes Paket, wird sie offset-korrekt über mehrere Pakete (mehrere Initials/Handshakes)
-    /// aufgeteilt. Anti-Amplification (RFC 9000 §8.1) wird pro Paket geprüft; noch nicht gesendete CRYPTO bleibt
-    /// gepuffert, der Offset rückt nur um die tatsächlich gesendeten Bytes vor.
+    /// Emits the packets of an encryption level (RFC 9000 §12.2/§13). If the outgoing CRYPTO does not
+    /// fit into one MTU-sized packet, it is split offset-correctly across several packets (several
+    /// Initials/Handshakes). Anti-amplification (RFC 9000 §8.1) is checked per packet; CRYPTO not yet
+    /// sent stays buffered, the offset only advances by the bytes actually sent.
     /// </summary>
     private void AppendLevelPackets(EncryptionLevel level, List<byte[]> datagrams, ref long amplificationBudget)
     {
@@ -588,7 +604,7 @@ public abstract class QuicEndpoint : IDisposable
         while (true)
         {
             var frames = new List<Frame>();
-            // ACK und Retransmits nur ins erste Paket dieses Levels – die Folgepakete tragen reine CRYPTO-Fortsetzung.
+            // ACK and retransmits only into the first packet of this level – the following packets carry pure CRYPTO continuation.
             if (firstPacket)
             {
                 DrainRetransmitQueue(i, frames);
@@ -596,7 +612,7 @@ public abstract class QuicEndpoint : IDisposable
                     frames.Add(ack);
             }
 
-            // CRYPTO-Block so bemessen, dass er zusammen mit bereits enthaltenen Frames unter dem Paketbudget bleibt.
+            // Size the CRYPTO block so that together with the frames already included it stays under the packet budget.
             int usedBytes = frames.Count > 0 ? FrameParser.Serialize(frames).Length : 0;
             int cryptoBudget = MaxCryptoDataPerPacket - usedBytes;
             int cryptoChunk = cryptoBudget > 0 ? Math.Min(_outgoingCrypto[i].Count, cryptoBudget) : 0;
@@ -614,8 +630,8 @@ public abstract class QuicEndpoint : IDisposable
                 ? InitialPacketFactory.BuildPadded(keys, Version, Dcid, Scid, InitialToken, pn, pnLength, payload)
                 : LongHeader.Build(keys, LongPacketType.Handshake, Version, Dcid, Scid, default, pn, pnLength, payload);
 
-            // Anti-Amplification (RFC 9000 §8.1): sprengt das Paket das Budget, zurückstellen – die CRYPTO bleibt
-            // gepuffert, der Offset unverändert (späterer Empfang hebt das Limit an).
+            // Anti-amplification (RFC 9000 §8.1): if the packet blows the budget, defer it – the CRYPTO
+            // stays buffered, the offset unchanged (later receipt raises the limit).
             if (packet.Length > amplificationBudget)
                 return;
 
@@ -630,24 +646,24 @@ public abstract class QuicEndpoint : IDisposable
             RecordSent(i, pn, packet.Length, frames);
             datagrams.Add(packet);
             if (level == EncryptionLevel.Handshake)
-                _handshakePacketSent = true; // Client: löst später das Verwerfen der Initial-Keys aus (RFC 9001 §4.9.1)
+                _handshakePacketSent = true; // client: later triggers discarding the Initial keys (RFC 9001 §4.9.1)
 
             firstPacket = false;
             if (_outgoingCrypto[i].Count == 0)
-                return; // keine weitere CRYPTO zu verteilen
+                return; // no further CRYPTO to distribute
         }
     }
 
     /// <summary>
-    /// Nutzlast-Budget für Stream-Daten pro 1-RTT-Paket, damit ein Datagramm die MTU (~1200) einhält.
+    /// Payload budget for stream data per 1-RTT packet, so a datagram stays within the MTU (~1200).
     /// </summary>
     private const int MaxStreamDataPerPacket = 1000;
 
     /// <summary>
-    /// Emittiert die 1-RTT-Datagramme: ein erstes Paket mit Kontroll-/ACK-/Flow-Control-Frames (und ggf.
-    /// ersten Stream-Daten), danach je ein MTU-großes Paket pro Stream-Chunk – solange cwnd (RFC 9002 §7)
-    /// und Pacing (§7.7) es zulassen. Reine ACK-/Kontrollframes und PTO-Probes (Retransmit-Queue) sind vom
-    /// Budget ausgenommen, damit Rückmeldungen und Verlust-Sondierungen nie blockiert werden.
+    /// Emits the 1-RTT datagrams: a first packet with control/ACK/flow-control frames (and possibly
+    /// first stream data), then one MTU-sized packet per stream chunk – as long as cwnd (RFC 9002 §7)
+    /// and pacing (§7.7) permit. Pure ACK/control frames and PTO probes (retransmit queue) are exempt
+    /// from the budget so feedback and loss probes are never blocked.
     /// </summary>
     private void BuildApplicationPackets(List<byte[]> datagrams)
     {
@@ -657,7 +673,7 @@ public abstract class QuicEndpoint : IDisposable
 
         MaybeDecodePeerParameters();
 
-        // Gemeinsames Budget für NEUE Stream-Daten aus Congestion Window und Pacing.
+        // Shared budget for NEW stream data from congestion window and pacing.
         long sendBudget = Math.Min(_recovery.Congestion.Available, _pacer.AvailableBytes);
         bool firstPacket = true;
 
@@ -667,7 +683,7 @@ public abstract class QuicEndpoint : IDisposable
             if (firstPacket)
             {
                 DrainRetransmitQueue(i, frames);
-                AddApplicationControlFrames(frames); // Server: HANDSHAKE_DONE
+                AddApplicationControlFrames(frames); // server: HANDSHAKE_DONE
                 if (_pendingControlFrames.Count > 0)
                 {
                     frames.AddRange(_pendingControlFrames); // NEW_/RETIRE_CONNECTION_ID (RFC 9000 §5.1)
@@ -675,7 +691,7 @@ public abstract class QuicEndpoint : IDisposable
                 }
                 if (_pingPending)
                 {
-                    frames.Add(PingFrame.Instance); // Keep-Alive (RFC 9000 §10.1.2)
+                    frames.Add(PingFrame.Instance); // keep-alive (RFC 9000 §10.1.2)
                     _pingPending = false;
                 }
                 if (Spaces[i].AckPending && Spaces[i].BuildAck() is { } ack)
@@ -683,7 +699,7 @@ public abstract class QuicEndpoint : IDisposable
                 CollectFlowControlFrames(frames);
                 CollectStreamCancellationFrames(frames); // RESET_STREAM / STOP_SENDING (RFC 9000 §2.4)
 
-                // Post-Handshake-CRYPTO auf Application-Level (z. B. NewSessionTicket, RFC 8446 §4.6.1).
+                // Post-handshake CRYPTO at application level (e.g. NewSessionTicket, RFC 8446 §4.6.1).
                 int appCryptoChunk = Math.Min(_outgoingCrypto[i].Count, MaxCryptoDataPerPacket);
                 if (appCryptoChunk > 0)
                 {
@@ -693,8 +709,8 @@ public abstract class QuicEndpoint : IDisposable
                 }
             }
 
-            // DATAGRAM-Frames (RFC 9221 §5): so früh wie möglich, ein Frame pro Paket (unfragmentierbar,
-            // MTU!), congestion-controlled — reicht das Budget nicht, bleiben sie in der Queue (§5.4).
+            // DATAGRAM frames (RFC 9221 §5): as early as possible, one frame per packet (unfragmentable,
+            // MTU!), congestion-controlled — if the budget does not suffice, they stay in the queue (§5.4).
             bool sentDatagram = false;
             if (sendBudget > 0 && _outgoingDatagrams.Count > 0)
             {
@@ -704,7 +720,7 @@ public abstract class QuicEndpoint : IDisposable
                 sentDatagram = true;
             }
 
-            // Höchstens ein Stream-Chunk (~MTU) pro Paket, begrenzt durch Flow Control und Sende-Budget.
+            // At most one stream chunk (~MTU) per packet, limited by flow control and the send budget.
             if (!sentDatagram && sendBudget > 0)
                 AppendOneStreamChunk(frames, ref sendBudget);
 
@@ -712,13 +728,14 @@ public abstract class QuicEndpoint : IDisposable
                 break;
 
             ulong pn = Spaces[i].NextPacketNumber();
-            // Erstes ECHTES 1-RTT-Paket – dessen Bestätigung darf den Handshake bestätigen (RFC 9001 §4.1.2).
-            // WICHTIG: nur hier setzen, NIE in BuildZeroRttPackets. 0-RTT teilt sich zwar den Application-PN-Space
-            // mit 1-RTT, aber §4.1.2 verlangt ausdrücklich die Quittung eines „1-RTT packet". Würde ein 0-RTT-Paket
-            // diese PN belegen, bestätigte (bei akzeptiertem 0-RTT) dessen ACK den Handshake zu früh bzw. (bei
-            // 0-RTT-Ablehnung) ein verirrter 0-RTT-ACK fälschlich. Da 0-RTT-PNs stets kleiner sind als die des
-            // ersten 1-RTT-Pakets, impliziert LargestAck ≥ dieser PN nachweislich die Quittung eines echten 1-RTT-
-            // Pakets – der Handshake-Key-Discard nach 0-RTT-Ablehnung bleibt damit korrekt.
+            // First GENUINE 1-RTT packet – its acknowledgment may confirm the handshake (RFC 9001 §4.1.2).
+            // IMPORTANT: set only here, NEVER in BuildZeroRttPackets. 0-RTT shares the application PN
+            // space with 1-RTT, but §4.1.2 expressly requires the acknowledgment of a "1-RTT packet".
+            // If a 0-RTT packet occupied this PN, its ACK would confirm the handshake too early (with
+            // accepted 0-RTT) or a stray 0-RTT ACK would confirm it falsely (with 0-RTT rejection).
+            // Since 0-RTT PNs are always smaller than that of the first 1-RTT packet, LargestAck ≥ this
+            // PN provably implies acknowledgment of a genuine 1-RTT packet – the Handshake key discard
+            // after 0-RTT rejection thus stays correct.
             _firstOneRttPacketNumber ??= pn;
             int pnLength = PacketNumber.EncodeLength(pn, Spaces[i].LargestAckedByPeer);
             byte[] packet = ShortHeader.Build(keys, Dcid, pn, pnLength, FrameParser.Serialize(frames), keyPhase: _sendKeyPhase);
@@ -726,52 +743,52 @@ public abstract class QuicEndpoint : IDisposable
             datagrams.Add(packet);
             firstPacket = false;
 
-            // Weiter nur, solange Budget übrig ist UND noch Stream-Daten oder Datagramme anstehen.
+            // Continue only while budget remains AND stream data or datagrams are still pending.
             if (sendBudget <= 0 ||
                 (!StreamMap.Values.Any(s => s.Send.HasPending) && _outgoingDatagrams.Count == 0))
                 break;
         }
     }
 
-    private readonly Queue<byte[]> _outgoingDatagrams = new(); // wartende DATAGRAM-Nutzlasten (RFC 9221)
+    private readonly Queue<byte[]> _outgoingDatagrams = new(); // waiting DATAGRAM payloads (RFC 9221)
     private List<byte[]> _receivedDatagrams = [];
 
     /// <summary>
-    /// Das vom Peer angekündigte max_datagram_frame_size (RFC 9221 §3); 0 = Peer nimmt keine
-    /// DATAGRAM-Frames an.
+    /// The max_datagram_frame_size announced by the peer (RFC 9221 §3); 0 = the peer accepts no
+    /// DATAGRAM frames.
     /// </summary>
     public ulong PeerMaxDatagramFrameSize => PeerParams?.MaxDatagramFrameSizeValue ?? 0;
 
     /// <summary>
-    /// TLS-Keying-Material-Exporter der Verbindung (RFC 8446 §7.5): beide Endpunkte erhalten für
-    /// gleiches Label und gleichen Kontext identisches Schlüsselmaterial — z. B. für Channel Binding
-    /// oder den WebTransport-Exporter (draft-webtrans-http3 §4.7). Verfügbar, sobald die 1-RTT-Secrets
-    /// stehen; vorher <see cref="InvalidOperationException"/>.
+    /// The connection's TLS keying-material exporter (RFC 8446 §7.5): both endpoints obtain identical
+    /// keying material for the same label and context — e.g. for channel binding or the WebTransport
+    /// exporter (draft-webtrans-http3 §4.7). Available once the 1-RTT secrets are in place; before
+    /// that, <see cref="InvalidOperationException"/>.
     /// </summary>
     public byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
         => TlsHandshake is { } tls
             ? tls.ExportKeyingMaterial(label, context, length)
-            : throw new InvalidOperationException("Kein TLS-Handshake vorhanden.");
+            : throw new InvalidOperationException("No TLS handshake present.");
 
     /// <summary>
-    /// Reiht ein QUIC-DATAGRAM (RFC 9221) zum Senden ein — unzuverlässig: bei Verlust KEINE
-    /// Retransmission; unter Congestion-Druck wird verzögert (§5.4). <c>false</c>, wenn der Peer keine
-    /// DATAGRAM-Frames angekündigt hat (§3 MUST NOT) oder das Frame sein Limit/die MTU sprengt.
+    /// Enqueues a QUIC DATAGRAM (RFC 9221) for sending — unreliable: NO retransmission on loss;
+    /// under congestion pressure it is delayed (§5.4). <c>false</c> when the peer announced no
+    /// DATAGRAM frames (§3 MUST NOT) or the frame exceeds its limit/the MTU.
     /// </summary>
     public bool TrySendDatagram(ReadOnlySpan<byte> payload)
     {
         MaybeDecodePeerParameters();
         ulong frameSize = 1UL + (ulong)VarInt.GetLength((ulong)payload.Length) + (ulong)payload.Length;
         if (PeerMaxDatagramFrameSize == 0 || frameSize > PeerMaxDatagramFrameSize)
-            return false; // §3: ohne (bzw. über) Peer-Ankündigung MUST NOT senden
+            return false; // §3: without (or above) the peer announcement, MUST NOT send
         if (payload.Length > MaxStreamDataPerPacket)
-            return false; // §5: DATAGRAM-Frames sind unfragmentierbar — MTU-Deckel wie Stream-Chunks
+            return false; // §5: DATAGRAM frames are unfragmentable — MTU cap like stream chunks
         _outgoingDatagrams.Enqueue(payload.ToArray());
         return true;
     }
 
     /// <summary>
-    /// Holt alle bisher empfangenen QUIC-DATAGRAM-Nutzlasten ab (RFC 9221 §5: sofortige Zustellung).
+    /// Fetches all QUIC DATAGRAM payloads received so far (RFC 9221 §5: immediate delivery).
     /// </summary>
     public IReadOnlyList<byte[]> TakeReceivedDatagrams()
     {
@@ -782,18 +799,18 @@ public abstract class QuicEndpoint : IDisposable
         return taken;
     }
 
-    private ulong _incrementalCursor = ulong.MaxValue; // zuletzt bedienter inkrementeller Stream (Round-Robin)
+    private ulong _incrementalCursor = ulong.MaxValue; // last-served incremental stream (round-robin)
 
     /// <summary>
-    /// Hängt einen einzelnen Stream-Datenchunk an (ein Frame), sofern Flow Control/Budget es erlauben.
-    /// Die Stream-Auswahl folgt RFC 9218 §10: aufsteigende Urgency; bei gleicher Urgency werden
-    /// NICHT-inkrementelle Streams nacheinander in aufsteigender Stream-ID bedient (Request-Reihenfolge),
-    /// inkrementelle teilen sich die Bandbreite per Round-Robin.
+    /// Appends a single stream data chunk (one frame), provided flow control/budget permit.
+    /// The stream choice follows RFC 9218 §10: ascending urgency; at equal urgency,
+    /// NON-incremental streams are served one after another in ascending stream ID (request order),
+    /// incremental ones share the bandwidth via round-robin.
     /// </summary>
     private void AppendOneStreamChunk(List<Frame> frames, ref long sendBudget)
     {
-        // Priorisierten Kandidaten wählen — ggf. mehrfach versuchen, falls ein Stream trotz
-        // HasPending gerade kein Frame liefert (z. B. Stream-Flow-Control erschöpft).
+        // Choose the prioritised candidate — possibly retry when a stream, despite HasPending,
+        // currently yields no frame (e.g. stream flow control exhausted).
         var skip = new HashSet<ulong>();
         while (true)
         {
@@ -802,7 +819,7 @@ public abstract class QuicEndpoint : IDisposable
                 return;
             ulong connWindow = _connSendLimit > _connSendUsed ? _connSendLimit - _connSendUsed : 0;
             if (connWindow == 0)
-                return; // Verbindungsfenster erschöpft
+                return; // connection window exhausted
             int chunk = (int)Math.Min(Math.Min((ulong)MaxStreamDataPerPacket, connWindow), (ulong)sendBudget);
             if (chunk <= 0)
                 return;
@@ -816,19 +833,19 @@ public abstract class QuicEndpoint : IDisposable
             _connSendUsed += (ulong)sf.Data.Length;
             sendBudget -= sf.Data.Length;
             if (stream.SendIncremental)
-                _incrementalCursor = stream.Id.Value; // Round-Robin-Zeiger weiterrücken
-            return; // ein Chunk pro Paket
+                _incrementalCursor = stream.Id.Value; // advance the round-robin cursor
+            return; // one chunk per packet
         }
     }
 
     /// <summary>
-    /// Wählt den nächsten zu bedienenden Stream nach RFC 9218 §10 (siehe
-    /// <see cref="AppendOneStreamChunk"/>). <paramref name="skip"/> enthält in diesem Aufruf bereits
-    /// erfolglos versuchte Streams.
+    /// Chooses the next stream to serve per RFC 9218 §10 (see
+    /// <see cref="AppendOneStreamChunk"/>). <paramref name="skip"/> contains streams already tried
+    /// unsuccessfully in this call.
     /// </summary>
     private QuicStream? PickSendStream(HashSet<ulong> skip)
     {
-        // 1) Höchste anstehende Dringlichkeit (kleinste Urgency) bestimmen.
+        // 1) Determine the highest pending urgency (smallest urgency value).
         int bestUrgency = int.MaxValue;
         foreach (QuicStream s in StreamMap.Values)
             if (s.Send.HasPending && !skip.Contains(s.Id.Value) && s.SendUrgency < bestUrgency)
@@ -836,7 +853,7 @@ public abstract class QuicEndpoint : IDisposable
         if (bestUrgency == int.MaxValue)
             return null;
 
-        // 2) Nicht-inkrementell zuerst: kleinste Stream-ID exklusiv bedienen (Request-Reihenfolge, §10).
+        // 2) Non-incremental first: serve the smallest stream ID exclusively (request order, §10).
         QuicStream? nonIncremental = null;
         foreach (QuicStream s in StreamMap.Values)
             if (s.Send.HasPending && !skip.Contains(s.Id.Value) && s.SendUrgency == bestUrgency &&
@@ -845,7 +862,7 @@ public abstract class QuicEndpoint : IDisposable
         if (nonIncremental is not null)
             return nonIncremental;
 
-        // 3) Nur inkrementelle: Round-Robin — kleinste ID oberhalb des Cursors, sonst von vorn.
+        // 3) Incremental only: round-robin — smallest ID above the cursor, otherwise from the start.
         QuicStream? next = null, first = null;
         foreach (QuicStream s in StreamMap.Values)
         {
@@ -860,10 +877,10 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Emittiert 0-RTT-Pakete (RFC 9001 §4) mit früh gequeueten Anwendungsdaten (typischerweise der HTTP/3-
-    /// Anfrage), solange die 1-RTT-Schlüssel noch fehlen. Nur der Client sendet 0-RTT; die Pakete tragen
-    /// Stream-Frames im Application-Packet-Number-Space und werden mit den 0-RTT-Schlüsseln geschützt
-    /// (Long Header 0x01). Nach dem Handshake läuft der Rest über 1-RTT (gemeinsamer Stream-/PN-Zustand).
+    /// Emits 0-RTT packets (RFC 9001 §4) with early-queued application data (typically the HTTP/3
+    /// request) while the 1-RTT keys are still missing. Only the client sends 0-RTT; the packets carry
+    /// stream frames in the application packet-number space and are protected with the 0-RTT keys
+    /// (long header 0x01). After the handshake the rest runs over 1-RTT (shared stream/PN state).
     /// </summary>
     private void BuildZeroRttPackets(List<byte[]> datagrams)
     {
@@ -871,7 +888,7 @@ public abstract class QuicEndpoint : IDisposable
             return;
         int i = (int)EncryptionLevel.Application;
 
-        // Grober Deckel am konservativen Initial-Congestion-Window; ein kleiner GET passt locker hinein.
+        // Rough cap at the conservative initial congestion window; a small GET fits in easily.
         for (int packetCount = 0; packetCount < 10; packetCount++)
         {
             var frames = new List<Frame>();
@@ -888,7 +905,7 @@ public abstract class QuicEndpoint : IDisposable
                     continue;
                 frames.Add(sf);
                 _connSendUsed += (ulong)sf.Data.Length;
-                break; // ein Stream-Chunk pro Paket
+                break; // one stream chunk per packet
             }
             if (frames.Count == 0)
                 return;
@@ -900,14 +917,14 @@ public abstract class QuicEndpoint : IDisposable
             RecordSent(i, pn, packet.Length, frames);
             datagrams.Add(packet);
             _zeroRttDataSent = true;
-            _zeroRttMaxPacketNumber = pn; // PNs sind monoton ⇒ das ist die Grenze zu späteren 1-RTT-Paketen
+            _zeroRttMaxPacketNumber = pn; // PNs are monotonic ⇒ this is the boundary to later 1-RTT packets
         }
     }
 
     /// <summary>
-    /// Behandelt eine 0-RTT-Ablehnung (RFC 9001 §4.6.2): Hat der Client Early Data gesendet, der Server sie
-    /// aber nicht akzeptiert (kein early_data in EncryptedExtensions), werden die als 0-RTT gesendeten Frames
-    /// sofort über 1-RTT wiederholt – ohne auf Zeitschwelle/PTO zu warten.
+    /// Handles a 0-RTT rejection (RFC 9001 §4.6.2): when the client sent early data but the server did
+    /// not accept it (no early_data in EncryptedExtensions), the frames sent as 0-RTT are repeated
+    /// immediately over 1-RTT – without waiting for time threshold/PTO.
     /// </summary>
     private void MaybeHandleZeroRttRejection()
     {
@@ -915,16 +932,16 @@ public abstract class QuicEndpoint : IDisposable
             return;
         _zeroRttRejectionHandled = true;
         if (TlsHandshake?.EarlyDataAccepted == true)
-            return; // akzeptiert – die Daten laufen normal weiter
+            return; // accepted – the data continues normally
 
         int i = (int)EncryptionLevel.Application;
         _retransmitQueue[i].AddRange(_recovery.OnZeroRttRejected(i, _zeroRttMaxPacketNumber));
     }
 
     /// <summary>
-    /// Holt ausstehende RESET_STREAM-/STOP_SENDING-Frames der Streams ab (RFC 9000 §19.4/§19.5).
-    /// Zuverlässigkeit entsteht über die Loss Recovery: beide Frame-Typen werden als retransmittierbar
-    /// verfolgt und bei Verlust erneut eingereiht.
+    /// Fetches pending RESET_STREAM/STOP_SENDING frames of the streams (RFC 9000 §19.4/§19.5).
+    /// Reliability arises via loss recovery: both frame types are tracked as retransmittable and
+    /// re-queued on loss.
     /// </summary>
     private void CollectStreamCancellationFrames(List<Frame> frames)
     {
@@ -944,10 +961,10 @@ public abstract class QuicEndpoint : IDisposable
             return;
         foreach (Frame frame in _retransmitQueue[level])
         {
-            // RFC 9000 §19.4: nach einem RESET_STREAM keine STREAM-Frames dieses Streams mehr
-            // (re)transmittieren; §3.5: ein STOP_SENDING ist überflüssig, sobald der Peer schon
-            // zurückgesetzt hat. Ausnahme: nach RESET_STREAM_AT müssen Daten bis zur Reliable Size
-            // weiter retransmittiert werden (draft-ietf-quic-reliable-stream-reset §5).
+            // RFC 9000 §19.4: after a RESET_STREAM, no longer (re)transmit STREAM frames of that
+            // stream; §3.5: a STOP_SENDING is superfluous once the peer has already reset. Exception:
+            // after RESET_STREAM_AT, data up to the reliable size must keep being retransmitted
+            // (draft-ietf-quic-reliable-stream-reset §5).
             if (frame is StreamFrame sf && StreamMap.TryGetValue(sf.StreamId, out QuicStream? s) && s.Send.IsReset &&
                 !(s.Send.IsResetAt && sf.Offset < s.Send.ReliableSize))
                 continue;
@@ -962,15 +979,15 @@ public abstract class QuicEndpoint : IDisposable
     {
         bool ackEliciting = frames.Any(f => f is not AckFrame and not PaddingFrame);
         if (!ackEliciting)
-            return; // reine ACK-Pakete zählen weder zu bytes_in_flight noch zum Pacing-Budget
+            return; // pure ACK packets count neither towards bytes_in_flight nor the pacing budget
         _pacer.OnBytesSent(size);
-        _idle.OnAckElicitingPacketSent(_clock.Elapsed.Ticks); // RFC 9000 §10.1
-        // RESET_STREAM/STOP_SENDING müssen zuverlässig ankommen (RFC 9000 §19.4/§3.5) ⇒ mitverfolgen.
+        _idle.OnAckElicitingPacketSent(NowTicks); // RFC 9000 §10.1
+        // RESET_STREAM/STOP_SENDING must arrive reliably (RFC 9000 §19.4/§3.5) ⇒ track them.
         List<Frame> retransmittable = frames.Where(f => f is CryptoFrame or StreamFrame or ResetStreamFrame or ResetStreamAtFrame or StopSendingFrame).ToList();
         _recovery.OnPacketSent(level, new SentPacket
         {
             PacketNumber = packetNumber,
-            TimeSentTicks = _clock.Elapsed.Ticks,
+            TimeSentTicks = NowTicks,
             AckEliciting = true,
             Size = size,
             RetransmittableFrames = retransmittable,
@@ -978,14 +995,14 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Prüft die PTO (RFC 9002 §6.2) und reiht bei Ablauf Retransmissions ein. Periodisch aufrufen.
+    /// Checks the PTO (RFC 9002 §6.2) and enqueues retransmissions on expiry. Call periodically.
     /// </summary>
     public void CheckLossDetectionTimeout()
     {
-        MaybeDiscardServerZeroRttKeys(); // rein zeitgesteuert (§4.9.3) – auch ohne weiteren Verkehr
+        MaybeDiscardServerZeroRttKeys(); // purely time-driven (§4.9.3) – even without further traffic
 
         long deadline = _recovery.GetProbeTimeoutDeadline();
-        if (deadline < 0 || _clock.Elapsed.Ticks < deadline)
+        if (deadline < 0 || NowTicks < deadline)
             return;
         _recovery.OnProbeTimeoutFired();
         for (int level = 0; level < LevelCount; level++)
@@ -995,7 +1012,7 @@ public abstract class QuicEndpoint : IDisposable
 
     private void CollectFlowControlFrames(List<Frame> frames)
     {
-        long now = _clock.Elapsed.Ticks;
+        long now = NowTicks;
         long rttTicks = _recovery.Rtt.SmoothedRtt.Ticks;
 
         foreach ((ulong id, QuicStream stream) in StreamMap)
@@ -1005,7 +1022,7 @@ public abstract class QuicEndpoint : IDisposable
             StreamReceiveBuffer recv = stream.Receive;
             if (recv.MaxData - recv.BytesConsumed < tuner.Size / 2)
             {
-                tuner.NoteWindowUpdate(now, rttTicks); // Auto-Tuning: bei schneller Drainage Fenster verdoppeln
+                tuner.NoteWindowUpdate(now, rttTicks); // auto-tuning: double the window on fast drainage
                 recv.MaxData = recv.BytesConsumed + tuner.Size;
                 frames.Add(new MaxStreamDataFrame(id, recv.MaxData));
             }
@@ -1025,40 +1042,40 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Aktuelle (ggf. auto-getunte) Größe des Verbindungs-Empfangsfensters — für Diagnose/Tests.
+    /// Current (possibly auto-tuned) size of the connection receive window — for diagnostics/tests.
     /// </summary>
     internal ulong ConnectionReceiveWindowSize => _connWindowTuner?.Size ?? _localConnMaxData;
 
-    // ---- Empfangen -------------------------------------------------------------------------
+    // ---- Receiving -------------------------------------------------------------------------
 
     /// <summary>
-    /// Verarbeitet ein empfangenes UDP-Datagramm (mehrere Coalesced Packets möglich).
+    /// Processes a received UDP datagram (multiple coalesced packets possible).
     /// </summary>
     /// <param name="ecn">
-    /// Der ECN-Codepoint des empfangenen IP-Datagramms (RFC 9000 §13.4). Kann die Transportschicht ihn nicht
-    /// aus dem IP-Header lesen (Standard bei BCL-UDP-Sockets), bleibt es bei Not-ECT; die Protokoll-Logik
-    /// (Zählen, Melden im ACK, CE-Reaktion) funktioniert unabhängig davon und ist so voll testbar.
+    /// The ECN codepoint of the received IP datagram (RFC 9000 §13.4). If the transport layer cannot
+    /// read it from the IP header (the default with BCL UDP sockets), it stays Not-ECT; the protocol
+    /// logic (counting, reporting in the ACK, CE reaction) works regardless and is thus fully testable.
     /// </param>
     public void ProcessDatagram(ReadOnlySpan<byte> datagram, EcnCodepoint ecn = EcnCodepoint.NotEct)
     {
         MaybeTransitionToClosed();
         if (_idleTimedOut || datagram.IsEmpty || _state is ConnectionState.Draining or ConnectionState.Closed)
-            return; // still geschlossen, entleerend oder leer
+            return; // silently closed, draining or empty
 
-        // Anti-Amplification (RFC 9000 §8.1): empfangene Bytes zählen das Sendebudget hoch (bis zur Validierung).
+        // Anti-amplification (RFC 9000 §8.1): received bytes raise the send budget (until validation).
         if (!_addressValidated)
             _amplificationReceived += datagram.Length;
 
-        // Im Closing-Zustand keine Frames mehr verarbeiten; jedes eingehende Paket löst ein erneutes
-        // CONNECTION_CLOSE aus (RFC 9000 §10.2.1, grob 1:1-ratenbegrenzt).
+        // In the closing state, process no more frames; every incoming packet triggers a renewed
+        // CONNECTION_CLOSE (RFC 9000 §10.2.1, roughly 1:1 rate-limited).
         if (_state == ConnectionState.Closing)
         {
             _closePacketPending = true;
             return;
         }
 
-        // Sonderfälle vorab am ersten (nicht koaleszierbaren) Paket erkennen: Version Negotiation (Version 0),
-        // Retry (eigener Typ, keine Länge) und nicht unterstützte Versionen (RFC 9000 §6, §17.2.1, §17.2.5).
+        // Detect the special cases up front on the first (non-coalescable) packet: version negotiation
+        // (version 0), Retry (its own type, no length) and unsupported versions (RFC 9000 §6, §17.2.1, §17.2.5).
         byte firstByte = datagram[0];
         if (PacketFormat.IsLongHeader(firstByte) && datagram.Length >= 5)
         {
@@ -1095,7 +1112,7 @@ public abstract class QuicEndpoint : IDisposable
             uint version = (uint)((datagram[offset + 1] << 24) | (datagram[offset + 2] << 16) |
                                   (datagram[offset + 3] << 8) | datagram[offset + 4]);
             if (version == 0)
-                break; // Version Negotiation nur als eigenständiges Datagramm (oben behandelt)
+                break; // version negotiation only as a standalone datagram (handled above)
 
             LongPacketType type = PacketFormat.GetLongPacketType(first);
             if (!LongHeader.TryParse(datagram[offset..], out LongHeaderPrefix? prefix) || prefix is null)
@@ -1103,8 +1120,8 @@ public abstract class QuicEndpoint : IDisposable
 
             OnLongHeaderPacket(type, prefix);
 
-            // 0-RTT (RFC 9001 §4): der Server entschlüsselt Early Data mit den 0-RTT-Read-Keys im
-            // Application-Packet-Number-Space (Frames landen wie 1-RTT-Daten in der Application-Schicht).
+            // 0-RTT (RFC 9001 §4): the server decrypts early data with the 0-RTT read keys in the
+            // application packet-number space (frames land in the application layer like 1-RTT data).
             if (type == LongPacketType.ZeroRtt && IsServer && _zeroRttKeys is { } earlyKeys)
             {
                 byte[] earlyPacket = datagram.Slice(offset, prefix.PacketEndOffset).ToArray();
@@ -1126,11 +1143,11 @@ public abstract class QuicEndpoint : IDisposable
             offset += prefix.PacketEndOffset;
         }
 
-        // Nach dem Verarbeiten des Datagramms nicht mehr benötigte Schlüssel verwerfen (RFC 9001 §4.9):
-        // Initial, sobald der Server ein Handshake-Paket verarbeitet hat; Handshake, sobald der Handshake bestätigt ist.
+        // After processing the datagram, discard keys no longer needed (RFC 9001 §4.9):
+        // Initial once the server processed a Handshake packet; Handshake once the handshake is confirmed.
         MaybeDiscardInitialKeys();
         MaybeDiscardHandshakeKeys();
-        MaybeDiscardServerZeroRttKeys(); // 0-RTT-Read-Keys nach Ablauf der 3×PTO-Frist (§4.9.3)
+        MaybeDiscardServerZeroRttKeys(); // 0-RTT read keys after the 3×PTO deadline expires (§4.9.3)
     }
 
     private void ProcessShortHeaderPacket(ReadOnlySpan<byte> packetSpan, EcnCodepoint ecn)
@@ -1140,8 +1157,8 @@ public abstract class QuicEndpoint : IDisposable
             return;
         if (!ShortHeader.TryLocatePacketNumber(packetSpan, Scid.Length, out ConnectionId dcid, out int pnOffset))
             return;
-        // Nur Pakete an eine unserer aktiven (ausgegebenen) Connection IDs annehmen (RFC 9000 §5.1);
-        // eine unbekannte DCID könnte ein Stateless Reset sein (§10.3).
+        // Accept only packets for one of our active (issued) connection IDs (RFC 9000 §5.1);
+        // an unknown DCID could be a stateless reset (§10.3).
         if (!_cids.IsLocalConnectionId(dcid))
         {
             TryHandleStatelessReset(packetSpan);
@@ -1149,7 +1166,7 @@ public abstract class QuicEndpoint : IDisposable
         }
 
         byte[] packet = packetSpan.ToArray();
-        // Header Protection entfernen (HP-Key ist über Key Updates konstant) → dann das Key-Phase-Bit lesen.
+        // Remove the header protection (the HP key is constant across key updates) → then read the key-phase bit.
         if (!current.RemoveHeaderProtection(packet, pnOffset, Spaces[i].LargestReceived, longHeader: false, out ulong pn, out int headerLength))
             return;
 
@@ -1161,14 +1178,14 @@ public abstract class QuicEndpoint : IDisposable
 
         if (packetKeyPhase == _recvKeyPhase)
         {
-            // Aktuelle Phase; bei Fehlschlag ggf. ein umsortiertes Paket der vorigen Phase (nach Update).
+            // Current phase; on failure possibly a reordered packet of the previous phase (after an update).
             if (current.Decrypt(pn, header, body, plaintext, out len)) { }
             else if (_prevAppReadKeys is { } prev && prev.Decrypt(pn, header, body, plaintext, out len)) { }
             else { TryHandleStatelessReset(packetSpan); return; }
         }
         else
         {
-            // Kippendes Key-Phase-Bit ⇒ Key Update des Peers (RFC 9001 §6). Mit den nächsten Read-Keys prüfen.
+            // Flipped key-phase bit ⇒ peer key update (RFC 9001 §6). Check with the next read keys.
             if (_nextAppReadKeys is not { } next || !next.Decrypt(pn, header, body, plaintext, out len))
             {
                 TryHandleStatelessReset(packetSpan);
@@ -1181,9 +1198,9 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Prüft, ob ein nicht verarbeitbares (Short-Header-)Datagramm ein Stateless Reset ist (RFC 9000 §10.3.1):
-    /// enden die letzten 16 Bytes auf einen uns bekannten Stateless-Reset-Token des Peers, wird die Verbindung
-    /// sofort in den Draining-Zustand versetzt.
+    /// Checks whether a non-processable (short-header) datagram is a stateless reset (RFC 9000
+    /// §10.3.1): if the last 16 bytes end in a peer stateless-reset token known to us, the connection
+    /// is immediately put into the draining state.
     /// </summary>
     private bool TryHandleStatelessReset(ReadOnlySpan<byte> datagram)
     {
@@ -1197,19 +1214,20 @@ public abstract class QuicEndpoint : IDisposable
 
     private void DeliverApplicationFrames(ulong packetNumber, byte[] plaintext, int length, EcnCodepoint ecn)
     {
-        _idle.OnPacketReceived(_clock.Elapsed.Ticks); // RFC 9000 §10.1
+        _idle.OnPacketReceived(NowTicks); // RFC 9000 §10.1
         _anyPacketProcessed = true;
         Spaces[(int)EncryptionLevel.Application].RecordReceived(packetNumber, ecn);
 
-        // Nur echte 1-RTT-Pakete (Short Header) landen hier – 0-RTT (Long Header 0x01) läuft über DecryptAndHandle.
-        // Mit dem ersten 1-RTT-Paket kennt der Server die Obergrenze der 0-RTT-PNs und startet die kurze
-        // Aufbewahrungsfrist seiner 0-RTT-Read-Keys (RFC 9001 §4.9.3): danach MUST er sie „within a short time"
-        // verwerfen, RECOMMENDED 3×PTO. Sind bereits ALLE 0-RTT-Pakete da (lückenlos), verwirft er sofort.
+        // Only genuine 1-RTT packets (short header) land here – 0-RTT (long header 0x01) runs through
+        // DecryptAndHandle. With the first 1-RTT packet the server knows the upper bound of the 0-RTT
+        // PNs and starts the short retention period of its 0-RTT read keys (RFC 9001 §4.9.3): after it,
+        // it MUST discard them "within a short time", RECOMMENDED 3×PTO. If ALL 0-RTT packets are
+        // already present (gap-free), it discards immediately.
         if (IsServer)
         {
             _serverOneRttPacketReceived = true;
             if (_zeroRttKeys is not null && _serverZeroRttDiscardDeadlineTicks < 0)
-                _serverZeroRttDiscardDeadlineTicks = _clock.Elapsed.Ticks + ServerZeroRttDiscardDelay().Ticks;
+                _serverZeroRttDiscardDeadlineTicks = NowTicks + ServerZeroRttDiscardDelay().Ticks;
             MaybeDiscardServerZeroRttKeysIfComplete();
         }
 
@@ -1223,25 +1241,25 @@ public abstract class QuicEndpoint : IDisposable
         if (!keys.UnprotectPacket(packet, pnOffset, Spaces[i].LargestReceived, longHeader, plaintext, out ulong pn, out int len))
             return;
 
-        _idle.OnPacketReceived(_clock.Elapsed.Ticks); // RFC 9000 §10.1: Timer bei erfolgreichem Empfang neu starten
+        _idle.OnPacketReceived(NowTicks); // RFC 9000 §10.1: restart the timer on successful receipt
         _anyPacketProcessed = true;
-        // Ein entschlüsseltes Handshake-Paket beweist, dass der Peer unsere Handshake-Schlüssel erhielt ⇒
-        // die Adresse ist validiert (RFC 9000 §8.1), das Anti-Amplification-Limit entfällt.
+        // A decrypted Handshake packet proves the peer obtained our handshake keys ⇒
+        // the address is validated (RFC 9000 §8.1), the anti-amplification limit is lifted.
         if (level == EncryptionLevel.Handshake)
         {
             _addressValidated = true;
-            _handshakePacketReceived = true; // Server: löst später das Verwerfen der Initial-Keys aus (RFC 9001 §4.9.1)
+            _handshakePacketReceived = true; // server: later triggers discarding the Initial keys (RFC 9001 §4.9.1)
         }
         Spaces[i].RecordReceived(pn, ecn);
-        // Server-0-RTT-Empfang (Application-Level, Long Header): kommt ein reordertes 0-RTT-Paket erst NACH dem
-        // ersten 1-RTT-Paket an und schließt es die letzte PN-Lücke, sind alle 0-RTT-Pakete da ⇒ Keys weg (§4.9.3).
+        // Server 0-RTT receipt (application level, long header): if a reordered 0-RTT packet arrives
+        // only AFTER the first 1-RTT packet and closes the last PN gap, all 0-RTT packets are present ⇒ keys gone (§4.9.3).
         if (level == EncryptionLevel.Application)
             MaybeDiscardServerZeroRttKeysIfComplete();
         DeliverFrames(level, plaintext.AsSpan(0, len));
     }
 
     /// <summary>
-    /// Parst die Frames eines Pakets; ein Kodier-/Unbekannt-Fehler ist FRAME_ENCODING_ERROR (RFC 9000 §12.4).
+    /// Parses a packet's frames; an encoding/unknown error is FRAME_ENCODING_ERROR (RFC 9000 §12.4).
     /// </summary>
     private void DeliverFrames(EncryptionLevel level, ReadOnlySpan<byte> plaintext)
     {
@@ -1254,7 +1272,7 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Schließt die Verbindung wegen eines Protokollverstoßes der Gegenseite (RFC 9000 §11).
+    /// Closes the connection due to a peer protocol violation (RFC 9000 §11).
     /// </summary>
     private void CloseWithTransportError(TransportError error, string reason) => Close(error, reason);
 
@@ -1263,7 +1281,7 @@ public abstract class QuicEndpoint : IDisposable
         foreach (Frame frame in frames)
         {
             if (_state != ConnectionState.Active)
-                return; // eine Verletzung (Close) oder ein empfangenes CONNECTION_CLOSE beendete die Verbindung
+                return; // a violation (close) or a received CONNECTION_CLOSE ended the connection
 
             switch (frame)
             {
@@ -1275,9 +1293,9 @@ public abstract class QuicEndpoint : IDisposable
                     Spaces[(int)level].OnAckReceived(ack.LargestAcknowledged);
                     var ackDelay = TimeSpan.FromMicroseconds(ack.AckDelay * 8);
                     _retransmitQueue[(int)level].AddRange(
-                        _recovery.OnAckReceived((int)level, ack, ackDelay, _clock.Elapsed.Ticks));
-                    // Wird eines unserer 1-RTT-Pakete bestätigt, DARF der Client den Handshake als bestätigt ansehen
-                    // (RFC 9001 §4.1.2) – auch ohne (ggf. verlorenes) HANDSHAKE_DONE.
+                        _recovery.OnAckReceived((int)level, ack, ackDelay, NowTicks));
+                    // When one of our 1-RTT packets is acknowledged, the client MAY regard the handshake
+                    // as confirmed (RFC 9001 §4.1.2) – even without a (possibly lost) HANDSHAKE_DONE.
                     if (level == EncryptionLevel.Application &&
                         _firstOneRttPacketNumber is { } firstPn && ack.LargestAcknowledged >= firstPn)
                         OnOneRttPacketAcknowledged();
@@ -1295,8 +1313,8 @@ public abstract class QuicEndpoint : IDisposable
                     HandleStopSending(ss);
                     break;
                 case DatagramFrame datagram:
-                    // RFC 9221 §3/§5: nur mit 0-RTT-/1-RTT-Schutz zulässig; ohne eigene Ankündigung
-                    // oder über unserem angekündigten Limit ⇒ PROTOCOL_VIOLATION.
+                    // RFC 9221 §3/§5: only permissible under 0-RTT/1-RTT protection; without our own
+                    // announcement or above our announced limit ⇒ PROTOCOL_VIOLATION.
                     if (level != EncryptionLevel.Application ||
                         LocalParams.MaxDatagramFrameSizeValue == 0)
                     {
@@ -1309,7 +1327,7 @@ public abstract class QuicEndpoint : IDisposable
                         CloseWithTransportError(TransportError.ProtocolViolation, "DATAGRAM larger than announced limit");
                         return;
                     }
-                    _receivedDatagrams.Add(datagram.Data.ToArray()); // §5: der Anwendung sofort zustellen
+                    _receivedDatagrams.Add(datagram.Data.ToArray()); // §5: deliver to the application immediately
                     break;
                 case MaxStreamDataFrame m when StreamMap.TryGetValue(m.StreamId, out QuicStream? s):
                     s.Send.MaxData = Math.Max(s.Send.MaxData, m.MaximumStreamData);
@@ -1324,13 +1342,13 @@ public abstract class QuicEndpoint : IDisposable
                     HandleNewConnectionId(ncid);
                     break;
                 case RetireConnectionIdFrame rcid:
-                    _cids.RetireLocal(rcid.SequenceNumber); // Peer zieht eine unserer lokalen CIDs zurück
+                    _cids.RetireLocal(rcid.SequenceNumber); // the peer retires one of our local CIDs
                     break;
                 case PathChallengeFrame pc:
-                    _pendingControlFrames.Add(new PathResponseFrame(pc.Data)); // RFC 9000 §8.2: zurückspiegeln
+                    _pendingControlFrames.Add(new PathResponseFrame(pc.Data)); // RFC 9000 §8.2: mirror it back
                     break;
                 case PathResponseFrame pr:
-                    if (_pathChallengePending == pr.Data) // passende Antwort → Pfad validiert
+                    if (_pathChallengePending == pr.Data) // matching answer → path validated
                     {
                         PathValidated = true;
                         _pathChallengePending = null;
@@ -1339,8 +1357,8 @@ public abstract class QuicEndpoint : IDisposable
                     break;
                 case ConnectionCloseFrame close:
                     PeerCloseFrame = close;
-                    EnterDraining(); // RFC 9000 §10.2.2: bei Empfang eines CONNECTION_CLOSE entleeren
-                    return;          // keine weiteren Frames dieses Pakets verarbeiten
+                    EnterDraining(); // RFC 9000 §10.2.2: drain on receipt of a CONNECTION_CLOSE
+                    return;          // process no further frames of this packet
             }
 
             if (level == EncryptionLevel.Application)
@@ -1353,23 +1371,23 @@ public abstract class QuicEndpoint : IDisposable
         if (_state is ConnectionState.Draining or ConnectionState.Closed)
             return;
         _state = ConnectionState.Draining;
-        _closeDeadlineTicks = _clock.Elapsed.Ticks + CloseTimeout().Ticks;
+        _closeDeadlineTicks = NowTicks + CloseTimeout().Ticks;
     }
 
     private void HandleNewConnectionId(NewConnectionIdFrame frame)
     {
         List<RetireConnectionIdFrame> retires = _cids.OnNewConnectionId(frame, out bool dcidChanged, out ConnectionId newDcid);
         if (dcidChanged)
-            Dcid = newDcid; // die bisherige DCID wurde durch „Retire Prior To" zurückgezogen
+            Dcid = newDcid; // the previous DCID was retired via "Retire Prior To"
         foreach (RetireConnectionIdFrame retire in retires)
             _pendingControlFrames.Add(retire);
     }
 
     /// <summary>
-    /// Baut das CONNECTION_CLOSE-Datagramm. Mit 1-RTT-Keys genügt ein Short-Header-Paket; WÄHREND des
-    /// Handshakes wird das Close dagegen auf ALLEN verfügbaren Long-Header-Leveln koalesziert gesendet
-    /// (RFC 9000 §10.2.3): der Peer hat womöglich nur die Initial-Keys (etwa wenn wir seinen ersten
-    /// Flight ablehnen, bevor er unseren je sah) und könnte ein reines Handshake-Close nie lesen.
+    /// Builds the CONNECTION_CLOSE datagram. With 1-RTT keys a short-header packet suffices; DURING
+    /// the handshake, however, the close is sent coalesced on ALL available long-header levels
+    /// (RFC 9000 §10.2.3): the peer may only have the Initial keys (e.g. when we reject its first
+    /// flight before it ever saw ours) and could never read a pure Handshake close.
     /// </summary>
     private byte[]? BuildClosePacket()
     {
@@ -1377,9 +1395,9 @@ public abstract class QuicEndpoint : IDisposable
             return null;
         byte[] payload = FrameParser.Serialize([_closeFrame]);
 
-        // §10.2.3: NACH bestätigtem Handshake MUSS das Close als 1-RTT-Paket gehen. VORHER wäre ein
-        // reines 1-RTT-Close riskant: der Peer hat womöglich nur Initial-/Handshake-Keys (etwa wenn
-        // wir seinen allerersten Flight ablehnen) und könnte es nie entschlüsseln.
+        // §10.2.3: AFTER the confirmed handshake the close MUST go as a 1-RTT packet. BEFORE that, a
+        // pure 1-RTT close would be risky: the peer may only have Initial/Handshake keys (e.g. when
+        // we reject its very first flight) and could never decrypt it.
         int app = (int)EncryptionLevel.Application;
         if (WriteKeys[app] is { } appKeys && HandshakeIsConfirmed)
         {
@@ -1404,7 +1422,7 @@ public abstract class QuicEndpoint : IDisposable
         }
         if (datagram.Count == 0 && WriteKeys[app] is { } onlyAppKeys)
         {
-            // Rückfall: nur noch 1-RTT-Keys vorhanden (Initial/Handshake schon verworfen).
+            // Fallback: only 1-RTT keys remain (Initial/Handshake already discarded).
             ulong pn = Spaces[app].NextPacketNumber();
             return ShortHeader.Build(onlyAppKeys, Dcid, pn, PacketNumber.EncodeLength(pn, Spaces[app].LargestAckedByPeer), payload, keyPhase: _sendKeyPhase);
         }
@@ -1415,7 +1433,7 @@ public abstract class QuicEndpoint : IDisposable
     {
         var id = new StreamId(sf.StreamId);
 
-        // STREAM_LIMIT_ERROR (RFC 9000 §4.6): ein vom Peer initiierter Stream jenseits des von uns gewährten Limits.
+        // STREAM_LIMIT_ERROR (RFC 9000 §4.6): a peer-initiated stream beyond the limit we granted.
         if (!LocallyInitiated(id) && id.Index >= StreamLimitFor(id))
         {
             CloseWithTransportError(TransportError.StreamLimitError, "stream limit exceeded");
@@ -1433,17 +1451,17 @@ public abstract class QuicEndpoint : IDisposable
                 CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size");
                 return;
         }
-        if (ConnectionFlowControlViolated())             // §4.1: Summe über alle Streams > MAX_DATA
+        if (ConnectionFlowControlViolated())             // §4.1: sum over all streams > MAX_DATA
             return;
 
         OnStreamOpened(id, isNew);
     }
 
     /// <summary>
-    /// Prüft das VERBINDUNGS-Flow-Control-Limit auf der Empfangsseite (RFC 9000 §4.1): die Summe der
-    /// höchsten empfangenen Offsets aller Streams (bei RESET zählt die Final Size, §4.5) darf das von
-    /// uns per initial_max_data/MAX_DATA gewährte Fenster nicht überschreiten — sonst
-    /// FLOW_CONTROL_ERROR. Liefert <c>true</c>, wenn die Verbindung deswegen geschlossen wurde.
+    /// Checks the CONNECTION flow-control limit on the receive side (RFC 9000 §4.1): the sum of the
+    /// highest received offsets of all streams (with RESET the final size counts, §4.5) must not
+    /// exceed the window we granted via initial_max_data/MAX_DATA — otherwise FLOW_CONTROL_ERROR.
+    /// Returns <c>true</c> when the connection was closed because of it.
     /// </summary>
     private bool ConnectionFlowControlViolated()
     {
@@ -1457,40 +1475,40 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Test-Seam: hebt das eigene Verbindungs-Sende-Limit über das vom Peer gewährte an, um
-    /// peer-seitige FLOW_CONTROL_ERROR-Pfade zu provozieren (Transport-Error-Matrix-Tests).
+    /// Test seam: raises our own connection send limit above the one granted by the peer, to provoke
+    /// peer-side FLOW_CONTROL_ERROR paths (transport-error-matrix tests).
     /// </summary>
     internal void OverrideConnSendLimitForTest(ulong limit) => _connSendLimit = limit;
 
     /// <summary>
-    /// Test-Seam: die aktuelle DCID (für die §7.3-Validator-Tests, die passende/unpassende
-    /// initial_source_connection_id-Werte konstruieren müssen).
+    /// Test seam: the current DCID (for the §7.3 validator tests, which must construct
+    /// matching/mismatching initial_source_connection_id values).
     /// </summary>
     internal ConnectionId DcidForTest => Dcid;
 
     /// <summary>
-    /// Das von uns gewährte Stream-Limit (Anzahl) für die Kategorie von <paramref name="id"/>.
+    /// The stream limit (count) we granted for the category of <paramref name="id"/>.
     /// </summary>
     private ulong StreamLimitFor(StreamId id)
         => id.IsUnidirectional ? LocalParams.InitialMaxStreamsUniValue : LocalParams.InitialMaxStreamsBidiValue;
 
     /// <summary>
-    /// Verarbeitet ein RESET_STREAM des Peers (RFC 9000 §19.4): validiert Stream-Zustand/-Limit,
-    /// übernimmt die Final Size (§4.5) und markiert die Empfangsseite als abgebrochen.
+    /// Processes a peer RESET_STREAM (RFC 9000 §19.4): validates stream state/limit, adopts the final
+    /// size (§4.5) and marks the receive side as aborted.
     /// </summary>
     private void HandleResetStream(ResetStreamFrame rs)
     {
         var id = new StreamId(rs.StreamId);
 
-        // §19.4: RESET_STREAM für einen Stream, auf dem der Peer gar nicht sendet (unsere uni Sendeseite)
-        // bzw. für einen lokal initiierten, nie geöffneten Stream ⇒ STREAM_STATE_ERROR.
+        // §19.4: a RESET_STREAM for a stream on which the peer does not send at all (our uni send side)
+        // or for a locally initiated, never-opened stream ⇒ STREAM_STATE_ERROR.
         if ((id.IsUnidirectional && LocallyInitiated(id)) ||
             (LocallyInitiated(id) && !StreamMap.ContainsKey(rs.StreamId)))
         {
             CloseWithTransportError(TransportError.StreamStateError, "RESET_STREAM on send-only or uncreated stream");
             return;
         }
-        // §4.6: auch RESET_STREAM darf keinen Stream jenseits des gewährten Limits erzeugen.
+        // §4.6: RESET_STREAM must not create a stream beyond the granted limit either.
         if (!LocallyInitiated(id) && id.Index >= StreamLimitFor(id))
         {
             CloseWithTransportError(TransportError.StreamLimitError, "stream limit exceeded");
@@ -1499,26 +1517,26 @@ public abstract class QuicEndpoint : IDisposable
 
         switch (GetOrCreateStream(id).Receive.Reset(rs.ApplicationErrorCode, rs.FinalSize))
         {
-            case StreamReceiveResult.FlowControlError:   // §4.1: Final Size über dem gewährten Fenster
+            case StreamReceiveResult.FlowControlError:   // §4.1: final size above the granted window
                 CloseWithTransportError(TransportError.FlowControlError, "reset final size exceeds flow control");
                 return;
-            case StreamReceiveResult.FinalSizeError:     // §4.5: Final Size widersprüchlich
+            case StreamReceiveResult.FinalSizeError:     // §4.5: contradictory final size
                 CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size in RESET_STREAM");
                 return;
         }
-        ConnectionFlowControlViolated(); // §4.5: die Final Size zählt voll gegen das Verbindungsfenster
+        ConnectionFlowControlViolated(); // §4.5: the final size counts fully against the connection window
     }
 
     /// <summary>
-    /// Verarbeitet ein RESET_STREAM_AT des Peers (draft-ietf-quic-reliable-stream-reset §4/§5): wie
-    /// <see cref="HandleResetStream"/>, liefert aber die ersten Reliable-Size-Bytes noch an die Anwendung.
+    /// Processes a peer RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset §4/§5): like
+    /// <see cref="HandleResetStream"/>, but still delivers the first reliable-size bytes to the application.
     /// </summary>
     private void HandleResetStreamAt(ResetStreamAtFrame rsa)
     {
         var id = new StreamId(rsa.StreamId);
 
-        // §19.4 (analog): RESET_STREAM_AT auf einer reinen Sendeseite bzw. einem nie geöffneten,
-        // lokal initiierten Stream ⇒ STREAM_STATE_ERROR.
+        // §19.4 (analogous): RESET_STREAM_AT on a pure send side or on a never-opened, locally
+        // initiated stream ⇒ STREAM_STATE_ERROR.
         if ((id.IsUnidirectional && LocallyInitiated(id)) ||
             (LocallyInitiated(id) && !StreamMap.ContainsKey(rsa.StreamId)))
         {
@@ -1533,33 +1551,33 @@ public abstract class QuicEndpoint : IDisposable
 
         switch (GetOrCreateStream(id).Receive.ResetAt(rsa.ApplicationErrorCode, rsa.FinalSize, rsa.ReliableSize))
         {
-            case StreamReceiveResult.FrameEncodingError: // draft §4: Reliable Size > Final Size
+            case StreamReceiveResult.FrameEncodingError: // draft §4: reliable size > final size
                 CloseWithTransportError(TransportError.FrameEncodingError, "RESET_STREAM_AT reliable size exceeds final size");
                 return;
-            case StreamReceiveResult.FlowControlError:   // §4.1: Final Size über dem gewährten Fenster
+            case StreamReceiveResult.FlowControlError:   // §4.1: final size above the granted window
                 CloseWithTransportError(TransportError.FlowControlError, "reset final size exceeds flow control");
                 return;
-            case StreamReceiveResult.FinalSizeError:     // §4.5: Final Size widersprüchlich
+            case StreamReceiveResult.FinalSizeError:     // §4.5: contradictory final size
                 CloseWithTransportError(TransportError.FinalSizeError, "inconsistent final size in RESET_STREAM_AT");
                 return;
-            case StreamReceiveResult.StreamStateError:   // draft §5.2: Fehlercode geändert
+            case StreamReceiveResult.StreamStateError:   // draft §5.2: error code changed
                 CloseWithTransportError(TransportError.StreamStateError, "RESET_STREAM_AT changed error code");
                 return;
         }
-        ConnectionFlowControlViolated(); // §4.5: die Final Size zählt voll gegen das Verbindungsfenster
+        ConnectionFlowControlViolated(); // §4.5: the final size counts fully against the connection window
     }
 
     /// <summary>
-    /// Verarbeitet ein STOP_SENDING des Peers (RFC 9000 §19.5, §3.5): validiert den Stream-Zustand und
-    /// setzt unsere Sendeseite mit kopiertem Fehlercode zurück (MUST in „Ready"/„Send"; wir antworten
-    /// grundsätzlich sofort — das deckt auch das MAY-Verschieben in „Data Sent" konservativ ab).
+    /// Processes a peer STOP_SENDING (RFC 9000 §19.5, §3.5): validates the stream state and resets our
+    /// send side with the copied error code (MUST in "Ready"/"Send"; we always answer immediately —
+    /// that also conservatively covers the MAY deferral in "Data Sent").
     /// </summary>
     private void HandleStopSending(StopSendingFrame ss)
     {
         var id = new StreamId(ss.StreamId);
 
-        // §19.5: STOP_SENDING für einen reinen Empfangsstream (peer-initiiert uni ⇒ wir senden nie)
-        // bzw. für einen lokal initiierten, nie geöffneten Stream ⇒ STREAM_STATE_ERROR.
+        // §19.5: STOP_SENDING for a pure receive stream (peer-initiated uni ⇒ we never send)
+        // or for a locally initiated, never-opened stream ⇒ STREAM_STATE_ERROR.
         if ((id.IsUnidirectional && !LocallyInitiated(id)) ||
             (LocallyInitiated(id) && !StreamMap.ContainsKey(ss.StreamId)))
         {
@@ -1574,7 +1592,7 @@ public abstract class QuicEndpoint : IDisposable
 
         QuicStream stream = GetOrCreateStream(id);
         stream.PeerStopSendingErrorCode = ss.ApplicationErrorCode;
-        stream.Send.Reset(ss.ApplicationErrorCode); // §3.5: Fehlercode SHOULD kopiert werden
+        stream.Send.Reset(ss.ApplicationErrorCode); // §3.5: the error code SHOULD be copied
     }
 
     private void DeliverCryptoToTls(EncryptionLevel level)
@@ -1596,9 +1614,9 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Installiert die 0-RTT-Schlüssel aus dem <c>client_early_traffic_secret</c> (RFC 9001 §4), sobald es
-    /// vorliegt: beim Client der Schreib-, beim Server der Leseschlüssel. Die 0-RTT-Suite steht (anders als die
-    /// ausgehandelte) schon vor dem ServerHello fest, weil sie an das Ticket gebunden ist.
+    /// Installs the 0-RTT keys from the <c>client_early_traffic_secret</c> (RFC 9001 §4) as soon as it
+    /// is available: on the client the write key, on the server the read key. The 0-RTT suite (unlike
+    /// the negotiated one) is fixed even before the ServerHello because it is bound to the ticket.
     /// </summary>
     private void MaybeInstallZeroRttKeys()
     {
@@ -1611,10 +1629,10 @@ public abstract class QuicEndpoint : IDisposable
         _zeroRttInstalled = true;
     }
 
-    // ---- Schlüsselinstallation -------------------------------------------------------------
+    // ---- Key installation ------------------------------------------------------------------
 
     /// <summary>
-    /// Installiert die Initial-Schlüssel aus <paramref name="dcid"/> in korrekter Richtung.
+    /// Installs the Initial keys from <paramref name="dcid"/> in the correct direction.
     /// </summary>
     protected void InstallInitialKeys(ConnectionId dcid)
     {
@@ -1624,14 +1642,14 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// <c>true</c>, sobald der TLS-Handshake bestätigt ist (Client: HANDSHAKE_DONE empfangen; Server: abgeschlossen).
+    /// <c>true</c> once the TLS handshake is confirmed (client: HANDSHAKE_DONE received; server: completed).
     /// </summary>
     protected virtual bool HandshakeIsConfirmed => false;
 
     /// <summary>
-    /// Verwirft die Schutzschlüssel eines Encryption-Levels (RFC 9001 §4.9): Schlüssel weg, ausstehende CRYPTO
-    /// und Retransmits verworfen, der Loss-Recovery-Space aufgeräumt (RFC 9002 §6.4). Danach werden auf diesem
-    /// Level weder Pakete gesendet (WriteKeys null) noch verarbeitet (ReadKeys null).
+    /// Discards the protection keys of an encryption level (RFC 9001 §4.9): keys gone, pending CRYPTO
+    /// and retransmits discarded, the loss-recovery space cleaned up (RFC 9002 §6.4). Afterwards
+    /// packets are neither sent (WriteKeys null) nor processed (ReadKeys null) on this level.
     /// </summary>
     private void DiscardKeys(EncryptionLevel level)
     {
@@ -1646,13 +1664,13 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Verwirft die Initial-Schlüssel (RFC 9001 §4.9.1): der Client, sobald er ein Handshake-Paket <b>gesendet</b>
-    /// hat; der Server, sobald er ein Handshake-Paket <b>verarbeitet</b> hat. Genau diese Zeitpunkte schreibt die
-    /// RFC vor – <b>nicht früher</b>: §4.9 verbietet das Verwerfen, solange die Gegenseite „nicht das Gleiche getan"
-    /// hat, und man braucht die Initial-Keys noch, um den Initial der Gegenseite zu acken bzw. CRYPTO auf Initial-
-    /// Level zu retransmittieren. Der Aufruf am Flight-/Datagramm-Ende sorgt dafür, dass die fälligen Initial-ACKs
-    /// vorher raus sind. (Ein „früheres" Verwerfen wäre RFC-widrig und brächte nichts – ACK und Finished sind
-    /// ohnehin im selben Flight.)
+    /// Discards the Initial keys (RFC 9001 §4.9.1): the client as soon as it has <b>sent</b> a
+    /// Handshake packet; the server as soon as it has <b>processed</b> one. Exactly these points are
+    /// what the RFC prescribes – <b>not earlier</b>: §4.9 forbids discarding while the peer has not
+    /// "done the same", and the Initial keys are still needed to ack the peer's Initial or to
+    /// retransmit CRYPTO at the Initial level. The call at the end of the flight/datagram ensures the
+    /// due Initial ACKs go out first. (An "earlier" discard would violate the RFC and gain nothing –
+    /// ACK and Finished are in the same flight anyway.)
     /// </summary>
     private void MaybeDiscardInitialKeys()
     {
@@ -1665,17 +1683,18 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Verwirft die Handshake-Schlüssel, sobald der Handshake bestätigt ist (RFC 9001 §4.9.2) – ein
-    /// bedingungsloses MUST, <b>ohne</b> Aufbewahrungsfenster. Geprüft und bewusst so: anders als §4.9.3 für
-    /// 0-RTT (dort MAY „Servers … temporarily retain 0-RTT keys … three times the PTO" gegen Reordering)
-    /// gewährt §4.9.2 <b>kein</b> Reordering-Fenster für Handshake-Keys. Das ist keine Auslassung, sondern
-    /// Absicht: Bestätigung (§4.1.2) heißt beidseitig fertiger Handshake; laut §4.9 wird ab dann „new data …
-    /// at the highest currently available encryption level" gesendet, auf tieferen Levels nur noch ACKs und
-    /// CRYPTO-Retransmits. Ein spät reordertes Handshake-Paket trüge also höchstens schon bekannte CRYPTO-
-    /// Daten oder ein Duplikat-ACK – nichts, dessen Verlust Inhalt kostet (bei 0-RTT erzeugt der Sender dagegen
-    /// noch echte App-Daten, daher nur dort das Fenster). Schlüssel länger vorzuhalten verlängerte nur das
-    /// Angriffsfenster – deshalb sofortiges Verwerfen. (Das „kurz für Reordering"-Behalten voriger Read-Keys
-    /// betrifft ausschließlich das 1-RTT Key Update nach §6, nicht die Handshake-Keys.)
+    /// Discards the Handshake keys as soon as the handshake is confirmed (RFC 9001 §4.9.2) – an
+    /// unconditional MUST, <b>without</b> a retention window. Checked and deliberately so: unlike
+    /// §4.9.3 for 0-RTT (there, MAY "Servers … temporarily retain 0-RTT keys … three times the PTO"
+    /// against reordering), §4.9.2 grants <b>no</b> reordering window for Handshake keys. That is no
+    /// omission but intent: confirmation (§4.1.2) means a mutually finished handshake; per §4.9,
+    /// "new data … at the highest currently available encryption level" is sent from then on, with
+    /// only ACKs and CRYPTO retransmits on the lower levels. A late reordered Handshake packet would
+    /// thus at most carry already-known CRYPTO data or a duplicate ACK – nothing whose loss costs
+    /// content (with 0-RTT, by contrast, the sender still produces real app data, hence the window
+    /// only there). Keeping keys longer would only extend the attack window – hence the immediate
+    /// discard. (The "keep briefly for reordering" of previous read keys applies exclusively to the
+    /// 1-RTT key update per §6, not to the Handshake keys.)
     /// </summary>
     private void MaybeDiscardHandshakeKeys()
     {
@@ -1686,47 +1705,48 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Testhilfe: <c>true</c>, solange die Handshake-Schutzschlüssel installiert sind (RFC 9001 §4.9.2).
+    /// Test helper: <c>true</c> while the Handshake protection keys are installed (RFC 9001 §4.9.2).
     /// </summary>
     internal bool HasHandshakeKeysForTest =>
         ReadKeys[(int)EncryptionLevel.Handshake] is not null || WriteKeys[(int)EncryptionLevel.Handshake] is not null;
 
     /// <summary>
-    /// Testhilfe: <c>true</c>, solange die 0-RTT-Schlüssel installiert sind (RFC 9001 §4.9.3).
+    /// Test helper: <c>true</c> while the 0-RTT keys are installed (RFC 9001 §4.9.3).
     /// </summary>
     internal bool HasZeroRttKeysForTest => _zeroRttKeys is not null;
 
     /// <summary>
-    /// Testhilfe: überschreibt die 0-RTT-Verwerfungsfrist des Servers (statt 3×PTO), um sie deterministisch zu prüfen.
+    /// Test helper: overrides the server's 0-RTT discard deadline (instead of 3×PTO) to check it deterministically.
     /// </summary>
     internal TimeSpan? ServerZeroRttDiscardDelayForTest { get; set; }
 
     /// <summary>
-    /// Aufbewahrungsfrist der Server-0-RTT-Read-Keys nach dem ersten 1-RTT-Paket (RFC 9001 §4.9.3: 3×PTO empfohlen).
+    /// Retention period of the server's 0-RTT read keys after the first 1-RTT packet (RFC 9001 §4.9.3: 3×PTO recommended).
     /// </summary>
     private TimeSpan ServerZeroRttDiscardDelay() =>
         ServerZeroRttDiscardDelayForTest ?? 3 * _recovery.Rtt.GetProbeTimeout(_recovery.MaxAckDelay);
 
     /// <summary>
-    /// Verwirft die 0-RTT-Read-Keys des Servers, sobald die kurze Aufbewahrungsfrist nach dem ersten 1-RTT-Paket
-    /// abgelaufen ist (RFC 9001 §4.9.3). Bis dahin bleiben sie installiert, um umsortierte 0-RTT-Pakete noch
-    /// entschlüsseln zu können, ohne eine Neuübertragung über 1-RTT zu erzwingen.
+    /// Discards the server's 0-RTT read keys once the short retention period after the first 1-RTT
+    /// packet has expired (RFC 9001 §4.9.3). Until then they stay installed to still be able to
+    /// decrypt reordered 0-RTT packets without forcing a retransmission over 1-RTT.
     /// </summary>
     private void MaybeDiscardServerZeroRttKeys()
     {
         if (_zeroRttKeys is null || _serverZeroRttDiscardDeadlineTicks < 0 ||
-            _clock.Elapsed.Ticks < _serverZeroRttDiscardDeadlineTicks)
+            NowTicks < _serverZeroRttDiscardDeadlineTicks)
             return;
         _zeroRttKeys.Dispose();
         _zeroRttKeys = null;
     }
 
     /// <summary>
-    /// Verwirft die 0-RTT-Read-Keys des Servers <b>früher</b> als nach 3×PTO, sobald sicher alle 0-RTT-Pakete
-    /// empfangen sind (RFC 9001 §4.9.3, letzter Satz: „A server MAY discard 0-RTT keys earlier if it determines
-    /// that it has received all 0-RTT packets, … by keeping track of missing packet numbers"). 0-RTT-PNs beginnen
-    /// bei 0 und liegen alle unter der ersten 1-RTT-PN; ist also bereits ein 1-RTT-Paket eingetroffen (Obergrenze
-    /// bekannt) UND der Application-Space ab 0 lückenlos, kann kein reordertes 0-RTT-Paket mehr ausstehen.
+    /// Discards the server's 0-RTT read keys <b>earlier</b> than after 3×PTO, once all 0-RTT packets
+    /// have certainly been received (RFC 9001 §4.9.3, last sentence: "A server MAY discard 0-RTT keys
+    /// earlier if it determines that it has received all 0-RTT packets, … by keeping track of missing
+    /// packet numbers"). 0-RTT PNs start at 0 and all lie below the first 1-RTT PN; so if a 1-RTT
+    /// packet has already arrived (upper bound known) AND the application space is gap-free from 0,
+    /// no reordered 0-RTT packet can still be outstanding.
     /// </summary>
     private void MaybeDiscardServerZeroRttKeysIfComplete()
     {
@@ -1751,7 +1771,7 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// AEAD-Verfahren zur Cipher Suite (Initial nutzt immer AES-128-GCM, RFC 9001 §5.2).
+    /// AEAD algorithm for the cipher suite (Initial always uses AES-128-GCM, RFC 9001 §5.2).
     /// </summary>
     private static AeadAlgorithm AeadFor(CipherSuite suite)
         => suite == CipherSuite.ChaCha20Poly1305Sha256 ? AeadAlgorithm.ChaCha20Poly1305 : AeadAlgorithm.AesGcm;
@@ -1772,23 +1792,24 @@ public abstract class QuicEndpoint : IDisposable
         WriteKeys[(int)EncryptionLevel.Application] = new PacketProtection(_appWriteTk, _appAead);
         ReadKeys[(int)EncryptionLevel.Application] = new PacketProtection(_appReadTk, _appAead);
 
-        // Generation 1 der Read-Keys vorbereiten, um einen Key Update des Peers sofort dekodieren zu können.
+        // Prepare generation 1 of the read keys, so a peer key update can be decoded immediately.
         _nextAppReadTk = _appReadTk.Next(_appHash, _appHashLength);
         _nextAppReadKeys = new PacketProtection(_nextAppReadTk, _appAead);
 
-        // Die im Handshake gelernte DCID ist die entfernte Connection ID mit Sequenz 0.
+        // The DCID learned in the handshake is the remote connection ID with sequence 0.
         _cids.InitializeRemote(Dcid);
         ApplyPeerStatelessResetToken();
         _appKeysInstalled = true;
 
-        // RFC 9001 §4.9.3: Der Client SHOULD seine 0-RTT-Schlüssel verwerfen, sobald die 1-RTT-Schlüssel stehen –
-        // „as they have no use after that moment": er sendet nach dem ersten 1-RTT-Paket keine 0-RTT-Pakete mehr
-        // (§5.6) und empfängt selbst NIE welche (0-RTT ist client→server), hat also gar keinen 0-RTT-Read-Pfad.
-        // Deshalb gibt es hier – anders als beim Server – bewusst KEIN Reordering-Fenster: reorderte/verspätete
-        // Pakete am Client werden mit Initial-/Handshake-/1-RTT-Read-Keys entschützt, nie mit 0-RTT-Keys; und
-        // verlorene 0-RTT-Daten werden über 1-RTT retransmittiert (Application-Retransmit-Queue ⇒ BuildApplication-
-        // Packets), nicht neu als 0-RTT verschlüsselt. Sofort verwerfen minimiert das Angriffsfenster. (Nur der
-        // SERVER behält 0-RTT-READ-Keys kurz für reorderte 0-RTT-Pakete – anderer Auslöser, §4.9.3, siehe unten.)
+        // RFC 9001 §4.9.3: the client SHOULD discard its 0-RTT keys once the 1-RTT keys are in place –
+        // "as they have no use after that moment": it sends no more 0-RTT packets after the first
+        // 1-RTT packet (§5.6) and NEVER receives any itself (0-RTT is client→server), so it has no
+        // 0-RTT read path at all. Hence – unlike on the server – there is deliberately NO reordering
+        // window here: reordered/late packets at the client are unprotected with Initial/Handshake/
+        // 1-RTT read keys, never with 0-RTT keys; and lost 0-RTT data is retransmitted over 1-RTT
+        // (application retransmit queue ⇒ BuildApplicationPackets), not re-encrypted as 0-RTT.
+        // Immediate discarding minimises the attack window. (Only the SERVER keeps 0-RTT READ keys
+        // briefly for reordered 0-RTT packets – a different trigger, §4.9.3, see below.)
         if (!IsServer)
         {
             _zeroRttKeys?.Dispose();
@@ -1797,7 +1818,7 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Übernimmt den <c>stateless_reset_token</c>-TP des Peers als Token der entfernten Handshake-CID.
+    /// Adopts the peer's <c>stateless_reset_token</c> TP as the token of the remote handshake CID.
     /// </summary>
     private void ApplyPeerStatelessResetToken()
     {
@@ -1805,22 +1826,22 @@ public abstract class QuicEndpoint : IDisposable
             _cids.SetInitialRemoteToken(token);
     }
 
-    // ---- Key Update (RFC 9001 §6) ----------------------------------------------------------
+    // ---- Key update (RFC 9001 §6) ----------------------------------------------------------
 
     /// <summary>
-    /// Aktuelle Anzahl vollzogener 1-RTT-Key-Updates (Diagnose/Test).
+    /// Current number of completed 1-RTT key updates (diagnostics/test).
     /// </summary>
     public uint KeyUpdateCount => _keyUpdateCount;
 
     /// <summary>
-    /// Das aktuelle Key-Phase-Bit, das ausgehende 1-RTT-Pakete tragen.
+    /// The current key-phase bit carried by outgoing 1-RTT packets.
     /// </summary>
     public bool CurrentKeyPhase => _sendKeyPhase;
 
     /// <summary>
-    /// Leitet lokal einen 1-RTT-Key-Update ein (RFC 9001 §6.1): rotiert die eigenen Send-Keys auf die
-    /// nächste Generation und kippt das Key-Phase-Bit. Die Read-Keys folgen, sobald der Peer mit der neuen
-    /// Phase antwortet. Erfordert installierte Application-Keys.
+    /// Initiates a 1-RTT key update locally (RFC 9001 §6.1): rotates our own send keys to the next
+    /// generation and flips the key-phase bit. The read keys follow once the peer answers with the
+    /// new phase. Requires installed application keys.
     /// </summary>
     public bool InitiateKeyUpdate()
     {
@@ -1835,10 +1856,10 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Vollzieht den durch ein gekipptes Key-Phase-Bit erkannten Key Update auf der Empfangsseite: die
-    /// vorbereiteten nächsten Read-Keys werden aktiv (die bisherigen kurz für Reordering behalten), die
-    /// übernächste Generation wird vorbereitet, und – falls noch nicht geschehen – rotieren auch die
-    /// Send-Keys mit (Antwort auf den Update des Peers).
+    /// Commits the key update detected via a flipped key-phase bit on the receive side: the prepared
+    /// next read keys become active (the previous ones kept briefly for reordering), the generation
+    /// after next is prepared, and – if not already done – the send keys rotate along as well
+    /// (answering the peer's update).
     /// </summary>
     private void CommitPeerKeyUpdate(bool newPhase)
     {
@@ -1868,7 +1889,7 @@ public abstract class QuicEndpoint : IDisposable
             return;
         if (!TransportParameters.TryDecode(bytes, out TransportParameters? p) || p is null)
         {
-            // RFC 9000 §7.4: fehlerhafte/ungültige Transport-Parameter ⇒ TRANSPORT_PARAMETER_ERROR.
+            // RFC 9000 §7.4: faulty/invalid transport parameters ⇒ TRANSPORT_PARAMETER_ERROR.
             CloseWithTransportError(TransportError.TransportParameterError, "invalid transport parameters");
             return;
         }
@@ -1880,7 +1901,7 @@ public abstract class QuicEndpoint : IDisposable
 
         PeerParams = p;
         _connSendLimit = p.InitialMaxDataValue;
-        _idle.Negotiate(LocalParams.MaxIdleTimeoutMs, p.MaxIdleTimeoutMs); // effektiver Idle-Timeout (RFC 9000 §10.1)
+        _idle.Negotiate(LocalParams.MaxIdleTimeoutMs, p.MaxIdleTimeoutMs); // effective idle timeout (RFC 9000 §10.1)
         ApplyPeerStatelessResetToken();
         foreach (QuicStream s in StreamMap.Values)
             if (s.Send.MaxData == 0)
@@ -1888,17 +1909,17 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// Authentifiziert die Peer-Transport-Parameter (RFC 9000 §7.3): initial_source_connection_id MUSS
-    /// vorhanden sein und der Source Connection ID des Peers aus dessen Initial-Paket entsprechen (das
-    /// ist zu diesem Zeitpunkt unsere <see cref="Dcid"/>) — das bindet die im Handshake ausgehandelten
-    /// Parameter kryptografisch an die unverschlüsselt übertragenen Connection IDs. Rollen-spezifische
-    /// Prüfungen (ODCID/Retry beim Client, server-only-Parameter beim Server) ergänzen die Subklassen.
-    /// Rückgabe: Fehlerbeschreibung oder <c>null</c>, wenn alles stimmt.
+    /// Authenticates the peer transport parameters (RFC 9000 §7.3): initial_source_connection_id MUST
+    /// be present and match the peer's source connection ID from its Initial packet (which at this
+    /// point is our <see cref="Dcid"/>) — this cryptographically binds the parameters negotiated in
+    /// the handshake to the connection IDs transmitted in the clear. Role-specific checks
+    /// (ODCID/Retry on the client, server-only parameters on the server) are added by the subclasses.
+    /// Return: an error description or <c>null</c> when everything matches.
     /// </summary>
     internal virtual string? ValidatePeerTransportParameters(TransportParameters p)
     {
         if (!p.SawInitialSourceConnectionId)
-            return "missing initial_source_connection_id"; // §7.3: Abwesenheit ist ein Verbindungsfehler
+            return "missing initial_source_connection_id"; // §7.3: absence is a connection error
         if (!p.InitialSourceConnectionIdValue.Span.SequenceEqual(Dcid.Span))
             return "initial_source_connection_id mismatch";
         return null;
@@ -1913,9 +1934,10 @@ public abstract class QuicEndpoint : IDisposable
             k?.Dispose();
         _nextAppReadKeys?.Dispose();
         _prevAppReadKeys?.Dispose();
-        // Auch die 0-RTT-Keys freigeben: Endet die Verbindung, bevor sie regulär verworfen wurden (Server vor
-        // Ablauf der 3×PTO-Frist bzw. vor lückenlosem Empfang, RFC 9001 §4.9.3), lägen sie sonst bis zum GC
-        // undisposed vor. Nullen hält den Zustand konsistent zu den anderen Discard-Pfaden (idempotent).
+        // Release the 0-RTT keys too: if the connection ends before they were discarded regularly
+        // (server before the 3×PTO deadline or before gap-free receipt, RFC 9001 §4.9.3), they would
+        // otherwise sit undisposed until the GC. Nulling keeps the state consistent with the other
+        // discard paths (idempotent).
         _zeroRttKeys?.Dispose();
         _zeroRttKeys = null;
         GC.SuppressFinalize(this);

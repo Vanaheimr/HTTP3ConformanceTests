@@ -26,12 +26,12 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Kapselt die QPACK-Anbindung einer HTTP/3-Verbindung: die dynamische Tabelle (Encoder + Decoder), das
-/// Lesen der QPACK-Encoder- und Control-Streams der Gegenseite sowie das (De-)Kodieren von Field Sections.
-/// Ist die angekündigte Kapazität 0, bleibt alles rein statisch (Cloudflare-interop-sicher); ist sie &gt; 0
-/// und kündigt auch der Peer eine Kapazität an, wird die dynamische Tabelle beidseitig genutzt (RFC 9204).
-/// Setzt außerdem die Frame-/Stream-Zustandsmaschine der Uni-Streams durch (RFC 9114 §6.2, §7.2):
-/// Verstöße der Gegenseite werden über <c>onConnectionError</c> als HTTP/3-Verbindungsfehler gemeldet.
+/// Encapsulates an HTTP/3 connection's QPACK integration: the dynamic table (encoder + decoder),
+/// reading the peer's QPACK encoder and control streams, and (de)coding field sections.
+/// With an announced capacity of 0, everything stays purely static (Cloudflare-interop-safe); with
+/// &gt; 0 and the peer also announcing a capacity, the dynamic table is used on both sides (RFC 9204).
+/// Also enforces the frame/stream state machine of the uni streams (RFC 9114 §6.2, §7.2):
+/// peer violations are reported via <c>onConnectionError</c> as HTTP/3 connection errors.
 /// </summary>
 internal sealed class Http3Qpack
 {
@@ -39,22 +39,22 @@ internal sealed class Http3Qpack
 
     private readonly QpackDynamicEncoder _encoder = new();
     private readonly QpackDynamicDecoder _decoder = new();
-    private readonly ulong _localMaxCapacity; // was wir als Decoder ankündigen
+    private readonly ulong _localMaxCapacity; // what we announce as decoder
     private readonly bool _weAreClient;
-    private readonly Action<ulong, string> _fatal; // HTTP/3-Verbindungsfehler (RFC 9114 §8)
+    private readonly Action<ulong, string> _fatal; // HTTP/3 connection error (RFC 9114 §8)
 
-    private QuicStream? _encoderStream; // unser ausgehender QPACK-Encoder-Stream (Insert-Instruktionen)
-    private QuicStream? _decoderStream; // unser ausgehender QPACK-Decoder-Stream (Section-Acks)
+    private QuicStream? _encoderStream; // our outgoing QPACK encoder stream (insert instructions)
+    private QuicStream? _decoderStream; // our outgoing QPACK decoder stream (section acks)
     private bool _encoderCapacitySet;
     private ulong _peerMaxCapacity;
     private bool _peerSettingsSeen;
 
-    private ulong? _peerControlId;  // RFC 9114 §6.2.1: genau EIN Control-Stream pro Peer
-    private ulong? _peerEncoderId;  // RFC 9204 §4.2: genau EIN Encoder-/Decoder-Stream pro Peer
+    private ulong? _peerControlId;  // RFC 9114 §6.2.1: exactly ONE control stream per peer
+    private ulong? _peerEncoderId;  // RFC 9204 §4.2: exactly ONE encoder/decoder stream per peer
     private ulong? _peerDecoderId;
 
     private readonly Dictionary<ulong, PeerUniStream> _peerStreams = [];
-    private readonly HashSet<ulong> _webTransportUniStreams = []; // an den WebTransport-Manager übergebene Uni-Streams
+    private readonly HashSet<ulong> _webTransportUniStreams = []; // uni streams handed over to the WebTransport manager
 
     public Http3Qpack(ulong localMaxCapacity, bool weAreClient, Action<ulong, string> onConnectionError)
     {
@@ -64,31 +64,31 @@ internal sealed class Http3Qpack
     }
 
     /// <summary>
-    /// Reservierte HTTP/2-Frame-Typen ohne HTTP/3-Entsprechung (RFC 9114 §7.2.8/§11.2.1) — ihr Empfang
-    /// MUSS als Verbindungsfehler H3_FRAME_UNEXPECTED behandelt werden.
+    /// Reserved HTTP/2 frame types without an HTTP/3 counterpart (RFC 9114 §7.2.8/§11.2.1) — their
+    /// receipt MUST be treated as the connection error H3_FRAME_UNEXPECTED.
     /// </summary>
     internal static bool IsReservedHttp2FrameType(ulong type) => type is 0x02 or 0x06 or 0x08 or 0x09;
 
     /// <summary>
-    /// Vom Peer per SETTINGS_MAX_FIELD_SECTION_SIZE angekündigtes Limit (RFC 9114 §4.2.2);
-    /// <c>null</c> = unbegrenzt. Field Sections über diesem Limit SOLLEN NICHT gesendet werden.
+    /// Limit announced by the peer via SETTINGS_MAX_FIELD_SECTION_SIZE (RFC 9114 §4.2.2);
+    /// <c>null</c> = unlimited. Field sections above this limit SHOULD NOT be sent.
     /// </summary>
     public ulong? PeerMaxFieldSectionSize { get; private set; }
 
     /// <summary>
-    /// Der Peer (Server) erlaubt Extended CONNECT (SETTINGS_ENABLE_CONNECT_PROTOCOL = 1,
-    /// RFC 8441 §3 / RFC 9220 §3). Ohne dieses Setting DARF der Client kein :protocol senden.
+    /// The peer (server) permits Extended CONNECT (SETTINGS_ENABLE_CONNECT_PROTOCOL = 1,
+    /// RFC 8441 §3 / RFC 9220 §3). Without this setting the client MUST NOT send :protocol.
     /// </summary>
     public bool PeerEnableConnectProtocol { get; private set; }
 
     /// <summary>
-    /// Der Peer nimmt HTTP/3-Datagramme an (SETTINGS_H3_DATAGRAM = 1, RFC 9297 §2.1.1).
+    /// The peer accepts HTTP/3 datagrams (SETTINGS_H3_DATAGRAM = 1, RFC 9297 §2.1.1).
     /// </summary>
     public bool PeerH3Datagram { get; private set; }
 
     /// <summary>
-    /// WebTransport-Settings des Peers (draft-webtrans-http3 §9.2): max. Sessions und die Anfangs-
-    /// Flow-Control-Limits. <c>WtMaxSessions</c> = 0 ⇒ Peer akzeptiert keine WebTransport-Sessions.
+    /// The peer's WebTransport settings (draft-webtrans-http3 §9.2): max. sessions and the initial
+    /// flow-control limits. <c>WtMaxSessions</c> = 0 ⇒ the peer accepts no WebTransport sessions.
     /// </summary>
     public ulong PeerWtMaxSessions { get; private set; }
     public ulong PeerWtInitialMaxStreamsUni { get; private set; }
@@ -96,8 +96,8 @@ internal sealed class Http3Qpack
     public ulong PeerWtInitialMaxData { get; private set; }
 
     /// <summary>
-    /// Unkomprimierte Größe einer Field Section nach RFC 9114 §4.2.2: je Feld die Byte-Längen von
-    /// Name und Wert plus 32 Bytes Overhead.
+    /// Uncompressed size of a field section per RFC 9114 §4.2.2: per field, the byte lengths of
+    /// name and value plus 32 bytes of overhead.
     /// </summary>
     internal static ulong FieldSectionSize(IReadOnlyList<HeaderField> fields)
     {
@@ -110,22 +110,22 @@ internal sealed class Http3Qpack
     }
 
     /// <summary>
-    /// Die von uns (als Decoder) angekündigte maximale Tabellenkapazität.
+    /// The maximum table capacity we announce (as decoder).
     /// </summary>
     public ulong LocalMaxCapacity => _localMaxCapacity;
 
     /// <summary>
-    /// Insert Count der Encoder-Tabelle (Diagnose: &gt; 0 ⇒ dynamische Tabelle wurde genutzt).
+    /// Insert count of the encoder table (diagnostics: &gt; 0 ⇒ the dynamic table was used).
     /// </summary>
     public ulong EncoderInsertCount => _encoder.Table.InsertCount;
 
     /// <summary>
-    /// Insert Count der Decoder-Tabelle (Diagnose).
+    /// Insert count of the decoder table (diagnostics).
     /// </summary>
     public ulong DecoderInsertCount => _decoder.Table.InsertCount;
 
     /// <summary>
-    /// Vom Peer per Section-Ack/Insert-Count-Increment bestätigte Insert-Anzahl (Diagnose).
+    /// Insert count confirmed by the peer via section-ack/insert-count-increment (diagnostics).
     /// </summary>
     public ulong EncoderKnownReceivedCount => _encoder.KnownReceivedCount;
 
@@ -133,9 +133,9 @@ internal sealed class Http3Qpack
     public void SetDecoderStream(QuicStream stream) => _decoderStream = stream;
 
     /// <summary>
-    /// Kodiert eine Header-Liste (für den Stream <paramref name="streamId"/>) zu einer Field Section. Nutzt die
-    /// dynamische Tabelle (mit Insert-Instruktionen auf dem Encoder-Stream), sobald wir und der Peer je eine
-    /// Kapazität &gt; 0 angekündigt haben; sonst statisch.
+    /// Encodes a header list (for the stream <paramref name="streamId"/>) into a field section. Uses
+    /// the dynamic table (with insert instructions on the encoder stream) once we and the peer have
+    /// each announced a capacity &gt; 0; otherwise static.
     /// </summary>
     public byte[] EncodeHeaders(ulong streamId, IReadOnlyList<HeaderField> headers)
     {
@@ -155,9 +155,9 @@ internal sealed class Http3Qpack
     }
 
     /// <summary>
-    /// Dekodiert eine Field Section des Streams <paramref name="streamId"/>. Gibt <c>null</c> zurück, wenn der
-    /// Stream blockiert ist (die referenzierten dynamischen Einträge sind noch nicht eingetroffen) – dann später
-    /// erneut versuchen. Bei einer dynamischen Sektion wird eine Section-Acknowledgment gesendet (RFC 9204 §4.4.1).
+    /// Decodes a field section of the stream <paramref name="streamId"/>. Returns <c>null</c> when
+    /// the stream is blocked (the referenced dynamic entries have not yet arrived) – try again later.
+    /// For a dynamic section, a section acknowledgment is sent (RFC 9204 §4.4.1).
     /// </summary>
     public List<HeaderField>? TryDecodeHeaders(ulong streamId, ReadOnlySpan<byte> section)
     {
@@ -166,12 +166,12 @@ internal sealed class Http3Qpack
             return null;
         if (result == QpackResult.Ok && requiredInsertCount > 0 && _decoderStream is not null)
             _decoderStream.Write(QpackDynamicDecoder.EncodeSectionAcknowledgment(streamId));
-        return headers; // Ok oder Fehler (leere Liste)
+        return headers; // Ok or error (empty list)
     }
 
     /// <summary>
-    /// Liest die unidirektionalen Streams der Gegenseite (Control für SETTINGS, QPACK-Encoder-Stream)
-    /// und setzt dabei die Stream-/Frame-Regeln aus RFC 9114 §6.2/§7.2 durch.
+    /// Reads the peer's unidirectional streams (control for SETTINGS, the QPACK encoder stream),
+    /// enforcing the stream/frame rules from RFC 9114 §6.2/§7.2 in the process.
     /// </summary>
     public void PumpPeerStreams(IReadOnlyDictionary<ulong, QuicStream> streams)
     {
@@ -184,7 +184,7 @@ internal sealed class Http3Qpack
                 continue;
 
             if (_webTransportUniStreams.Contains(id))
-                continue; // an den WebTransport-Manager übergeben – nicht mehr hier pumpen
+                continue; // handed to the WebTransport manager – no longer pumped here
             if (!_peerStreams.TryGetValue(id, out PeerUniStream? peer))
                 _peerStreams[id] = peer = new PeerUniStream(stream);
 
@@ -193,8 +193,8 @@ internal sealed class Http3Qpack
                 peer.Buffer.Append(chunk);
             RoutePeerStream(peer);
 
-            // RFC 9114 §6.2.1 / RFC 9204 §4.2: Control-, Encoder- und Decoder-Stream dürfen NIE enden —
-            // weder sauber (FIN) noch per Reset ⇒ H3_CLOSED_CRITICAL_STREAM.
+            // RFC 9114 §6.2.1 / RFC 9204 §4.2: control, encoder and decoder streams must NEVER end —
+            // neither cleanly (FIN) nor via reset ⇒ H3_CLOSED_CRITICAL_STREAM.
             if ((peer.Type == Http3StreamType.Control || peer.Type == Http3StreamType.QpackEncoder ||
                  peer.Type == Http3StreamType.QpackDecoder) &&
                 (stream.Receive.FinReceived || stream.IsResetByPeer))
@@ -207,21 +207,21 @@ internal sealed class Http3Qpack
 
     private void RoutePeerStream(PeerUniStream peer)
     {
-        // Stream-Typ (erster VarInt) einmalig lesen.
+        // Read the stream type (first varint) once.
         if (peer.Type is null)
         {
             var reader = new BufferReader(peer.Buffer.Span);
             if (!reader.TryReadVarInt(out ulong type))
-                return; // Typ-VarInt noch unvollständig
+                return; // type varint still incomplete
             peer.Type = type;
             peer.Buffer.Consume(reader.Position);
 
-            // Stream-Erzeugungsregeln (einmalig beim Lesen des Typs prüfen):
+            // Stream creation rules (checked once when reading the type):
             switch (type)
             {
-                case Http3StreamType.Control when _peerControlId is not null:       // §6.2.1: nur EIN Control-Stream
-                case Http3StreamType.QpackEncoder when _peerEncoderId is not null:  // RFC 9204 §4.2: nur je EIN …
-                case Http3StreamType.QpackDecoder when _peerDecoderId is not null:  // … Encoder-/Decoder-Stream
+                case Http3StreamType.Control when _peerControlId is not null:       // §6.2.1: only ONE control stream
+                case Http3StreamType.QpackEncoder when _peerEncoderId is not null:  // RFC 9204 §4.2: only ONE each …
+                case Http3StreamType.QpackDecoder when _peerDecoderId is not null:  // … encoder/decoder stream
                     _fatal(Http3Error.StreamCreationError, "duplicate critical stream");
                     return;
                 case Http3StreamType.Control:
@@ -234,11 +234,11 @@ internal sealed class Http3Qpack
                     _peerDecoderId = peer.Stream.Id.Value;
                     break;
                 case Http3StreamType.Push when !_weAreClient:
-                    // §6.2.2: nur Server pushen; ein client-initiierter Push-Stream ist ein Verbindungsfehler.
+                    // §6.2.2: only servers push; a client-initiated push stream is a connection error.
                     _fatal(Http3Error.StreamCreationError, "client-initiated push stream");
                     return;
                 case Http3StreamType.Push:
-                    // §4.6: wir (Client) haben nie ein MAX_PUSH_ID gesendet ⇒ jeder Push-Stream ist illegal.
+                    // §4.6: we (the client) never sent a MAX_PUSH_ID ⇒ every push stream is illegal.
                     _fatal(Http3Error.IdError, "push stream without MAX_PUSH_ID");
                     return;
             }
@@ -251,7 +251,7 @@ internal sealed class Http3Qpack
                     peer.Buffer.Consume(consumed);
                 break;
 
-            case Http3StreamType.QpackDecoder: // Section-Acks / Insert Count Increment des Peers.
+            case Http3StreamType.QpackDecoder: // the peer's section acks / insert count increment.
                 int ackConsumed = _encoder.ProcessDecoderInstructions(peer.Buffer.Span);
                 peer.Buffer.Consume(ackConsumed);
                 break;
@@ -262,42 +262,42 @@ internal sealed class Http3Qpack
                 {
                     foreach (Http3Frame frame in frames)
                         if (!HandleControlFrame(frame))
-                            return; // Verbindungsfehler gemeldet
+                            return; // connection error reported
                     peer.Buffer.Consume(used);
                 }
                 break;
 
             case WebTransport.WebTransportConstants.UniStreamType when OnWebTransportUniStream is not null:
-                // WebTransport-Uni-Stream (draft §4.1): 0x54 ‖ Session-ID ‖ Nutzdaten. Session-ID lesen,
-                // dann den Stream an den WebTransport-Manager übergeben (der liest fortan direkt).
+                // WebTransport uni stream (draft §4.1): 0x54 ‖ session ID ‖ payload. Read the session
+                // ID, then hand the stream to the WebTransport manager (which reads directly from then on).
                 var wtReader = new BufferReader(peer.Buffer.Span);
                 if (!wtReader.TryReadVarInt(out ulong wtSessionId))
-                    break; // Session-ID noch unvollständig
+                    break; // session ID still incomplete
                 byte[] wtLeftover = peer.Buffer.Span[wtReader.Position..].ToArray();
-                _webTransportUniStreams.Add(peer.Stream.Id.Value); // ab jetzt der WebTransport-Manager
+                _webTransportUniStreams.Add(peer.Stream.Id.Value); // the WebTransport manager from now on
                 _peerStreams.Remove(peer.Stream.Id.Value);
                 OnWebTransportUniStream(peer.Stream, wtSessionId, wtLeftover);
                 break;
 
-            default: // Unbekannte/reservierte Stream-Typen: Daten verwerfen, KEIN Verbindungsfehler (§6.2).
+            default: // Unknown/reserved stream types: discard the data, NO connection error (§6.2).
                 peer.Buffer.Clear();
                 break;
         }
     }
 
     /// <summary>
-    /// Callback für einen erkannten WebTransport-Uni-Stream (draft §4.1): (Stream, Session-ID, bereits
-    /// mitgelesene Nutzdaten). Ist er gesetzt, kündigt die HTTP/3-Schicht WebTransport an.
+    /// Callback for a recognised WebTransport uni stream (draft §4.1): (stream, session ID, payload
+    /// already read along). When set, the HTTP/3 layer announces WebTransport.
     /// </summary>
     public Action<QuicStream, ulong, byte[]>? OnWebTransportUniStream { get; set; }
 
     /// <summary>
-    /// Frame-Zustandsmaschine des Control-Streams (RFC 9114 §6.2.1, §7.2). Gibt <c>false</c> zurück,
-    /// wenn ein Verbindungsfehler gemeldet wurde.
+    /// Frame state machine of the control stream (RFC 9114 §6.2.1, §7.2). Returns <c>false</c>
+    /// when a connection error was reported.
     /// </summary>
     private bool HandleControlFrame(Http3Frame frame)
     {
-        // §6.2.1: das ERSTE Frame MUSS SETTINGS sein.
+        // §6.2.1: the FIRST frame MUST be SETTINGS.
         if (!_peerSettingsSeen && frame.Type != Http3FrameType.Settings)
         {
             _fatal(Http3Error.MissingSettings, "first control frame is not SETTINGS");
@@ -312,13 +312,13 @@ internal sealed class Http3Qpack
             case Http3FrameType.Settings:
                 return ParseSettings(frame.Payload.Span);
 
-            case Http3FrameType.Data:    // §7.2.1: DATA nur auf Request-/Push-Streams
-            case Http3FrameType.Headers: // §7.2.2: HEADERS nur auf Request-/Push-Streams
+            case Http3FrameType.Data:    // §7.2.1: DATA only on request/push streams
+            case Http3FrameType.Headers: // §7.2.2: HEADERS only on request/push streams
                 _fatal(Http3Error.FrameUnexpected, "DATA/HEADERS on control stream");
                 return false;
 
             case Http3FrameType.PushPromise:
-                // §7.2.5: auf dem Control-Stream immer illegal (und Clients senden PUSH_PROMISE nie).
+                // §7.2.5: always illegal on the control stream (and clients never send PUSH_PROMISE).
                 _fatal(Http3Error.FrameUnexpected, "PUSH_PROMISE on control stream");
                 return false;
 
@@ -326,10 +326,10 @@ internal sealed class Http3Qpack
                 _fatal(Http3Error.FrameUnexpected, "MAX_PUSH_ID sent to client"); // §7.2.7
                 return false;
             case Http3FrameType.MaxPushId:
-                return RequireSingleVarInt(frame, "MAX_PUSH_ID"); // wir pushen nicht ⇒ Wert egal
+                return RequireSingleVarInt(frame, "MAX_PUSH_ID"); // we do not push ⇒ the value is irrelevant
 
             case Http3FrameType.CancelPush when _weAreClient:
-                // §7.2.3: referenziert eine Push-ID jenseits des Erlaubten — wir haben NIE eine erlaubt.
+                // §7.2.3: references a push ID beyond what is permitted — we NEVER permitted one.
                 _fatal(Http3Error.IdError, "CANCEL_PUSH without MAX_PUSH_ID");
                 return false;
             case Http3FrameType.CancelPush:
@@ -340,12 +340,12 @@ internal sealed class Http3Qpack
 
             case Http3FrameType.PriorityUpdateRequest when _weAreClient:
             case Http3FrameType.PriorityUpdatePush when _weAreClient:
-                // RFC 9218 §7.2: Server MÜSSEN NIE PRIORITY_UPDATE senden.
+                // RFC 9218 §7.2: servers MUST NEVER send PRIORITY_UPDATE.
                 _fatal(Http3Error.FrameUnexpected, "PRIORITY_UPDATE sent to client");
                 return false;
             case Http3FrameType.PriorityUpdatePush:
-                // RFC 9218 §7.2: Push-ID größer als das Maximum bzw. nie versprochen — wir erlauben
-                // nie Push, also ist JEDE referenzierte Push-ID illegal.
+                // RFC 9218 §7.2: push ID greater than the maximum or never promised — we never
+                // permit push, so EVERY referenced push ID is illegal.
                 _fatal(Http3Error.IdError, "PRIORITY_UPDATE for unpromised push");
                 return false;
             case Http3FrameType.PriorityUpdateRequest:
@@ -357,20 +357,20 @@ internal sealed class Http3Qpack
                     _fatal(Http3Error.FrameUnexpected, "reserved HTTP/2 frame type"); // §7.2.8
                     return false;
                 }
-                return true; // unbekannte Typen (inkl. Grease 0x1f·N+0x21) ignorieren (§9)
+                return true; // ignore unknown types (incl. grease 0x1f·N+0x21) (§9)
         }
     }
 
     /// <summary>
-    /// Wird beim Server für jedes gültige PRIORITY_UPDATE (RFC 9218 §7.2) aufgerufen:
-    /// (Request-Stream-ID, Priority Field Value als ASCII-Text).
+    /// Called on the server for every valid PRIORITY_UPDATE (RFC 9218 §7.2):
+    /// (request stream ID, priority field value as ASCII text).
     /// </summary>
     public Action<ulong, string>? OnPriorityUpdate { get; set; }
 
     /// <summary>
-    /// PRIORITY_UPDATE für Request-Streams (RFC 9218 §7.2): Payload = Prioritized Element ID (VarInt)
-    /// + Priority Field Value (ASCII). Die ID MUSS eine Request-Stream-ID sein (client-initiiert
-    /// bidirektional, Bits 0b00), sonst H3_ID_ERROR.
+    /// PRIORITY_UPDATE for request streams (RFC 9218 §7.2): payload = prioritized element ID (varint)
+    /// + priority field value (ASCII). The ID MUST be a request stream ID (client-initiated
+    /// bidirectional, bits 0b00), otherwise H3_ID_ERROR.
     /// </summary>
     private bool HandlePriorityUpdate(Http3Frame frame)
     {
@@ -391,9 +391,9 @@ internal sealed class Http3Qpack
     }
 
     /// <summary>
-    /// GOAWAY (RFC 9114 §5.2/§7.2.6): Payload ist genau EIN VarInt. Beim Client MUSS die ID eine
-    /// client-initiierte bidirektionale Stream-ID sein (Bits 0b00), sonst H3_ID_ERROR. Mehrere GOAWAYs
-    /// sind erlaubt, aber die ID darf NIE anwachsen (§5.2) — sonst ebenfalls H3_ID_ERROR.
+    /// GOAWAY (RFC 9114 §5.2/§7.2.6): the payload is exactly ONE varint. At the client, the ID MUST
+    /// be a client-initiated bidirectional stream ID (bits 0b00), otherwise H3_ID_ERROR. Multiple
+    /// GOAWAYs are allowed, but the ID must NEVER increase (§5.2) — otherwise likewise H3_ID_ERROR.
     /// </summary>
     private bool HandleGoAway(Http3Frame frame)
     {
@@ -418,12 +418,12 @@ internal sealed class Http3Qpack
     }
 
     /// <summary>
-    /// Die zuletzt per GOAWAY empfangene Stream-/Push-ID (RFC 9114 §5.2), falls vorhanden.
+    /// The stream/push ID most recently received via GOAWAY (RFC 9114 §5.2), if any.
     /// </summary>
     public ulong? GoAwayId { get; private set; }
 
     /// <summary>
-    /// §7.1: die Nutzlast muss GENAU die definierten Felder enthalten — hier ein einzelner VarInt.
+    /// §7.1: the payload must contain EXACTLY the defined fields — here a single varint.
     /// </summary>
     private bool RequireSingleVarInt(Http3Frame frame, string name)
     {
@@ -437,8 +437,8 @@ internal sealed class Http3Qpack
     }
 
     /// <summary>
-    /// SETTINGS-Nutzlast (RFC 9114 §7.2.4): Paare aus VarInt-ID und -Wert. Reservierte HTTP/2-IDs
-    /// (0x00, 0x02–0x05) und doppelte IDs ⇒ H3_SETTINGS_ERROR; Layout-Fehler ⇒ H3_FRAME_ERROR.
+    /// SETTINGS payload (RFC 9114 §7.2.4): pairs of varint ID and value. Reserved HTTP/2 IDs
+    /// (0x00, 0x02–0x05) and duplicate IDs ⇒ H3_SETTINGS_ERROR; layout errors ⇒ H3_FRAME_ERROR.
     /// </summary>
     private bool ParseSettings(ReadOnlySpan<byte> payload)
     {

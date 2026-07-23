@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// Ein HTTP-Header-Feld (Name/Wert). Namen sind in HTTP/3 stets kleingeschrieben.
+/// An HTTP header field (name/value). Names are always lowercase in HTTP/3.
 /// </summary>
 public readonly record struct HeaderField(string Name, string Value)
 {

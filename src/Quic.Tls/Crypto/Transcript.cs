@@ -24,9 +24,9 @@ using System.Security.Cryptography;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// Laufender Transcript-Hash über die Handshake-Nachrichten (RFC 8446 §4.4.1). Nachrichten werden
-/// in der Reihenfolge ihres Auftretens angehängt; der Hash lässt sich jederzeit ohne Reset abfragen
-/// (nötig, weil verschiedene Secrets an unterschiedlichen Stellen des Transcripts abgeleitet werden).
+/// Running transcript hash over the handshake messages (RFC 8446 §4.4.1). Messages are appended
+/// in their order of occurrence; the hash can be queried at any time without a reset
+/// (necessary because different secrets are derived at different points of the transcript).
 /// </summary>
 public sealed class Transcript : IDisposable
 {
@@ -40,12 +40,12 @@ public sealed class Transcript : IDisposable
     }
 
     /// <summary>
-    /// Hängt eine vollständige Handshake-Nachricht (inkl. Typ + 3-Byte-Länge) an.
+    /// Appends a complete handshake message (incl. type + 3-byte length).
     /// </summary>
     public void Append(ReadOnlySpan<byte> handshakeMessage) => _hash.AppendData(handshakeMessage);
 
     /// <summary>
-    /// Der aktuelle Transcript-Hash, ohne den laufenden Zustand zurückzusetzen.
+    /// The current transcript hash, without resetting the running state.
     /// </summary>
     public byte[] CurrentHash()
     {

@@ -29,9 +29,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Tests der Transport-Error-Matrix (RFC 9000 §11/§20.1): Protokollverstöße der Gegenseite müssen mit dem
-/// passenden Fehlercode via CONNECTION_CLOSE beantwortet werden. Plus Frame-Parser-Fehler und die neuen
-/// PATH_CHALLENGE/PATH_RESPONSE-Frames.
+/// Tests of the transport-error matrix (RFC 9000 §11/§20.1): protocol violations by the peer must be
+/// answered with the matching error code via CONNECTION_CLOSE. Plus frame-parser errors and the new
+/// PATH_CHALLENGE/PATH_RESPONSE frames.
 /// </summary>
 [TestFixture]
 public class TransportErrorTests
@@ -45,7 +45,7 @@ public class TransportErrorTests
     [Test]
     public void FrameParser_TruncatedFrame_IsAnEncodingError()
     {
-        // CRYPTO-Frame-Typ (0x06) ohne Offset/Länge/Daten ⇒ unvollständig.
+        // CRYPTO frame type (0x06) without offset/length/data ⇒ incomplete.
         Assert.That(FrameParser.TryParseAll([0x06], out _), Is.EqualTo(FrameParseResult.EncodingError));
     }
 
@@ -69,8 +69,8 @@ public class TransportErrorTests
     public void StreamReceiveBuffer_InconsistentFinalSize_IsFinalSizeError()
     {
         var buffer = new StreamReceiveBuffer();
-        Assert.That(buffer.Receive(0, new byte[4], fin: true), Is.EqualTo(StreamReceiveResult.Ok));       // Final Size = 4
-        Assert.That(buffer.Receive(4, new byte[2], fin: false), Is.EqualTo(StreamReceiveResult.FinalSizeError)); // darüber hinaus
+        Assert.That(buffer.Receive(0, new byte[4], fin: true), Is.EqualTo(StreamReceiveResult.Ok));       // final size = 4
+        Assert.That(buffer.Receive(4, new byte[2], fin: false), Is.EqualTo(StreamReceiveResult.FinalSizeError)); // beyond it
     }
 
     // ---- Integration: STREAM_LIMIT_ERROR end-to-end --------------------------------------
@@ -81,7 +81,7 @@ public class TransportErrorTests
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
 
-        // Server erlaubt dem Client nur EINEN bidirektionalen Stream (Index 0).
+        // The server allows the client only ONE bidirectional stream (index 0).
         var serverParams = new TransportParameters { InitialMaxStreamsBidiValue = 1 };
         using var client = new QuicClientConnection("localhost", certificateValidation: validation);
         using var server = new QuicServerConnection(cert, serverParams);
@@ -90,15 +90,15 @@ public class TransportErrorTests
             Pump(client, server);
         Assert.That(client.HandshakeConfirmed, Is.True);
 
-        // Der Client eröffnet ZWEI Streams (0 und 1) und sendet auf beiden – Stream 1 verletzt das Limit.
+        // The client opens TWO streams (0 and 1) and sends on both — stream 1 violates the limit.
         client.OpenBidirectionalStream().Write([1]);
         QuicStream second = client.OpenBidirectionalStream();
         second.Write([2]);
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.That(server.IsClosing, Is.True, "Der Server muss die Verbindung wegen Stream-Limit-Verstoßes schließen.");
-        // Der Client empfängt das CONNECTION_CLOSE mit dem korrekten Fehlercode.
+        Assert.That(server.IsClosing, Is.True, "The server must close the connection due to the stream-limit violation.");
+        // The client receives the CONNECTION_CLOSE with the correct error code.
         Assert.That(client.PeerCloseFrame, Is.Not.Null);
         Assert.That(client.PeerCloseFrame!.ErrorCode, Is.EqualTo((ulong)TransportError.StreamLimitError));
     }

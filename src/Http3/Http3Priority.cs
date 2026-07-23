@@ -18,22 +18,22 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Priorität nach RFC 9218 (Extensible Prioritization Scheme for HTTP): <see cref="Urgency"/>
-/// <c>u</c> = 0 (höchste) … 7 (Hintergrund), Standard 3; <see cref="Incremental"/> <c>i</c> = die
-/// Antwort ist häppchenweise verwertbar (gleich dringliche inkrementelle Antworten teilen sich die
-/// Bandbreite), Standard false. Kodiert als Structured-Fields-Dictionary im <c>priority</c>-Header
-/// bzw. im PRIORITY_UPDATE-Frame.
+/// Priority per RFC 9218 (Extensible Prioritization Scheme for HTTP): <see cref="Urgency"/>
+/// <c>u</c> = 0 (highest) … 7 (background), default 3; <see cref="Incremental"/> <c>i</c> = the
+/// response is usable piecewise (equally urgent incremental responses share the bandwidth),
+/// default false. Encoded as a structured-fields dictionary in the <c>priority</c> header
+/// or in the PRIORITY_UPDATE frame.
 /// </summary>
 public readonly record struct Http3Priority(int Urgency, bool Incremental)
 {
     /// <summary>
-    /// Die Standard-Priorität (u=3, nicht inkrementell) — gilt, wenn keine Parameter signalisiert sind.
+    /// The default priority (u=3, non-incremental) — applies when no parameters are signalled.
     /// </summary>
     public static readonly Http3Priority Default = new(3, false);
 
     /// <summary>
-    /// Serialisiert als Structured-Fields-Dictionary (RFC 9218 §5), z. B. „u=0", „u=5, i" oder „" für
-    /// die Standardwerte (Auslassen eines Parameters = Standardwert).
+    /// Serialises as a structured-fields dictionary (RFC 9218 §5), e.g. "u=0", "u=5, i" or "" for
+    /// the default values (omitting a parameter = default value).
     /// </summary>
     public string ToHeaderValue()
     {
@@ -46,10 +46,9 @@ public readonly record struct Http3Priority(int Urgency, bool Incremental)
     }
 
     /// <summary>
-    /// Parst ein Structured-Fields-Dictionary (RFC 9218 §4, fehlertolerant): unbekannte Parameter,
-    /// Werte außerhalb des Bereichs oder unerwartete Typen MÜSSEN ignoriert werden; bei mehrfach
-    /// auftretenden Schlüsseln gewinnt der letzte (Structured Fields §3.2). Nicht Verwertbares fällt
-    /// auf die Standardwerte zurück.
+    /// Parses a structured-fields dictionary (RFC 9218 §4, fault-tolerant): unknown parameters,
+    /// out-of-range values or unexpected types MUST be ignored; with repeated keys the last one
+    /// wins (Structured Fields §3.2). Anything unusable falls back to the default values.
     /// </summary>
     public static Http3Priority Parse(string? value)
     {
@@ -61,7 +60,7 @@ public readonly record struct Http3Priority(int Urgency, bool Incremental)
         foreach (string memberRaw in value.Split(','))
         {
             string member = memberRaw.Trim();
-            int semicolon = member.IndexOf(';'); // Member-Parameter (";…") interessieren uns nicht
+            int semicolon = member.IndexOf(';'); // member parameters (";…") do not concern us
             if (semicolon >= 0)
                 member = member[..semicolon].TrimEnd();
 
@@ -76,17 +75,17 @@ public readonly record struct Http3Priority(int Urgency, bool Incremental)
 
             switch (key)
             {
-                case "u": // Integer 0..7 (RFC 9218 §4.1); außerhalb/typfremd ⇒ ignorieren
+                case "u": // integer 0..7 (RFC 9218 §4.1); out of range/wrong type ⇒ ignore
                     if (itemValue is not null && int.TryParse(itemValue, out int u) && u is >= 0 and <= 7)
                         urgency = u;
                     break;
-                case "i": // Boolean (RFC 9218 §4.2): bloßer Schlüssel oder „?1" = true, „?0" = false
+                case "i": // boolean (RFC 9218 §4.2): bare key or "?1" = true, "?0" = false
                     if (itemValue is null || itemValue == "?1")
                         incremental = true;
                     else if (itemValue == "?0")
                         incremental = false;
                     break;
-                // Unbekannte Parameter ⇒ ignorieren (RFC 9218 §4 MUST).
+                // Unknown parameters ⇒ ignore (RFC 9218 §4 MUST).
             }
         }
         return new Http3Priority(urgency, incremental);

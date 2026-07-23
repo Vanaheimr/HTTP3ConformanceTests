@@ -26,7 +26,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 [TestFixture]
 public class PacketNumberTests
 {
-    // RFC 9000 Anhang A.3: largest_pn = 0xa82f30ea, truncated = 0x9b32, length = 2
+    // RFC 9000 Appendix A.3: largest_pn = 0xa82f30ea, truncated = 0x9b32, length = 2
     //   => full packet number 0xa82f9b32.
     [Test]
     public void Decode_RfcAppendixA3_Example()
@@ -35,7 +35,7 @@ public class PacketNumberTests
         Assert.That(pn, Is.EqualTo(0xa82f9b32UL));
     }
 
-        [TestCase(0UL, -1L, 1)]        // erste Pakete, noch kein ACK -> voller Bereich, aber klein
+        [TestCase(0UL, -1L, 1)]        // first packets, no ACK yet -> full range, but small
     [TestCase(127UL, -1L, 1)]
     [TestCase(128UL, -1L, 2)]
     [TestCase(2UL, -1L, 1)]
@@ -57,7 +57,7 @@ public class PacketNumberTests
         for (int i = 0; i < length; i++)
             truncated = (truncated << 8) | buf[i];
 
-        // largestAcked = pn - 1: der Empfänger erwartet genau diese Nummer.
+        // largestAcked = pn - 1: the receiver expects exactly this number.
         ulong decoded = PacketNumber.Decode(truncated, length, (long)pn - 1);
         Assert.That(decoded, Is.EqualTo(pn));
     }

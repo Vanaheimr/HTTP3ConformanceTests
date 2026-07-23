@@ -30,9 +30,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Tests für die Connection-ID-Rotation (RFC 9000 §5.1, §19.15/§19.16): den <see cref="ConnectionIdManager"/>
-/// isoliert sowie einen vollständigen Umlauf, bei dem der Server eine CID ausgibt und der Client seine DCID
-/// darauf umstellt.
+/// Tests for connection ID rotation (RFC 9000 §5.1, §19.15/§19.16): the <see cref="ConnectionIdManager"/>
+/// in isolation as well as a full round trip in which the server issues a CID and the client switches
+/// its DCID to it.
 /// </summary>
 [TestFixture]
 public class ConnectionIdRotationTests
@@ -44,8 +44,8 @@ public class ConnectionIdRotationTests
     public void Issue_RespectsActiveConnectionIdLimit()
     {
         var m = new ConnectionIdManager(Cid(1, 1));
-        Assert.That(m.Issue(Cid(2, 2), Token(), activeLimit: 2), Is.Not.Null); // Sequenz 0 + eine weitere
-        Assert.That(m.Issue(Cid(3, 3), Token(), activeLimit: 2), Is.Null);    // Limit erreicht
+        Assert.That(m.Issue(Cid(2, 2), Token(), activeLimit: 2), Is.Not.Null); // sequence 0 + one more
+        Assert.That(m.Issue(Cid(3, 3), Token(), activeLimit: 2), Is.Null);    // limit reached
         Assert.That(m.LocalCount, Is.EqualTo(2));
     }
 
@@ -63,15 +63,15 @@ public class ConnectionIdRotationTests
     public void OnNewConnectionId_AddsRemote_AndRetirePriorTo_SwitchesDcid()
     {
         var m = new ConnectionIdManager(Cid(1, 1));
-        m.InitializeRemote(Cid(0x10, 0x10)); // entfernte Sequenz 0
+        m.InitializeRemote(Cid(0x10, 0x10)); // remote sequence 0
 
         var frame = new NewConnectionIdFrame(SequenceNumber: 1, RetirePriorTo: 1, Cid(0x11, 0x11).ToArray(), Token());
         List<RetireConnectionIdFrame> retires = m.OnNewConnectionId(frame, out bool changed, out ConnectionId newDcid);
 
         Expect.Single(retires);
-        Assert.That(retires[0].SequenceNumber, Is.EqualTo(0ul)); // seq 0 zurückgezogen
+        Assert.That(retires[0].SequenceNumber, Is.EqualTo(0ul)); // seq 0 retired
         Assert.That(changed, Is.True);
-        Assert.That(newDcid, Is.EqualTo(Cid(0x11, 0x11)));        // DCID auf seq 1 gewechselt
+        Assert.That(newDcid, Is.EqualTo(Cid(0x11, 0x11)));        // DCID switched to seq 1
         Assert.That(m.CurrentRemoteSequence, Is.EqualTo(1ul));
     }
 
@@ -87,7 +87,7 @@ public class ConnectionIdRotationTests
         Assert.That(rotation!.Value.NewDcid, Is.EqualTo(Cid(0x11, 0x11)));
         Assert.That(rotation.Value.Retire.SequenceNumber, Is.EqualTo(0ul));
         Assert.That(m.CurrentRemoteSequence, Is.EqualTo(1ul));
-        Assert.That(m.Rotate(), Is.Null); // keine weitere ID verfügbar
+        Assert.That(m.Rotate(), Is.Null); // no further ID available
     }
 
     // ---- Integration ----------------------------------------------------------------------
@@ -111,33 +111,33 @@ public class ConnectionIdRotationTests
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
         Assert.That(client.HandshakeConfirmed, Is.True);
-        Pump(client, server); // Restdaten abfließen lassen
+        Pump(client, server); // let the remaining data drain
 
-        // Server gibt eine zusätzliche Connection ID aus (NEW_CONNECTION_ID).
+        // The server issues an additional connection ID (NEW_CONNECTION_ID).
         ConnectionId? issued = server.IssueConnectionId();
         Assert.That(issued, Is.Not.Null);
-        Assert.That(server.LocalConnectionIdCount, Is.EqualTo(2)); // seq 0 + neue
+        Assert.That(server.LocalConnectionIdCount, Is.EqualTo(2)); // seq 0 + the new one
 
-        // Frame zum Client bringen; der Client lernt die entfernte CID.
+        // Bring the frame to the client; the client learns the remote CID.
         for (int round = 0; round < 3; round++)
             Pump(client, server);
         Assert.That(client.RemoteConnectionIdCount, Is.EqualTo(2));
 
-        // Client stellt seine DCID auf die neue ID um (und zieht die alte per RETIRE_CONNECTION_ID zurück).
+        // The client switches its DCID to the new ID (and retires the old one via RETIRE_CONNECTION_ID).
         Assert.That(client.RotateDestinationConnectionId(), Is.True);
         Assert.That(client.DestinationConnectionId, Is.EqualTo(issued!.Value));
 
-        // Ab jetzt tragen die Pakete des Clients die neue DCID – der Server muss sie weiterhin annehmen.
+        // From now on the client's packets carry the new DCID — the server must keep accepting them.
         QuicStream stream = client.OpenBidirectionalStream();
         stream.Write([9, 8, 7, 6]);
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        // Daten kamen unter der neuen Connection ID an.
+        // The data arrived under the new connection ID.
         Assert.That(server.Streams.ContainsKey(stream.Id.Value), Is.True);
         Assert.That(server.Streams[stream.Id.Value].Read(), Is.EqualTo([9, 8, 7, 6]));
 
-        // Der Server hat seine ursprüngliche (seq 0) Connection ID auf RETIRE_CONNECTION_ID zurückgezogen.
+        // The server retired its original (seq 0) connection ID upon RETIRE_CONNECTION_ID.
         Assert.That(server.LocalConnectionIdCount, Is.EqualTo(1));
     }
 }

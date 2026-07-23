@@ -26,30 +26,31 @@ using Org.BouncyCastle.Security;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// Ed448-Signaturen (RFC 8032, PureEdDSA über Edwards448/SHAKE256) über BouncyCastle. Wie
-/// <see cref="Ed25519Signature"/> eine BCL-Lücke, die BouncyCastle füllt. In TLS 1.3 ist das der
-/// SignatureScheme <c>ed448</c> (0x0808, RFC 8446 §4.2.3): der CertificateVerify-Inhalt wird <b>ohne</b>
-/// Vor-Hash und mit <b>leerem Kontext</b> signiert. Öffentlicher Schlüssel und Signatur sind 57 bzw. 114 Byte.
+/// Ed448 signatures (RFC 8032, PureEdDSA over Edwards448/SHAKE256) via BouncyCastle. Like
+/// <see cref="Ed25519Signature"/> a BCL gap that BouncyCastle fills. In TLS 1.3 this is the
+/// SignatureScheme <c>ed448</c> (0x0808, RFC 8446 §4.2.3): the CertificateVerify content is signed
+/// <b>without</b> a pre-hash and with an <b>empty context</b>. Public key and signature are 57 and
+/// 114 bytes respectively.
 /// </summary>
 public sealed class Ed448Signature
 {
-    // Ed448 signiert immer über einen Kontext; TLS 1.3 verlangt den leeren Kontext (RFC 8446 §4.2.3).
+    // Ed448 always signs over a context; TLS 1.3 requires the empty context (RFC 8446 §4.2.3).
     private static readonly byte[] EmptyContext = [];
 
     private readonly Ed448PrivateKeyParameters _privateKey;
 
     /// <summary>
-    /// Der öffentliche Schlüssel (57 Byte, RFC 8032 §5.2.5).
+    /// The public key (57 bytes, RFC 8032 §5.2.5).
     /// </summary>
     public byte[] PublicKey { get; }
 
     /// <summary>
-    /// Erzeugt ein frisches Schlüsselpaar.
+    /// Creates a fresh key pair.
     /// </summary>
     public Ed448Signature() : this(new Ed448PrivateKeyParameters(new SecureRandom())) { }
 
     /// <summary>
-    /// Übernimmt einen vorhandenen 57-Byte-Seed (privater Schlüssel) — v. a. für RFC-Testvektoren.
+    /// Takes an existing 57-byte seed (private key) — mainly for RFC test vectors.
     /// </summary>
     public Ed448Signature(ReadOnlySpan<byte> seed)
         : this(new Ed448PrivateKeyParameters(seed.ToArray(), 0)) { }
@@ -61,7 +62,7 @@ public sealed class Ed448Signature
     }
 
     /// <summary>
-    /// Signiert den Inhalt direkt (PureEdDSA, kein Vor-Hash, leerer Kontext). Ergebnis: 114 Byte.
+    /// Signs the content directly (PureEdDSA, no pre-hash, empty context). Result: 114 bytes.
     /// </summary>
     public byte[] Sign(ReadOnlySpan<byte> content)
     {
@@ -72,7 +73,7 @@ public sealed class Ed448Signature
     }
 
     /// <summary>
-    /// Verifiziert eine Ed448-Signatur gegen einen rohen 57-Byte-Public-Key.
+    /// Verifies an Ed448 signature against a raw 57-byte public key.
     /// </summary>
     public static bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> content, ReadOnlySpan<byte> signature)
     {
@@ -82,8 +83,8 @@ public sealed class Ed448Signature
     }
 
     /// <summary>
-    /// Verifiziert gegen den Ed448-Public-Key aus einem SubjectPublicKeyInfo (id-Ed448, 1.3.101.113) —
-    /// wie es aus einem X.509-Leaf-Zertifikat exportiert wird.
+    /// Verifies against the Ed448 public key from a SubjectPublicKeyInfo (id-Ed448, 1.3.101.113) —
+    /// as exported from an X.509 leaf certificate.
     /// </summary>
     public static bool VerifyWithSubjectPublicKeyInfo(byte[] spki, ReadOnlySpan<byte> content, ReadOnlySpan<byte> signature)
     {

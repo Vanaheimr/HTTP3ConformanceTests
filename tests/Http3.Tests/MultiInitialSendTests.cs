@@ -26,10 +26,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Prüft das Senden großer CRYPTO-Daten über mehrere Pakete (RFC 9000 §12.2): Ein ClientHello mit dem
-/// PQ-Hybrid X25519MLKEM768 (1216-Byte-Key-Share ⇒ ~1450-Byte-ClientHello) passt nicht in ein einzelnes
-/// 1200-Byte-Initial und muss offset-korrekt auf mehrere Initials verteilt werden. Die Server-Seite
-/// reassembliert sie und der Handshake läuft durch – über den echten Datagramm-Pfad (nicht in-process).
+/// Checks sending large CRYPTO data across multiple packets (RFC 9000 §12.2): a ClientHello with the
+/// PQ hybrid X25519MLKEM768 (1216-byte key share ⇒ ~1450-byte ClientHello) does not fit into a single
+/// 1200-byte Initial and must be spread offset-correctly across multiple Initials. The server side
+/// reassembles them and the handshake completes — over the real datagram path (not in-process).
 /// </summary>
 [TestFixture]
 public class MultiInitialSendTests
@@ -45,12 +45,12 @@ public class MultiInitialSendTests
 
         client.Start();
 
-        // Erste Flight des Clients: der große ClientHello muss auf ≥2 Initials aufgeteilt sein, und KEIN
-        // Datagramm darf die QUIC-sichere MTU überschreiten (sonst droht Fragmentierung/Drop im Netz).
+        // First flight of the client: the large ClientHello must be split across ≥2 Initials, and NO
+        // datagram may exceed the QUIC-safe MTU (otherwise fragmentation/drops loom in the network).
         IReadOnlyList<byte[]> firstFlight = client.GetDatagramsToSend();
-        Assert.That(firstFlight.Count >= 2, Is.True, $"Der PQ-ClientHello sollte über ≥2 Initials verteilt sein, waren {firstFlight.Count}.");
+        Assert.That(firstFlight.Count >= 2, Is.True, $"The PQ ClientHello should be spread across ≥2 Initials, was {firstFlight.Count}.");
         foreach (byte[] datagram in firstFlight)
-            Assert.That(datagram.Length <= 1252, Is.True, $"Initial-Datagramm mit {datagram.Length} Byte überschreitet die MTU (1252).");
+            Assert.That(datagram.Length <= 1252, Is.True, $"Initial datagram of {datagram.Length} bytes exceeds the MTU (1252).");
 
         foreach (byte[] dg in firstFlight)
             server.ProcessDatagram(dg);
@@ -63,7 +63,7 @@ public class MultiInitialSendTests
                 server.ProcessDatagram(dg);
         }
 
-        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss trotz aufgeteiltem ClientHello abschließen.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake must complete despite the split ClientHello.");
         Assert.That(client.NegotiatedGroup, Is.EqualTo(NamedGroup.X25519MlKem768));
     }
 }

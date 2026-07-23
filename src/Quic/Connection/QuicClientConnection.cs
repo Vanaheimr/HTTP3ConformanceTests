@@ -29,9 +29,9 @@ using System.Security.Cryptography;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 
 /// <summary>
-/// Eine Client-QUIC-Verbindung (RFC 9000/9001). Wählt DCID und SCID, treibt den
-/// <see cref="TlsClientHandshake"/> und bestätigt den Handshake beim Empfang von HANDSHAKE_DONE.
-/// Die gemeinsame Transport-Logik liegt in <see cref="QuicEndpoint"/>.
+/// A client QUIC connection (RFC 9000/9001). Chooses DCID and SCID, drives the
+/// <see cref="TlsClientHandshake"/> and confirms the handshake on receiving HANDSHAKE_DONE.
+/// The shared transport logic lives in <see cref="QuicEndpoint"/>.
 /// </summary>
 public sealed class QuicClientConnection : QuicEndpoint
 {
@@ -39,13 +39,13 @@ public sealed class QuicClientConnection : QuicEndpoint
     private readonly ConnectionId _originalDcid;
     private bool _dcidLearned;
     private bool _retryHandled;
-    private ConnectionId _retryScid; // SCID des Retry-Pakets (für die §7.3-Prüfung von retry_source_connection_id)
+    private ConnectionId _retryScid; // SCID of the Retry packet (for the §7.3 check of retry_source_connection_id)
     private List<uint> _offeredVersions = [];
     private readonly List<Frame> _applicationFrames = [];
 
     protected override bool IsServer => false;
 
-    // Handshake bestätigt, sobald der Client HANDSHAKE_DONE empfangen hat ⇒ Handshake-Keys verwerfbar (RFC 9001 §4.9.2).
+    // Handshake confirmed once the client has received HANDSHAKE_DONE ⇒ Handshake keys discardable (RFC 9001 §4.9.2).
     protected override bool HandshakeIsConfirmed => HandshakeConfirmed;
 
     public QuicClientConnection(
@@ -55,109 +55,110 @@ public sealed class QuicClientConnection : QuicEndpoint
         CertificateValidationOptions? certificateValidation = null,
         IReadOnlyList<CipherSuite>? cipherSuites = null,
         IReadOnlyList<NamedGroup>? keyExchangeGroups = null,
-        ResumptionTicket? resumptionTicket = null)
-        : base(transportParameters, version)
+        ResumptionTicket? resumptionTicket = null,
+        TimeProvider? timeProvider = null)
+        : base(transportParameters, version, timeProvider)
     {
         LocalParams.InitialSourceConnectionIdValue = Scid;
 
-        // Die zufällige DCID des ersten Client-Initials leitet die Initial-Schlüssel ab.
+        // The random DCID of the first client Initial derives the Initial keys.
         _originalDcid = new ConnectionId(RandomNumberGenerator.GetBytes(8));
         Dcid = _originalDcid;
 
-        // Angebotene Named Groups (null ⇒ TLS-Standard X25519+P-256); dieselbe Liste als Key Shares und
-        // in supported_groups, sodass etwa X448 direkt angeboten wird (kein HelloRetryRequest nötig).
-        // Ein resumptionTicket aktiviert Session Resumption (PSK) für diese Verbindung.
+        // Offered named groups (null ⇒ TLS default X25519+P-256); the same list as key shares and in
+        // supported_groups, so e.g. X448 is offered directly (no HelloRetryRequest needed).
+        // A resumptionTicket enables session resumption (PSK) for this connection.
         _tls = new TlsClientHandshake(serverName, LocalParams.Encode(), certificateValidation: certificateValidation,
             cipherSuites: cipherSuites, keyShareGroups: keyExchangeGroups, supportedGroups: keyExchangeGroups,
-            resumptionTicket: resumptionTicket);
+            resumptionTicket: resumptionTicket, timeProvider: TimeProvider);
         TlsHandshake = _tls;
         InstallInitialKeys(_originalDcid);
     }
 
     /// <summary>
-    /// <c>true</c>, sobald der Client seinen Finished erzeugt hat.
+    /// <c>true</c> once the client has produced its Finished.
     /// </summary>
     public bool HandshakeComplete => _tls.IsComplete;
 
     /// <summary>
-    /// <c>true</c>, sobald ein HANDSHAKE_DONE des Servers empfangen wurde.
+    /// <c>true</c> once a server HANDSHAKE_DONE has been received.
     /// </summary>
     public bool HandshakeConfirmed { get; private set; }
 
     /// <summary>
-    /// <c>true</c>, wenn der Server-Finished-MAC geprüft wurde und stimmte.
+    /// <c>true</c> when the server Finished MAC was verified and matched.
     /// </summary>
     public bool ServerFinishedValid => _tls.ServerFinishedValid;
 
     /// <summary>
-    /// <c>true</c>, sobald das Serverzertifikat inkl. CertificateVerify-Signatur geprüft wurde.
+    /// <c>true</c> once the server certificate incl. the CertificateVerify signature was validated.
     /// </summary>
     public bool ServerCertificateValid => _tls.ServerCertificateValid;
 
     /// <summary>
-    /// Das geprüfte Leaf-Zertifikat des Servers (Diagnose).
+    /// The server's validated leaf certificate (diagnostics).
     /// </summary>
     public System.Security.Cryptography.X509Certificates.X509Certificate2? ServerCertificate => _tls.ServerCertificate;
 
     public CipherSuite? NegotiatedCipherSuite => _tls.NegotiatedCipherSuite;
 
     /// <summary>
-    /// Die im Handshake ausgehandelte Named Group (X25519 oder P-256), nach evtl. HRR.
+    /// The named group negotiated in the handshake (X25519 or P-256), after a possible HRR.
     /// </summary>
     public NamedGroup? NegotiatedGroup => _tls.NegotiatedGroup;
 
     /// <summary>
-    /// Die vom Server ausgestellten Session-Tickets (RFC 8446 §4.6.1) für spätere Resumption.
+    /// The session tickets issued by the server (RFC 8446 §4.6.1) for later resumption.
     /// </summary>
     public IReadOnlyList<ResumptionTicket> NewSessionTickets => _tls.NewSessionTickets;
 
     /// <summary>
-    /// Diagnose: Anzahl empfangener NewSessionTicket-Nachrichten.
+    /// Diagnostics: number of received NewSessionTicket messages.
     /// </summary>
     public int NewSessionTicketMessagesSeen => _tls.NewSessionTicketMessagesSeen;
 
     /// <summary>
-    /// <c>true</c>, wenn diese Verbindung per Session Resumption (PSK) statt Zertifikat aufgebaut wurde.
+    /// <c>true</c> when this connection was established via session resumption (PSK) instead of a certificate.
     /// </summary>
     public bool ResumptionAccepted => _tls.ResumptionAccepted;
 
     /// <summary>
-    /// <c>true</c>, wenn 0-RTT (early_data) vom Server akzeptiert wurde.
+    /// <c>true</c> when 0-RTT (early_data) was accepted by the server.
     /// </summary>
     public bool EarlyDataAccepted => _tls.EarlyDataAccepted;
 
     /// <summary>
-    /// In 1-RTT empfangene Frames (z. B. HANDSHAKE_DONE, HTTP/3-Control-Stream) zur Inspektion.
+    /// Frames received in 1-RTT (e.g. HANDSHAKE_DONE, the HTTP/3 control stream) for inspection.
     /// </summary>
     public IReadOnlyList<Frame> ApplicationFrames => _applicationFrames;
 
     /// <summary>
-    /// <c>true</c>, wenn ein Version-Negotiation-Paket empfangen wurde (keine gemeinsame Version).
+    /// <c>true</c> when a version-negotiation packet was received (no common version).
     /// </summary>
     public bool VersionNegotiationReceived { get; private set; }
 
     /// <summary>
-    /// Die vom Server im Version-Negotiation-Paket angebotenen Versionen (leer, falls keins empfangen).
+    /// The versions offered by the server in the version-negotiation packet (empty when none received).
     /// </summary>
     public IReadOnlyList<uint> OfferedVersions => _offeredVersions;
 
     /// <summary>
-    /// <c>true</c>, sobald ein Retry verarbeitet und der ClientHello erneut gesendet wurde.
+    /// <c>true</c> once a Retry was processed and the ClientHello was resent.
     /// </summary>
     public bool RetryHandled => _retryHandled;
 
     /// <summary>
-    /// Startet den Handshake (baut den ClientHello).
+    /// Starts the handshake (builds the ClientHello).
     /// </summary>
     public void Start() => _tls.Start();
 
     /// <summary>
-    /// Öffnet einen client-initiierten bidirektionalen Stream (z. B. eine HTTP/3-Anfrage).
+    /// Opens a client-initiated bidirectional stream (e.g. an HTTP/3 request).
     /// </summary>
     public QuicStream OpenBidirectionalStream() => OpenLocalStream(bidirectional: true);
 
     /// <summary>
-    /// Öffnet einen client-initiierten unidirektionalen Stream (z. B. HTTP/3-Control/QPACK).
+    /// Opens a client-initiated unidirectional stream (e.g. HTTP/3 control/QPACK).
     /// </summary>
     public QuicStream OpenUnidirectionalStream() => OpenLocalStream(bidirectional: false);
 
@@ -165,61 +166,61 @@ public sealed class QuicClientConnection : QuicEndpoint
     {
         if (!_dcidLearned)
         {
-            Dcid = prefix.SourceConnectionId; // Server-SCID wird unsere DCID
+            Dcid = prefix.SourceConnectionId; // the server SCID becomes our DCID
             _dcidLearned = true;
         }
     }
 
     protected override void HandleVersionNegotiationPacket(ReadOnlySpan<byte> datagram)
     {
-        // RFC 9000 §6.2: VN verwerfen, wenn bereits ein anderes Paket verarbeitet oder schon ein VN empfangen wurde.
+        // RFC 9000 §6.2: discard VN when another packet was already processed or a VN was already received.
         if (AnyPacketProcessed || VersionNegotiationReceived)
             return;
         if (!VersionNegotiationPacket.TryParse(datagram, out _, out _, out List<uint> versions))
             return;
-        // VN verwerfen, wenn sie die vom Client gewählte Version listet (spuriöses/gefälschtes VN).
+        // Discard VN when it lists the version chosen by the client (spurious/forged VN).
         if (versions.Contains(Version))
             return;
 
         _offeredVersions = versions;
-        VersionNegotiationReceived = true; // Nur-v1-Client: keine gemeinsame Version → Verbindung aufgeben.
+        VersionNegotiationReceived = true; // v1-only client: no common version → give up the connection.
     }
 
     protected override void HandleRetryPacket(ReadOnlySpan<byte> datagram)
     {
-        // Nur genau einen Retry verarbeiten und nur, bevor ein echtes Paket ankam (RFC 9000 §17.2.5.2).
+        // Process exactly one Retry and only before a real packet arrived (RFC 9000 §17.2.5.2).
         if (_retryHandled || AnyPacketProcessed)
             return;
         if (!RetryPacket.TryParse(datagram, out uint version, out _, out ConnectionId retrySource, out byte[] token, out _))
             return;
         if (version != Version)
             return;
-        // Retry mit SCID == eigener DCID verwerfen (Schleifenschutz, RFC 9000 §17.2.5.2).
+        // Discard a Retry with SCID == our own DCID (loop protection, RFC 9000 §17.2.5.2).
         if (retrySource.Span.SequenceEqual(_originalDcid.Span))
             return;
-        // Integrity Tag über die ursprüngliche DCID prüfen (RFC 9001 §5.8).
+        // Verify the integrity tag over the original DCID (RFC 9001 §5.8).
         if (!RetryPacket.Verify(datagram, _originalDcid))
             return;
 
         _retryHandled = true;
-        _retryScid = retrySource;            // für die §7.3-Prüfung von retry_source_connection_id
-        _dcidLearned = true;                 // DCID nur einmal ändern (RFC 9000 §7.2): jetzt = Retry-SCID
-        ApplyRetry(retrySource, token);      // neue Initial-Schlüssel + Token + CRYPTO-Offset 0
+        _retryScid = retrySource;            // for the §7.3 check of retry_source_connection_id
+        _dcidLearned = true;                 // change the DCID only once (RFC 9000 §7.2): now = Retry SCID
+        ApplyRetry(retrySource, token);      // new Initial keys + token + CRYPTO offset 0
         _tls.ResendClientHello();
     }
 
     /// <summary>
-    /// Client-Seite der Parameter-Authentifizierung (RFC 9000 §7.3): zusätzlich zur Basisprüfung MUSS
-    /// der Server original_destination_connection_id senden (= die DCID unseres allerersten Initials)
-    /// und retry_source_connection_id GENAU DANN, wenn ein Retry stattfand (mit der SCID des
-    /// Retry-Pakets) — das verhindert, dass ein Angreifer Retry-Pakete fälscht oder unterschlägt.
+    /// Client side of the parameter authentication (RFC 9000 §7.3): in addition to the base check,
+    /// the server MUST send original_destination_connection_id (= the DCID of our very first Initial)
+    /// and retry_source_connection_id EXACTLY when a Retry took place (with the SCID of the Retry
+    /// packet) — this prevents an attacker from forging or suppressing Retry packets.
     /// </summary>
     internal override string? ValidatePeerTransportParameters(TransportParameters p)
     {
         if (base.ValidatePeerTransportParameters(p) is { } baseProblem)
             return baseProblem;
         if (p.OriginalDestinationConnectionIdValue is not { } odcid)
-            return "missing original_destination_connection_id"; // §7.3: Abwesenheit vom Server ist fatal
+            return "missing original_destination_connection_id"; // §7.3: absence from the server is fatal
         if (!odcid.Span.SequenceEqual(_originalDcid.Span))
             return "original_destination_connection_id mismatch";
         if (_retryHandled)
@@ -236,8 +237,8 @@ public sealed class QuicClientConnection : QuicEndpoint
 
     protected override void OnHandshakeDoneReceived() => HandshakeConfirmed = true;
 
-    // RFC 9001 §4.1.2: Der Client darf den Handshake auch dann bestätigen, wenn eines seiner 1-RTT-Pakete
-    // quittiert wurde – so werden die Handshake-Keys ggf. schon vor einem (verlorenen) HANDSHAKE_DONE verworfen.
+    // RFC 9001 §4.1.2: the client may also confirm the handshake when one of its 1-RTT packets is
+    // acknowledged – so the Handshake keys may be discarded even before a (lost) HANDSHAKE_DONE.
     protected override void OnOneRttPacketAcknowledged() => HandshakeConfirmed = true;
 
     protected override void OnApplicationFrameHandled(Frame frame) => _applicationFrames.Add(frame);

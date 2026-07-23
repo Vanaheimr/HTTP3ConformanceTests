@@ -24,19 +24,19 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 /// <summary>
-/// Gemeinsame Schnittstelle der TLS-1.3-Handshake-Engine für beide Rollen. Die QUIC-Schicht liefert
-/// empfangene CRYPTO-Bytes je Encryption-Level hinein und holt zu sendende heraus; abgeleitete
-/// Schlüssel erscheinen als <see cref="HandshakeSecrets"/> / <see cref="ApplicationSecrets"/>.
+/// Shared interface of the TLS 1.3 handshake engine for both roles. The QUIC layer feeds in
+/// received CRYPTO bytes per encryption level and pulls out those to send; derived keys appear as
+/// <see cref="HandshakeSecrets"/> / <see cref="ApplicationSecrets"/>.
 /// </summary>
 public interface ITlsHandshake : IDisposable
 {
     /// <summary>
-    /// Übergibt (geordnete) empfangene CRYPTO-Bytes eines Levels an die Handshake-Maschine.
+    /// Hands (ordered) received CRYPTO bytes of a level to the handshake machine.
     /// </summary>
     void ProvideCrypto(EncryptionLevel level, ReadOnlySpan<byte> data);
 
     /// <summary>
-    /// Holt die nächste zu sendende CRYPTO-Nachricht (mit Ziel-Level), falls vorhanden.
+    /// Fetches the next CRYPTO message to send (with its target level), if any.
     /// </summary>
     bool TryGetOutgoingCrypto(out EncryptionLevel level, out byte[] data);
 
@@ -45,36 +45,36 @@ public interface ITlsHandshake : IDisposable
     ApplicationTrafficSecrets? ApplicationSecrets { get; }
 
     /// <summary>
-    /// <c>true</c>, sobald der Handshake aus Sicht dieser Seite abgeschlossen ist.
+    /// <c>true</c> once the handshake is complete from this side's point of view.
     /// </summary>
     bool IsComplete { get; }
 
     /// <summary>
-    /// Die rohen quic_transport_parameters der Gegenseite (opak für TLS).
+    /// The peer's raw quic_transport_parameters (opaque to TLS).
     /// </summary>
     byte[]? PeerQuicTransportParameters { get; }
 
     /// <summary>
-    /// Das <c>client_early_traffic_secret</c> für 0-RTT (RFC 8446 §7.1), sobald verfügbar: auf dem Client beim
-    /// Anbieten von early_data, auf dem Server beim Akzeptieren. <c>null</c>, wenn kein 0-RTT im Spiel ist.
+    /// The <c>client_early_traffic_secret</c> for 0-RTT (RFC 8446 §7.1), once available: on the client
+    /// when offering early_data, on the server when accepting. <c>null</c> when no 0-RTT is involved.
     /// </summary>
     byte[]? EarlyTrafficSecret { get; }
 
     /// <summary>
-    /// Die Cipher-Suite der 0-RTT-Schlüssel (die des Tickets); nötig, weil sie vor dem ServerHello feststeht.
+    /// The cipher suite of the 0-RTT keys (that of the ticket); needed because it is fixed before the ServerHello.
     /// </summary>
     CipherSuite? EarlyDataCipherSuite { get; }
 
     /// <summary>
-    /// <c>true</c>, wenn 0-RTT (early_data) tatsächlich akzeptiert wurde (Client: laut EncryptedExtensions).
+    /// <c>true</c> when 0-RTT (early_data) was actually accepted (client: per EncryptedExtensions).
     /// </summary>
     bool EarlyDataAccepted { get; }
 
     /// <summary>
-    /// TLS-Keying-Material-Exporter (RFC 8446 §7.5): liefert beiden Seiten für gleiches Label und
-    /// gleichen Kontext identisches Schlüsselmaterial (z. B. für Channel Binding oder den
-    /// WebTransport-Exporter, draft-webtrans-http3 §4.7). Erst nach der Ableitung der Application
-    /// Secrets verfügbar — vorher <see cref="InvalidOperationException"/>.
+    /// TLS keying-material exporter (RFC 8446 §7.5): provides both sides with identical keying
+    /// material for the same label and context (e.g. for channel binding or the WebTransport
+    /// exporter, draft-webtrans-http3 §4.7). Only available after the application secrets have been
+    /// derived — before that, <see cref="InvalidOperationException"/>.
     /// </summary>
     byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length);
 }

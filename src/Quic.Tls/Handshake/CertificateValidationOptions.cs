@@ -24,39 +24,38 @@ using System.Security.Cryptography.X509Certificates;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 /// <summary>
-/// Steuert, wie der Client das Serverzertifikat prüft. Die <b>CertificateVerify-Signatur</b> (die
-/// kryptografische Bindung des Zertifikats an den Handshake, RFC 8446 §4.4.3) wird <b>immer</b>
-/// geprüft — sie ist die eigentliche MITM-Abwehr. Diese Optionen betreffen nur die davon getrennte
-/// <b>Vertrauens-Policy</b>: Kettenaufbau bis zu einer vertrauenswürdigen Wurzel, Hostname und
-/// Gültigkeitszeitraum.
+/// Controls how the client validates the server certificate. The <b>CertificateVerify signature</b>
+/// (the cryptographic binding of the certificate to the handshake, RFC 8446 §4.4.3) is <b>always</b>
+/// verified — it is the actual MITM defence. These options only concern the separate
+/// <b>trust policy</b>: chain building up to a trusted root, hostname and validity period.
 /// </summary>
 public sealed record CertificateValidationOptions
 {
     /// <summary>
-    /// Baut die Zertifikatskette bis zu einer vertrauenswürdigen Wurzel und prüft sie (Standard: an).
+    /// Builds the certificate chain up to a trusted root and validates it (default: on).
     /// </summary>
     public bool VerifyCertificateChain { get; init; } = true;
 
     /// <summary>
-    /// Prüft, ob der Hostname zum Zertifikat passt (SAN/CN, RFC 6125). Standard: an.
+    /// Checks whether the hostname matches the certificate (SAN/CN, RFC 6125). Default: on.
     /// </summary>
     public bool VerifyHostname { get; init; } = true;
 
     /// <summary>
-    /// Zusätzliche Trust-Anker. Sind welche gesetzt, wird ausschließlich gegen diese geprüft
-    /// (Custom-Root-Trust) statt gegen den System-Trust-Store — nützlich, um ein selbstsigniertes
-    /// Testzertifikat gezielt zu vertrauen.
+    /// Additional trust anchors. When set, validation runs exclusively against these
+    /// (custom root trust) instead of the system trust store — useful for deliberately
+    /// trusting a self-signed test certificate.
     /// </summary>
     public X509Certificate2Collection? CustomTrustRoots { get; init; }
 
     /// <summary>
-    /// Standard: volle Prüfung gegen die System-Roots inkl. Hostname.
+    /// Default: full validation against the system roots incl. hostname.
     /// </summary>
     public static CertificateValidationOptions Default { get; } = new();
 
     /// <summary>
-    /// Wie <c>curl -k</c>: Kette und Hostname werden NICHT geprüft, die CertificateVerify-Signatur
-    /// aber weiterhin. Für selbstsignierte Testserver (z. B. localhost) gedacht.
+    /// Like <c>curl -k</c>: chain and hostname are NOT checked, but the CertificateVerify signature
+    /// still is. Meant for self-signed test servers (e.g. localhost).
     /// </summary>
     public static CertificateValidationOptions Insecure { get; } = new()
     {

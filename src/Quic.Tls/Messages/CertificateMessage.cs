@@ -24,10 +24,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 /// <summary>
-/// Zerlegt den Rumpf einer Certificate-Nachricht (RFC 8446 §4.4.2) in die einzelnen DER-Zertifikate.
-/// Aufbau: <c>certificate_request_context&lt;0..2^8-1&gt; ‖ CertificateEntry certificate_list&lt;0..2^24-1&gt;</c>,
-/// wobei jeder Eintrag <c>cert_data&lt;1..2^24-1&gt; ‖ extensions&lt;0..2^16-1&gt;</c> ist. Das erste
-/// Zertifikat ist das Endentitäts-(Leaf-)Zertifikat.
+/// Splits the body of a Certificate message (RFC 8446 §4.4.2) into the individual DER certificates.
+/// Layout: <c>certificate_request_context&lt;0..2^8-1&gt; ‖ CertificateEntry certificate_list&lt;0..2^24-1&gt;</c>,
+/// where each entry is <c>cert_data&lt;1..2^24-1&gt; ‖ extensions&lt;0..2^16-1&gt;</c>. The first
+/// certificate is the end-entity (leaf) certificate.
 /// </summary>
 public static class CertificateMessage
 {
@@ -57,7 +57,7 @@ public static class CertificateMessage
     }
 
     /// <summary>
-    /// Liest eine 3-Byte-Länge (Big-Endian), wie in TLS für Zertifikatsvektoren üblich.
+    /// Reads a 3-byte length (big-endian), as is customary in TLS for certificate vectors.
     /// </summary>
     private static bool TryReadUInt24(ref BufferReader r, out int value)
     {

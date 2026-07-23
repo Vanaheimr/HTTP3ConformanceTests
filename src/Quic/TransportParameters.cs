@@ -26,14 +26,14 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic;
 
 /// <summary>
-/// QUIC-Transport-Parameter (RFC 9000, §18). Sie werden im TLS-Handshake als opake Extension
-/// <c>quic_transport_parameters</c> (Typ 0x39) ausgetauscht und legen Limits wie Flow-Control-Fenster,
-/// Idle-Timeout und Stream-Zahlen fest. Dieses Modell deckt die für einen Client-Handshake nötigen
-/// Parameter ab; unbekannte Parameter der Gegenseite werden beim Parsen ignoriert (Greasing-tauglich).
+/// QUIC transport parameters (RFC 9000, §18). They are exchanged in the TLS handshake as the opaque
+/// extension <c>quic_transport_parameters</c> (type 0x39) and establish limits such as flow-control
+/// windows, idle timeout and stream counts. This model covers the parameters needed for a client
+/// handshake; unknown peer parameters are ignored during parsing (grease-tolerant).
 /// </summary>
 public sealed class TransportParameters
 {
-    // Parameter-IDs (RFC 9000 §18.2).
+    // Parameter IDs (RFC 9000 §18.2).
     private const ulong OriginalDestinationConnectionId = 0x00;
     private const ulong MaxIdleTimeout = 0x01;
     private const ulong StatelessResetToken = 0x02;
@@ -49,15 +49,15 @@ public sealed class TransportParameters
     private const ulong MaxDatagramFrameSize = 0x20; // RFC 9221 §3
     private const ulong RetrySourceConnectionId = 0x10;
     private const ulong PreferredAddress = 0x0d;
-    private const ulong ResetStreamAt = 0x1d; // draft-ietf-quic-reliable-stream-reset §3 (provisorisch)
+    private const ulong ResetStreamAt = 0x1d; // draft-ietf-quic-reliable-stream-reset §3 (provisional)
 
     /// <summary>
-    /// Idle-Timeout in Millisekunden (0 = deaktiviert).
+    /// Idle timeout in milliseconds (0 = disabled).
     /// </summary>
     public ulong MaxIdleTimeoutMs { get; set; } = 30_000;
 
     public ulong MaxUdpPayloadSizeValue { get; set; } = 65527;
-    public ulong InitialMaxDataValue { get; set; } = 1_048_576;      // 1 MiB Verbindungsfenster
+    public ulong InitialMaxDataValue { get; set; } = 1_048_576;      // 1 MiB connection window
     public ulong InitialMaxStreamDataBidiLocalValue { get; set; } = 262_144;
     public ulong InitialMaxStreamDataBidiRemoteValue { get; set; } = 262_144;
     public ulong InitialMaxStreamDataUniValue { get; set; } = 262_144;
@@ -66,63 +66,63 @@ public sealed class TransportParameters
     public ulong ActiveConnectionIdLimitValue { get; set; } = 2;
 
     /// <summary>
-    /// Die Source Connection ID aus dem eigenen Initial-Paket. Der Client MUSS diese hier spiegeln,
-    /// damit der Server die Handshake-Authentizität prüfen kann (RFC 9001 §8.2).
+    /// The source connection ID from our own Initial packet. The client MUST mirror it here so the
+    /// server can check the handshake's authenticity (RFC 9001 §8.2).
     /// </summary>
     public ConnectionId InitialSourceConnectionIdValue { get; set; } = ConnectionId.Empty;
 
     /// <summary>
-    /// Nur vom Server gesetzt: die DCID aus dem allerersten Client-Initial.
+    /// Set only by the server: the DCID from the very first client Initial.
     /// </summary>
     public ConnectionId? OriginalDestinationConnectionIdValue { get; set; }
 
     /// <summary>
-    /// Nur vom Server gesetzt und nur nach einem Retry: die SCID aus dem Retry-Paket (RFC 9000 §7.3).
+    /// Set only by the server and only after a Retry: the SCID from the Retry packet (RFC 9000 §7.3).
     /// </summary>
     public ConnectionId? RetrySourceConnectionIdValue { get; set; }
 
     /// <summary>
-    /// Stateless-Reset-Token (16 Bytes) für die Handshake-Connection-ID (RFC 9000 §10.3, §18.2). Der Empfänger
-    /// erkennt daran ein Stateless-Reset-Paket. <c>null</c> = nicht gesetzt.
+    /// Stateless-reset token (16 bytes) for the handshake connection ID (RFC 9000 §10.3, §18.2). The
+    /// receiver uses it to recognise a stateless-reset packet. <c>null</c> = not set.
     /// </summary>
     public byte[]? StatelessResetTokenValue { get; set; }
 
     /// <summary>
-    /// max_datagram_frame_size (RFC 9221 §3): maximale Größe eines DATAGRAM-Frames (inkl. Typ/Länge),
-    /// die wir zu EMPFANGEN bereit sind. 0 (Standard) = DATAGRAM-Frames werden nicht unterstützt;
-    /// empfohlen ist 65535 („alles, was in ein QUIC-Paket passt").
+    /// max_datagram_frame_size (RFC 9221 §3): maximum size of a DATAGRAM frame (incl. type/length)
+    /// we are willing to RECEIVE. 0 (default) = DATAGRAM frames are not supported;
+    /// 65535 ("anything that fits into a QUIC packet") is recommended.
     /// </summary>
     public ulong MaxDatagramFrameSizeValue { get; set; }
 
     /// <summary>
-    /// reset_stream_at (draft-ietf-quic-reliable-stream-reset §3): kündigt an, dass wir RESET_STREAM_AT-
-    /// Frames zu EMPFANGEN bereit sind (leerer Wert). Standard <c>true</c> — die Extension ist harmlos und
-    /// ermöglicht Peers die zuverlässige Teilzustellung (z. B. den WebTransport-Stream-Präfix).
+    /// reset_stream_at (draft-ietf-quic-reliable-stream-reset §3): announces that we are willing to
+    /// RECEIVE RESET_STREAM_AT frames (empty value). Default <c>true</c> — the extension is harmless
+    /// and enables peers to do reliable partial delivery (e.g. the WebTransport stream prefix).
     /// </summary>
     public bool ResetStreamAtSupported { get; set; } = true;
 
     /// <summary>
-    /// Der Peer hat reset_stream_at angekündigt — wir DÜRFEN ihm RESET_STREAM_AT-Frames senden. Wird beim
-    /// Parsen der Peer-Parameter gesetzt.
+    /// The peer announced reset_stream_at — we MAY send it RESET_STREAM_AT frames. Set while
+    /// parsing the peer parameters.
     /// </summary>
     public bool PeerSupportsResetStreamAt { get; private set; }
 
     /// <summary>
-    /// Beim Parsen gesetzt: der Peer hat initial_source_connection_id mitgesendet. Die ABWESENHEIT ist
-    /// ein Verbindungsfehler (RFC 9000 §7.3) — und da auch die leere CID ein gültiger Wert ist, braucht
-    /// es dieses Flag zusätzlich zum Wert.
+    /// Set during parsing: the peer sent initial_source_connection_id. Its ABSENCE is a connection
+    /// error (RFC 9000 §7.3) — and since the empty CID is also a valid value, this flag is needed
+    /// in addition to the value.
     /// </summary>
     public bool SawInitialSourceConnectionId { get; private set; }
 
     /// <summary>
-    /// Beim Parsen gesetzt: der Peer hat preferred_address (0x0d) mitgesendet. Wir werten den Inhalt
-    /// nicht aus, aber ein SERVER, der diesen server-only-Parameter von einem Client empfängt, MUSS
-    /// mit TRANSPORT_PARAMETER_ERROR schließen (RFC 9000 §18.2).
+    /// Set during parsing: the peer sent preferred_address (0x0d). We do not evaluate the content,
+    /// but a SERVER receiving this server-only parameter from a client MUST close with
+    /// TRANSPORT_PARAMETER_ERROR (RFC 9000 §18.2).
     /// </summary>
     public bool SawPreferredAddress { get; private set; }
 
     /// <summary>
-    /// Serialisiert die Parameter zu den opaken Extension-Bytes.
+    /// Serialises the parameters to the opaque extension bytes.
     /// </summary>
     public byte[] Encode()
     {
@@ -143,7 +143,7 @@ public sealed class TransportParameters
             if (MaxDatagramFrameSizeValue > 0)
                 WriteInteger(ref writer, MaxDatagramFrameSize, MaxDatagramFrameSizeValue); // RFC 9221 §3
             if (ResetStreamAtSupported)
-                WriteBytes(ref writer, ResetStreamAt, []); // draft §3: leerer Wert signalisiert Empfangsbereitschaft
+                WriteBytes(ref writer, ResetStreamAt, []); // draft §3: an empty value signals receive readiness
             WriteBytes(ref writer, InitialSourceConnectionId, InitialSourceConnectionIdValue.Span);
             if (OriginalDestinationConnectionIdValue is { } odcid)
                 WriteBytes(ref writer, OriginalDestinationConnectionId, odcid.Span);
@@ -159,18 +159,18 @@ public sealed class TransportParameters
     }
 
     /// <summary>
-    /// Parst die opaken Extension-Bytes. Unbekannte Parameter-IDs werden übersprungen (Greasing-tauglich).
-    /// <c>false</c> bei syntaktisch oder semantisch ungültigen Parametern — der Aufrufer MUSS das als
-    /// Verbindungsfehler TRANSPORT_PARAMETER_ERROR behandeln (RFC 9000 §7.4): doppelte IDs (§7.4 MUST
-    /// NOT), max_udp_payload_size &lt; 1200, active_connection_id_limit &lt; 2, Stream-Limits &gt; 2^60
-    /// (§4.6), stateless_reset_token ≠ 16 Bytes, Connection IDs &gt; 20 Bytes (§17.2).
+    /// Parses the opaque extension bytes. Unknown parameter IDs are skipped (grease-tolerant).
+    /// <c>false</c> for syntactically or semantically invalid parameters — the caller MUST treat
+    /// that as the connection error TRANSPORT_PARAMETER_ERROR (RFC 9000 §7.4): duplicate IDs
+    /// (§7.4 MUST NOT), max_udp_payload_size &lt; 1200, active_connection_id_limit &lt; 2, stream
+    /// limits &gt; 2^60 (§4.6), stateless_reset_token ≠ 16 bytes, connection IDs &gt; 20 bytes (§17.2).
     /// </summary>
     public static bool TryDecode(ReadOnlySpan<byte> data, out TransportParameters? parameters)
     {
         parameters = null;
         var result = new TransportParameters
         {
-            // Standardwerte, die nur gesetzt werden, wenn der Peer sie sendet; hier neutral vorbelegen.
+            // Defaults that are only set when the peer sends them; preset neutrally here.
             MaxIdleTimeoutMs = 0,
         };
         var reader = new BufferReader(data);
@@ -184,13 +184,13 @@ public sealed class TransportParameters
                 !reader.TryReadBytes((int)length, out ReadOnlySpan<byte> value))
                 return false;
 
-            // §7.4: „An endpoint MUST NOT send a parameter more than once" — gilt für ALLE IDs,
-            // auch unbekannte; Duplikate SOLLEN als TRANSPORT_PARAMETER_ERROR behandelt werden.
+            // §7.4: "An endpoint MUST NOT send a parameter more than once" — applies to ALL IDs,
+            // including unknown ones; duplicates SHOULD be treated as TRANSPORT_PARAMETER_ERROR.
             if (!seen.Add(id))
                 return false;
 
-            // Connection-ID-Parameter dürfen höchstens 20 Bytes tragen (RFC 9000 §17.2) — Guard VOR dem
-            // ConnectionId-Konstruktor, damit böse Eingaben nie eine Exception auslösen.
+            // Connection-ID parameters may carry at most 20 bytes (RFC 9000 §17.2) — guard BEFORE
+            // the ConnectionId constructor so hostile input never triggers an exception.
             if (id is InitialSourceConnectionId or OriginalDestinationConnectionId or RetrySourceConnectionId &&
                 value.Length > ConnectionId.MaxLength)
                 return false;
@@ -200,13 +200,13 @@ public sealed class TransportParameters
                 case MaxIdleTimeout: result.MaxIdleTimeoutMs = ReadVarIntValue(value); break;
                 case StatelessResetToken:
                     if (value.Length != 16)
-                        return false; // §18.2: genau 16 Bytes
+                        return false; // §18.2: exactly 16 bytes
                     result.StatelessResetTokenValue = value.ToArray();
                     break;
                 case MaxUdpPayloadSize:
                     result.MaxUdpPayloadSizeValue = ReadVarIntValue(value);
                     if (result.MaxUdpPayloadSizeValue < 1200)
-                        return false; // §18.2: Werte unter 1200 sind ungültig
+                        return false; // §18.2: values below 1200 are invalid
                     break;
                 case InitialMaxData: result.InitialMaxDataValue = ReadVarIntValue(value); break;
                 case InitialMaxStreamDataBidiLocal: result.InitialMaxStreamDataBidiLocalValue = ReadVarIntValue(value); break;
@@ -215,7 +215,7 @@ public sealed class TransportParameters
                 case InitialMaxStreamsBidi:
                     result.InitialMaxStreamsBidiValue = ReadVarIntValue(value);
                     if (result.InitialMaxStreamsBidiValue > 1UL << 60)
-                        return false; // §4.6: Stream-Limits über 2^60 sind unzulässig
+                        return false; // §4.6: stream limits above 2^60 are not permitted
                     break;
                 case InitialMaxStreamsUni:
                     result.InitialMaxStreamsUniValue = ReadVarIntValue(value);
@@ -225,12 +225,12 @@ public sealed class TransportParameters
                 case ActiveConnectionIdLimit:
                     result.ActiveConnectionIdLimitValue = ReadVarIntValue(value);
                     if (result.ActiveConnectionIdLimitValue < 2)
-                        return false; // §18.2: MUSS mindestens 2 sein
+                        return false; // §18.2: MUST be at least 2
                     break;
                 case MaxDatagramFrameSize: result.MaxDatagramFrameSizeValue = ReadVarIntValue(value); break;
                 case ResetStreamAt:
                     if (value.Length != 0)
-                        return false; // draft §3: nicht-leerer Wert ⇒ TRANSPORT_PARAMETER_ERROR
+                        return false; // draft §3: non-empty value ⇒ TRANSPORT_PARAMETER_ERROR
                     result.PeerSupportsResetStreamAt = true;
                     break;
                 case InitialSourceConnectionId:
@@ -239,8 +239,8 @@ public sealed class TransportParameters
                     break;
                 case OriginalDestinationConnectionId: result.OriginalDestinationConnectionIdValue = new ConnectionId(value); break;
                 case RetrySourceConnectionId: result.RetrySourceConnectionIdValue = new ConnectionId(value); break;
-                case PreferredAddress: result.SawPreferredAddress = true; break; // Inhalt ignoriert; Rollen-Check im Endpoint
-                default: break; // unbekannt/Grease -> ignorieren
+                case PreferredAddress: result.SawPreferredAddress = true; break; // content ignored; role check in the endpoint
+                default: break; // unknown/grease -> ignore
             }
         }
 

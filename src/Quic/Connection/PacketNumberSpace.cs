@@ -24,54 +24,54 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 
 /// <summary>
-/// Ein Packet-Number-Space (RFC 9000 §12.3): getrennt für Initial, Handshake und Application. Vergibt
-/// aufsteigende Paketnummern beim Senden und merkt sich empfangene Nummern für die ACK-Erzeugung.
+/// A packet-number space (RFC 9000 §12.3): separate for Initial, Handshake and Application. Assigns
+/// ascending packet numbers when sending and remembers received numbers for ACK generation.
 /// </summary>
 public sealed class PacketNumberSpace
 {
     private ulong _nextToSend;
     private readonly SortedSet<ulong> _received = [];
 
-    // Kumulative ECN-Zähler der empfangenen Pakete dieses Space (RFC 9000 §13.4.2), gemeldet im ACK-Frame.
+    // Cumulative ECN counters of the received packets of this space (RFC 9000 §13.4.2), reported in the ACK frame.
     private ulong _ect0Count;
     private ulong _ect1Count;
     private ulong _ceCount;
 
     /// <summary>
-    /// Anzahl empfangener Pakete mit CE-Markierung (Diagnose/Test).
+    /// Number of received packets with a CE mark (diagnostics/test).
     /// </summary>
     public ulong ReceivedCeCount => _ceCount;
 
     /// <summary>
-    /// Größte vom Peer bestätigte Paketnummer (für die Wahl der PN-Kodierungslänge); -1 = keine.
+    /// Largest packet number acknowledged by the peer (for choosing the PN encoding length); -1 = none.
     /// </summary>
     public long LargestAckedByPeer { get; private set; } = -1;
 
     /// <summary>
-    /// Größte bislang empfangene Paketnummer (für die PN-Rekonstruktion beim Empfang); -1 = keine.
+    /// Largest packet number received so far (for PN reconstruction on receive); -1 = none.
     /// </summary>
     public long LargestReceived => _received.Count == 0 ? -1 : (long)_received.Max;
 
     /// <summary>
-    /// Es liegen empfangene, noch nicht per ACK quittierte Pakete vor.
+    /// There are received packets not yet acknowledged via ACK.
     /// </summary>
     public bool AckPending { get; private set; }
 
     /// <summary>
-    /// <c>true</c>, wenn ab Paketnummer 0 lückenlos empfangen wurde (also genau {0,1,…,Max}, keine fehlenden
-    /// Nummern). Paketnummern beginnen je Space bei 0 (RFC 9000 §12.3), daher ist das genau dann der Fall, wenn
-    /// die Anzahl empfangener Pakete <c>Max+1</c> ist. Nutzung: der Server erkennt so, dass er alle 0-RTT-Pakete
-    /// erhalten hat (RFC 9001 §4.9.3, „keeping track of missing packet numbers").
+    /// <c>true</c> when reception from packet number 0 is gap-free (i.e. exactly {0,1,…,Max}, no
+    /// missing numbers). Packet numbers start at 0 per space (RFC 9000 §12.3), so this holds exactly
+    /// when the number of received packets is <c>Max+1</c>. Usage: the server thereby detects that it
+    /// has received all 0-RTT packets (RFC 9001 §4.9.3, "keeping track of missing packet numbers").
     /// </summary>
     public bool IsContiguousFromZero => _received.Count > 0 && (ulong)_received.Count == _received.Max + 1;
 
     /// <summary>
-    /// Vergibt die nächste zu sendende Paketnummer.
+    /// Assigns the next packet number to send.
     /// </summary>
     public ulong NextPacketNumber() => _nextToSend++;
 
     /// <summary>
-    /// Vermerkt eine erfolgreich entschützte, empfangene Paketnummer samt ihrem ECN-Codepoint.
+    /// Records a successfully unprotected, received packet number along with its ECN codepoint.
     /// </summary>
     public void RecordReceived(ulong packetNumber, EcnCodepoint ecn = EcnCodepoint.NotEct)
     {
@@ -86,7 +86,7 @@ public sealed class PacketNumberSpace
     }
 
     /// <summary>
-    /// Verarbeitet ein empfangenes ACK-Frame (aktualisiert die größte bestätigte Nummer).
+    /// Processes a received ACK frame (updates the largest acknowledged number).
     /// </summary>
     public void OnAckReceived(ulong largestAcknowledged)
     {
@@ -95,8 +95,8 @@ public sealed class PacketNumberSpace
     }
 
     /// <summary>
-    /// Baut ein ACK-Frame über alle bislang empfangenen Pakete und markiert die ACKs als gesendet.
-    /// Gibt <c>null</c> zurück, wenn nichts zu bestätigen ist.
+    /// Builds an ACK frame over all packets received so far and marks the ACKs as sent.
+    /// Returns <c>null</c> when there is nothing to acknowledge.
     /// </summary>
     public AckFrame? BuildAck(ulong ackDelay = 0)
     {
@@ -104,8 +104,8 @@ public sealed class PacketNumberSpace
             return null;
         AckPending = false;
 
-        // Sobald ECN-markierte Pakete empfangen wurden, MUSS jedes ACK die kumulativen Zähler tragen
-        // (Typ 0x03, RFC 9000 §13.4.2). Ohne ECN-Markierungen bleibt es beim einfachen ACK (0x02).
+        // Once ECN-marked packets have been received, every ACK MUST carry the cumulative counters
+        // (type 0x03, RFC 9000 §13.4.2). Without ECN marks, the simple ACK (0x02) remains.
         EcnCounts? ecn = (_ect0Count | _ect1Count | _ceCount) != 0
             ? new EcnCounts(_ect0Count, _ect1Count, _ceCount)
             : null;

@@ -79,7 +79,7 @@ public class BufferTests
         Span<byte> lengthSlot = writer.GetSpan(2);
         writer.WriteBytes([0xAA, 0xBB, 0xCC]);
 
-        // Länge nachträglich eintragen.
+        // Backpatch the length afterwards.
         System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(lengthSlot, 3);
 
         Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo([0x00, 0x03, 0xAA, 0xBB, 0xCC]));
@@ -110,7 +110,7 @@ public class BufferTests
     [Test]
     public void Reader_ThrowsOnOverread()
     {
-        // BufferReader ist ein ref struct und kann nicht in ein Lambda (Assert.Throws) kapseln.
+        // BufferReader is a ref struct and cannot be captured in a lambda (Assert.Throws).
         var reader = new BufferReader([0x01, 0x02]);
         bool threw = false;
         try

@@ -18,38 +18,38 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 
 /// <summary>
-/// Auto-Tuning des empfangsseitigen Flow-Control-Fensters (Phase 9). Ein festes Fenster drosselt eine
-/// schnelle Verbindung mit hoher RTT auf ≈ Fenster/RTT Durchsatz — das Bandbreiten-Verzögerungs-Produkt
-/// (BDP) wächst mit der RTT. Heuristik (wie Chromium/quiche): jedes Mal, wenn der Empfänger ein
-/// Fenster-Update senden muss (der Kredit ist unter das halbe Fenster gefallen), wird die Zeit seit dem
-/// LETZTEN Update gemessen. Ist sie kürzer als ein kleines Vielfaches der RTT, war der Sender schneller
-/// am Fensterrand als eine RTT — das Fenster ist der Engpass ⇒ verdoppeln (bis zu einem Limit). So
-/// pendelt sich das Fenster selbsttätig auf das BDP der Verbindung ein, ohne von Beginn an groß zu sein.
+/// Auto-tuning of the receive-side flow-control window (phase 9). A fixed window throttles a fast,
+/// high-RTT connection to ≈ window/RTT throughput — the bandwidth-delay product (BDP) grows with the
+/// RTT. Heuristic (like Chromium/quiche): every time the receiver must send a window update (the
+/// credit has fallen below half the window), the time since the LAST update is measured. If it is
+/// shorter than a small multiple of the RTT, the sender reached the window edge faster than one
+/// RTT — the window is the bottleneck ⇒ double it (up to a limit). The window thus settles onto the
+/// connection's BDP by itself, without being large from the start.
 /// </summary>
 public sealed class ReceiveWindowTuner(ulong initialSize, ulong limit)
 {
     /// <summary>
-    /// Vielfaches der geglätteten RTT: Löst der Sender das Update schneller als so viele RTTs aus,
-    /// gilt das Fenster als Engpass und wird vergrößert.
+    /// Multiple of the smoothed RTT: if the sender triggers the update faster than this many RTTs,
+    /// the window counts as the bottleneck and is enlarged.
     /// </summary>
     private const long RttMultiplier = 2;
 
     private long _lastUpdateTicks = -1;
 
     /// <summary>
-    /// Aktuelle Fenstergröße (Startwert = konfiguriertes initial_max_data*; wächst bis <see cref="Limit"/>).
+    /// Current window size (starting value = the configured initial_max_data*; grows up to <see cref="Limit"/>).
     /// </summary>
     public ulong Size { get; private set; } = initialSize;
 
     /// <summary>
-    /// Obergrenze, bis zu der das Fenster wachsen darf.
+    /// Upper bound up to which the window may grow.
     /// </summary>
     public ulong Limit { get; } = Math.Max(initialSize, limit);
 
     /// <summary>
-    /// Meldet, dass jetzt (bei <paramref name="nowTicks"/>) ein Fenster-Update ausgelöst wird, und
-    /// vergrößert das Fenster, falls seit dem letzten Update weniger als <see cref="RttMultiplier"/>×RTT
-    /// vergangen ist. Gibt <c>true</c> zurück, wenn das Fenster dabei gewachsen ist.
+    /// Reports that a window update is being triggered now (at <paramref name="nowTicks"/>) and
+    /// enlarges the window if less than <see cref="RttMultiplier"/>×RTT has passed since the last
+    /// update. Returns <c>true</c> when the window grew.
     /// </summary>
     public bool NoteWindowUpdate(long nowTicks, long smoothedRttTicks)
     {

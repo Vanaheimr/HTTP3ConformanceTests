@@ -28,8 +28,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Tests für Version Negotiation (RFC 9000 §6) und Retry / Adressvalidierung (RFC 9000 §8.1, §17.2.5;
-/// RFC 9001 §5.8): Paket-Round-Trips sowie In-Process-Szenarien Client ↔ eigener Server.
+/// Tests for version negotiation (RFC 9000 §6) and Retry / address validation (RFC 9000 §8.1, §17.2.5;
+/// RFC 9001 §5.8): packet round trips as well as in-process scenarios client ↔ our own server.
 /// </summary>
 [TestFixture]
 public class VersionAndRetryTests
@@ -54,8 +54,8 @@ public class VersionAndRetryTests
     [Test]
     public void RetryPacket_RoundTrips_AndIntegrityTagVerifies()
     {
-        ConnectionId dcid = Cid(0xc0, 0xc1);       // = Client-SCID
-        ConnectionId scid = Cid(0x51, 0x52, 0x53); // = neue Server-SCID
+        ConnectionId dcid = Cid(0xc0, 0xc1);       // = client SCID
+        ConnectionId scid = Cid(0x51, 0x52, 0x53); // = new server SCID
         ConnectionId originalDcid = Cid(0xd0, 0xd1, 0xd2, 0xd3);
         byte[] token = [0xaa, 0xbb, 0xcc, 0xdd, 0xee];
 
@@ -68,8 +68,8 @@ public class VersionAndRetryTests
         Assert.That(t, Is.EqualTo(token));
         Assert.That(tag.Length, Is.EqualTo(16));
 
-        Assert.That(RetryPacket.Verify(packet, originalDcid), Is.True, "Integrity Tag muss gegen die richtige ODCID stimmen.");
-        Assert.That(RetryPacket.Verify(packet, Cid(0xff, 0xff)), Is.False, "Falsche ODCID muss den Tag scheitern lassen.");
+        Assert.That(RetryPacket.Verify(packet, originalDcid), Is.True, "The integrity tag must verify against the correct ODCID.");
+        Assert.That(RetryPacket.Verify(packet, Cid(0xff, 0xff)), Is.False, "A wrong ODCID must make the tag fail.");
     }
 
     [Test]
@@ -77,18 +77,18 @@ public class VersionAndRetryTests
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
 
-        // Client kündigt eine (erfundene) Version an, die der Server nicht unterstützt.
+        // The client announces a (made-up) version that the server does not support.
         using var client = new QuicClientConnection("localhost", version: 0x1a2a_3a4a);
-        using var server = new QuicServerConnection(cert); // unterstützt nur v1
+        using var server = new QuicServerConnection(cert); // supports only v1
         client.Start();
 
-        // Ein Umlauf: Client-Initial (bogus Version) → Server antwortet mit VN → Client verarbeitet es.
+        // One round trip: client Initial (bogus version) → server answers with VN → client processes it.
         foreach (byte[] dg in client.GetDatagramsToSend())
             server.ProcessDatagram(dg);
         foreach (byte[] dg in server.GetDatagramsToSend())
             client.ProcessDatagram(dg);
 
-        Assert.That(client.VersionNegotiationReceived, Is.True, "Client muss ein Version-Negotiation-Paket erhalten haben.");
+        Assert.That(client.VersionNegotiationReceived, Is.True, "The client must have received a version-negotiation packet.");
         Assert.That(client.OfferedVersions, Does.Contain(V1));
         Assert.That(client.HandshakeConfirmed, Is.False);
     }
@@ -108,7 +108,7 @@ public class VersionAndRetryTests
         Assert.That(vn, Is.Not.Null);
         Assert.That(VersionNegotiationPacket.TryParse(vn!, out _, out _, out List<uint> versions), Is.True);
         Assert.That(versions, Does.Contain(V1));
-        // Eine reservierte Version im Muster 0x?a?a?a?a (RFC 9000 §6.3) beugt Ossifizierung vor.
+        // A reserved version in the pattern 0x?a?a?a?a (RFC 9000 §6.3) guards against ossification.
         Assert.That(versions, Has.Some.Matches<uint>(v => (v & 0x0F0F_0F0Fu) == 0x0A0A_0A0Au));
     }
 
@@ -118,16 +118,16 @@ public class VersionAndRetryTests
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         using var server = new QuicServerConnection(cert);
 
-        // Ein winziges Long-Header-Paket mit nicht unterstützter Version (0x1a2a3a4a), 4-Byte-CIDs → 15 Byte.
+        // A tiny long-header packet with an unsupported version (0x1a2a3a4a), 4-byte CIDs → 15 bytes.
         byte[] tiny =
         [
-            0xC0, 0x1a, 0x2a, 0x3a, 0x4a,   // Long Header (Initial) + Version
-            4, 0xD0, 0xD1, 0xD2, 0xD3,      // DCID-Länge + DCID
-            4, 0x50, 0x51, 0x52, 0x53,      // SCID-Länge + SCID
+            0xC0, 0x1a, 0x2a, 0x3a, 0x4a,   // long header (Initial) + version
+            4, 0xD0, 0xD1, 0xD2, 0xD3,      // DCID length + DCID
+            4, 0x50, 0x51, 0x52, 0x53,      // SCID length + SCID
         ];
         server.ProcessDatagram(tiny);
 
-        // RFC 9000 §6.1/§14.1: auf ein Datagramm < 1200 Byte darf KEIN VN gesendet werden (Anti-Amplification).
+        // RFC 9000 §6.1/§14.1: NO VN may be sent for a datagram < 1200 bytes (anti-amplification).
         Assert.That(server.GetDatagramsToSend(), Is.Empty);
     }
 
@@ -149,12 +149,12 @@ public class VersionAndRetryTests
                 client.ProcessDatagram(dg);
         }
 
-        Assert.That(server.SentRetry, Is.True, "Server muss ein Retry zur Adressvalidierung gesendet haben.");
-        Assert.That(client.RetryHandled, Is.True, "Client muss das Retry verarbeitet und den ClientHello erneut gesendet haben.");
-        Assert.That(client.HandshakeConfirmed, Is.True, "Der Handshake muss trotz Retry abschließen.");
+        Assert.That(server.SentRetry, Is.True, "The server must have sent a Retry for address validation.");
+        Assert.That(client.RetryHandled, Is.True, "The client must have processed the Retry and re-sent the ClientHello.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "The handshake must complete despite the Retry.");
         Assert.That(server.HandshakeComplete, Is.True);
 
-        // Der Server muss die ursprüngliche DCID als Transport-Parameter zurückgemeldet haben (RFC 9000 §7.3).
+        // The server must have echoed the original DCID back as a transport parameter (RFC 9000 §7.3).
         Assert.That(client.PeerTransportParameters, Is.Not.Null);
         Assert.That(client.PeerTransportParameters!.RetrySourceConnectionIdValue, Is.Not.Null);
     }

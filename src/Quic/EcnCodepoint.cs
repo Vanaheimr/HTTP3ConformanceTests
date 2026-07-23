@@ -18,30 +18,30 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic;
 
 /// <summary>
-/// Der ECN-Codepoint im IP-Header (RFC 3168, die zwei niederwertigen Bits des DS-/TOS-Felds). QUIC nutzt ihn
-/// als Congestion-Signal (RFC 9000 §13.4, RFC 9002 §7.3): Der Sender markiert Pakete mit ECT(0)/ECT(1); ein
-/// überlasteter Router kann sie auf CE „hochstufen". Der Empfänger zählt die Codepoints je Packet-Number-Space
-/// und meldet die Summen im ACK-Frame (Typ 0x03) zurück.
+/// The ECN codepoint in the IP header (RFC 3168, the two low-order bits of the DS/TOS field). QUIC
+/// uses it as a congestion signal (RFC 9000 §13.4, RFC 9002 §7.3): the sender marks packets with
+/// ECT(0)/ECT(1); an overloaded router may "upgrade" them to CE. The receiver counts the codepoints
+/// per packet-number space and reports the sums back in the ACK frame (type 0x03).
 /// </summary>
 public enum EcnCodepoint : byte
 {
     /// <summary>
-    /// Not-ECT (00): ECN wird für dieses Paket nicht genutzt.
+    /// Not-ECT (00): ECN is not used for this packet.
     /// </summary>
     NotEct = 0b00,
 
     /// <summary>
-    /// ECT(1) (01): ECN-fähig, Variante 1.
+    /// ECT(1) (01): ECN-capable, variant 1.
     /// </summary>
     Ect1 = 0b01,
 
     /// <summary>
-    /// ECT(0) (10): ECN-fähig, Variante 0.
+    /// ECT(0) (10): ECN-capable, variant 0.
     /// </summary>
     Ect0 = 0b10,
 
     /// <summary>
-    /// CE (11): Congestion Experienced – ein Router meldet Überlast.
+    /// CE (11): congestion experienced – a router signals overload.
     /// </summary>
     Ce = 0b11,
 }

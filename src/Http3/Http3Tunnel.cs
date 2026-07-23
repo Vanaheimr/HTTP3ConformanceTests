@@ -25,16 +25,17 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Ein bidirektionaler Byte-Tunnel über einen Extended-CONNECT-Stream (RFC 9114 §4.4, RFC 8441/9220):
-/// Nutzdaten reisen in DATA-Frames des Request-Streams; ein FIN entspricht dem geordneten TCP-Close,
-/// ein Reset dem RST (H3_REQUEST_CANCELLED, RFC 9220 §3). Implementiert das transport-agnostische
-/// <see cref="IHTTP2Tunnel"/>-Interface, sodass die RFC-6455-<see cref="WebSocketConnection"/>
-/// unverändert darüber läuft.
+/// A bidirectional byte tunnel over an Extended-CONNECT stream (RFC 9114 §4.4, RFC 8441/9220):
+/// payload travels in DATA frames of the request stream; a FIN corresponds to the orderly TCP
+/// close, a reset to the RST (H3_REQUEST_CANCELLED, RFC 9220 §3). Implements the transport-agnostic
+/// <see cref="IHTTP2Tunnel"/> interface, so the RFC 6455 <see cref="WebSocketConnection"/>
+/// runs over it unchanged.
 ///
-/// Nebenläufigkeit: der Tunnel ist — wie der ganze Stack — single-threaded gedacht. Ausstehende
-/// <see cref="ReadAsync"/>-Tasks werden SYNCHRON im Pump-Aufruf (<c>ProcessDatagram</c>) vollendet;
-/// ihre Continuations (z. B. das Frame-Parsing der WebSocket-Schicht samt automatischer Pong-/
-/// Close-Antworten) laufen also inline auf dem Pump-Thread und schreiben race-frei in den Stream.
+/// Concurrency: the tunnel — like the whole stack — is designed single-threaded. Outstanding
+/// <see cref="ReadAsync"/> tasks are completed SYNCHRONOUSLY in the pump call
+/// (<c>ProcessDatagram</c>); their continuations (e.g. the WebSocket layer's frame parsing incl.
+/// automatic pong/close answers) thus run inline on the pump thread and write into the stream
+/// race-free.
 /// </summary>
 public sealed class Http3Tunnel : IHTTP2Tunnel
 {
@@ -47,8 +48,8 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
         => _stream = stream;
 
     /// <summary>
-    /// Liest den nächsten vom Peer getunnelten Chunk; <c>null</c>, sobald der Peer seine Seite
-    /// beendet hat (FIN oder Reset).
+    /// Reads the next chunk tunnelled from the peer; <c>null</c> once the peer has ended its side
+    /// (FIN or reset).
     /// </summary>
     public Task<byte[]?> ReadAsync(CancellationToken CancellationToken)
     {
@@ -61,7 +62,7 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     }
 
     /// <summary>
-    /// Sendet einen Chunk zum Peer — als DATA-Frame auf dem CONNECT-Stream (RFC 9114 §4.4).
+    /// Sends a chunk to the peer — as a DATA frame on the CONNECT stream (RFC 9114 §4.4).
     /// </summary>
     public Task WriteAsync(byte[] Data, CancellationToken CancellationToken)
     {
@@ -70,12 +71,12 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     }
 
     /// <summary>
-    /// Beendet die eigene Senderichtung geordnet (FIN ≙ TCP-Close, RFC 9220 §3).
+    /// Ends our own send direction in an orderly fashion (FIN ≙ TCP close, RFC 9220 §3).
     /// </summary>
     public void Complete() => _stream.Finish();
 
     /// <summary>
-    /// Bricht den Tunnel abrupt ab (≙ TCP-RST): RESET_STREAM/STOP_SENDING mit H3_REQUEST_CANCELLED.
+    /// Aborts the tunnel abruptly (≙ TCP RST): RESET_STREAM/STOP_SENDING with H3_REQUEST_CANCELLED.
     /// </summary>
     public void Abort()
     {
@@ -84,22 +85,22 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     }
 
     /// <summary>
-    /// Vom Pump aufgerufen: liefert die Nutzlast eines empfangenen DATA-Frames in den Tunnel.
+    /// Called by the pump: delivers the payload of a received DATA frame into the tunnel.
     /// </summary>
     internal void Deliver(byte[] chunk)
     {
         if (_pendingRead is { } pending)
         {
             _pendingRead = null;
-            pending.SetResult(chunk); // Continuation läuft inline auf dem Pump-Thread (s. o.)
+            pending.SetResult(chunk); // the continuation runs inline on the pump thread (see above)
         }
         else
             _received.Enqueue(chunk);
     }
 
     /// <summary>
-    /// Vom Pump aufgerufen: die Peer-Seite hat geendet (FIN oder Reset) — ausstehende und künftige
-    /// Reads liefern nach dem Leeren der Warteschlange <c>null</c>.
+    /// Called by the pump: the peer side has ended (FIN or reset) — outstanding and future reads
+    /// return <c>null</c> once the queue has drained.
     /// </summary>
     internal void End()
     {
@@ -111,21 +112,21 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
         }
     }
 
-    // ---- HTTP-Datagramme (RFC 9297) — unzuverlässige Nachrichten neben dem Byte-Strom ------
+    // ---- HTTP datagrams (RFC 9297) — unreliable messages alongside the byte stream ----------
 
-    private const int MaxBufferedDatagrams = 64; // unzuverlässig ⇒ Überlauf DARF verworfen werden (RFC 9221 §5.3)
+    private const int MaxBufferedDatagrams = 64; // unreliable ⇒ overflow MAY be discarded (RFC 9221 §5.3)
     private readonly Queue<byte[]> _datagrams = new();
     internal Func<byte[], bool>? DatagramSender { get; set; }
 
     /// <summary>
-    /// Sendet ein HTTP-Datagramm zu diesem Request-Stream (RFC 9297 §2.1: Quarter Stream ID +
-    /// Payload in einem QUIC-DATAGRAM-Frame). <c>false</c>, wenn Datagramme nicht ausgehandelt sind
-    /// (SETTINGS_H3_DATAGRAM/max_datagram_frame_size) oder das Datagramm nicht in ein Paket passt.
+    /// Sends an HTTP datagram for this request stream (RFC 9297 §2.1: quarter stream ID + payload in
+    /// a QUIC DATAGRAM frame). <c>false</c> when datagrams are not negotiated
+    /// (SETTINGS_H3_DATAGRAM/max_datagram_frame_size) or the datagram does not fit into a packet.
     /// </summary>
     public bool TrySendDatagram(byte[] payload) => DatagramSender?.Invoke(payload) ?? false;
 
     /// <summary>
-    /// Holt das nächste für diesen Stream empfangene HTTP-Datagramm ab, falls vorhanden.
+    /// Fetches the next HTTP datagram received for this stream, if any.
     /// </summary>
     public bool TryReceiveDatagram(out byte[]? payload)
     {
@@ -139,8 +140,8 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     }
 
     /// <summary>
-    /// Vom Pump aufgerufen: stellt ein empfangenes HTTP-Datagramm zu (bei vollem Puffer wird das
-    /// älteste verworfen — Datagramme sind per Definition unzuverlässig).
+    /// Called by the pump: delivers a received HTTP datagram (when the buffer is full, the oldest
+    /// one is discarded — datagrams are unreliable by definition).
     /// </summary>
     internal void DeliverDatagram(byte[] payload)
     {
@@ -151,9 +152,9 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
 }
 
 /// <summary>
-/// Antwort eines Servers auf ein Extended CONNECT (RFC 8441/9220): Statuscode, Zusatz-Header
-/// (z. B. <c>sec-websocket-protocol</c>) und — bei Annahme (2xx) — ein Callback, der den fertigen
-/// <see cref="Http3Tunnel"/> erhält (analog zu Hermods <c>HTTP2ConnectResult.RunAsync</c>).
+/// A server's answer to an Extended CONNECT (RFC 8441/9220): status code, additional headers
+/// (e.g. <c>sec-websocket-protocol</c>) and — on acceptance (2xx) — a callback receiving the
+/// finished <see cref="Http3Tunnel"/> (analogous to Hermod's <c>HTTP2ConnectResult.RunAsync</c>).
 /// </summary>
 public sealed class Http3ConnectResult
 {
@@ -161,7 +162,7 @@ public sealed class Http3ConnectResult
     public IReadOnlyList<HeaderField> Headers { get; init; } = [];
 
     /// <summary>
-    /// Wird bei 2xx mit dem Tunnel aufgerufen, sobald die Antwort-HEADERS gesendet sind.
+    /// Called with the tunnel on 2xx, as soon as the response HEADERS are sent.
     /// </summary>
     public Action<Http3Tunnel>? OnTunnel { get; init; }
 }

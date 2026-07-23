@@ -18,10 +18,10 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 
 /// <summary>
-/// Ein QUIC-Stream: bündelt Sende- und Empfangsseite (RFC 9000 §2). Bidirektionale Streams nutzen
-/// beide, unidirektionale nur eine Richtung. Die eigentliche Frame-Erzeugung/-Aufnahme übernehmen
-/// <see cref="StreamSendBuffer"/> und <see cref="StreamReceiveBuffer"/>; diese Klasse bietet die
-/// anwendungsnahe Sicht.
+/// A QUIC stream: bundles the send and receive side (RFC 9000 §2). Bidirectional streams use both,
+/// unidirectional ones only one direction. The actual frame production/intake is handled by
+/// <see cref="StreamSendBuffer"/> and <see cref="StreamReceiveBuffer"/>; this class offers the
+/// application-facing view.
 /// </summary>
 public sealed class QuicStream
 {
@@ -37,80 +37,80 @@ public sealed class QuicStream
     }
 
     /// <summary>
-    /// Schreibt Anwendungsdaten in den Sendepuffer.
+    /// Writes application data into the send buffer.
     /// </summary>
     public void Write(ReadOnlySpan<byte> data) => Send.Write(data);
 
     /// <summary>
-    /// Markiert das Ende des gesendeten Streams (FIN).
+    /// Marks the end of the sent stream (FIN).
     /// </summary>
     public void Finish() => Send.Finish();
 
     /// <summary>
-    /// Liest den nächsten zusammenhängenden empfangenen Abschnitt.
+    /// Reads the next contiguous received section.
     /// </summary>
     public byte[] Read() => Receive.ReadAvailable();
 
     /// <summary>
-    /// Der empfangene Stream ist vollständig gelesen (FIN erreicht). Nach einem Peer-Reset nie <c>true</c>.
+    /// The received stream has been read completely (FIN reached). Never <c>true</c> after a peer reset.
     /// </summary>
     public bool IsReceiveComplete => Receive.IsComplete;
 
     /// <summary>
-    /// Bricht die Sendeseite abrupt ab (RFC 9000 §2.4/§19.4): ungesendete Daten werden verworfen, der
-    /// Endpoint sendet ein RESET_STREAM mit <paramref name="errorCode"/> (zuverlässig, via Loss Recovery).
+    /// Aborts the send side abruptly (RFC 9000 §2.4/§19.4): unsent data is discarded, the endpoint
+    /// sends a RESET_STREAM with <paramref name="errorCode"/> (reliably, via loss recovery).
     /// </summary>
     public void Reset(ulong errorCode) => Send.Reset(errorCode);
 
     /// <summary>
-    /// Bricht die Sendeseite ab, garantiert aber die zuverlässige Zustellung der ersten
-    /// <paramref name="reliableSize"/> bereits gesendeten Bytes (draft-ietf-quic-reliable-stream-reset §5):
-    /// der Endpoint sendet ein RESET_STREAM_AT (sofern der Peer die Extension unterstützt, sonst ein
-    /// gewöhnliches RESET_STREAM). Nützlich, wenn der Empfänger einen kritischen Präfix (z. B. den
-    /// WebTransport-Stream-Kopf) trotz Abbruch sehen muss.
+    /// Aborts the send side but guarantees reliable delivery of the first
+    /// <paramref name="reliableSize"/> already-sent bytes (draft-ietf-quic-reliable-stream-reset §5):
+    /// the endpoint sends a RESET_STREAM_AT (when the peer supports the extension, otherwise an
+    /// ordinary RESET_STREAM). Useful when the receiver must see a critical prefix (e.g. the
+    /// WebTransport stream header) despite the abort.
     /// </summary>
     public void ResetAt(ulong errorCode, ulong reliableSize) => Send.ResetAt(errorCode, reliableSize);
 
     /// <summary>
-    /// Bricht das Lesen ab (RFC 9000 §2.4/§3.5): der Endpoint sendet ein STOP_SENDING mit
-    /// <paramref name="errorCode"/> und bittet den Peer so um ein RESET_STREAM seiner Sendeseite.
+    /// Aborts reading (RFC 9000 §2.4/§3.5): the endpoint sends a STOP_SENDING with
+    /// <paramref name="errorCode"/>, thereby asking the peer for a RESET_STREAM of its send side.
     /// </summary>
     public void AbortRead(ulong errorCode) => Receive.AbortReading(errorCode);
 
     /// <summary>
-    /// Der Peer hat seine Sendeseite per RESET_STREAM abgebrochen (Fehlercode in
+    /// The peer aborted its send side via RESET_STREAM (error code in
     /// <see cref="PeerResetErrorCode"/>).
     /// </summary>
     public bool IsResetByPeer => Receive.ResetReceived;
 
     /// <summary>
-    /// Der Fehlercode aus dem RESET_STREAM des Peers, falls empfangen.
+    /// The error code from the peer's RESET_STREAM, if received.
     /// </summary>
     public ulong? PeerResetErrorCode => Receive.ResetReceived ? Receive.ResetErrorCode : null;
 
     /// <summary>
-    /// Bei einem per RESET_STREAM_AT abgebrochenen Empfangsstream die (kleinste) Reliable Size, bis zu der
-    /// der Peer die Bytes noch zuverlässig zustellt (draft-ietf-quic-reliable-stream-reset §5); <c>null</c>
-    /// bei gewöhnlichem RESET_STREAM oder gar keinem Reset.
+    /// For a receive stream aborted via RESET_STREAM_AT, the (smallest) reliable size up to which the
+    /// peer still delivers the bytes reliably (draft-ietf-quic-reliable-stream-reset §5); <c>null</c>
+    /// for an ordinary RESET_STREAM or no reset at all.
     /// </summary>
     public ulong? PeerReliableSize => Receive.ReliableSize;
 
     /// <summary>
-    /// Der Fehlercode aus einem empfangenen STOP_SENDING des Peers, falls empfangen (unsere Sendeseite
-    /// wurde daraufhin automatisch zurückgesetzt, RFC 9000 §3.5).
+    /// The error code from a received peer STOP_SENDING, if received (our send side was thereupon
+    /// reset automatically, RFC 9000 §3.5).
     /// </summary>
     public ulong? PeerStopSendingErrorCode { get; internal set; }
 
     /// <summary>
-    /// Sende-Dringlichkeit nach RFC 9218 §4.1: 0 (höchste) … 7 (Hintergrund), Standard 3.
-    /// Der Sende-Scheduler bedient Streams in aufsteigender Dringlichkeit; die Anwendungsschicht
-    /// (HTTP/3) setzt den Wert aus `priority`-Header bzw. PRIORITY_UPDATE-Frames.
+    /// Send urgency per RFC 9218 §4.1: 0 (highest) … 7 (background), default 3.
+    /// The send scheduler serves streams in ascending urgency; the application layer (HTTP/3)
+    /// sets the value from the `priority` header or PRIORITY_UPDATE frames.
     /// </summary>
     public int SendUrgency { get; set; } = 3;
 
     /// <summary>
-    /// Inkrementell nach RFC 9218 §4.2: <c>true</c> ⇒ gleich dringliche inkrementelle Streams teilen
-    /// sich die Bandbreite (Round-Robin); <c>false</c> (Standard) ⇒ nacheinander in Stream-ID-Reihenfolge.
+    /// Incremental per RFC 9218 §4.2: <c>true</c> ⇒ equally urgent incremental streams share the
+    /// bandwidth (round-robin); <c>false</c> (default) ⇒ one after another in stream-ID order.
     /// </summary>
     public bool SendIncremental { get; set; }
 }

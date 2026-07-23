@@ -24,19 +24,19 @@ using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Malformed-Erkennung für HTTP/3-Nachrichten (RFC 9114 §4.1.2, §4.2, §4.3): verbotene/fehlende/
-/// ungültige Pseudo-Header, Pseudo-Header nach regulären Feldern oder in Trailern, Großbuchstaben
-/// und ungültige Zeichen in Feldnamen/-werten, verbindungsspezifische Felder sowie die
-/// Content-Length-Konsistenz. Die Prüfungen sind bewusst strikt — §4.1.2: „they are deliberately
-/// strict because being permissive can expose implementations to these vulnerabilities."
-/// Rückgabe: <c>null</c> = wohlgeformt, sonst eine kurze Begründung.
+/// Malformed detection for HTTP/3 messages (RFC 9114 §4.1.2, §4.2, §4.3): forbidden/missing/
+/// invalid pseudo-headers, pseudo-headers after regular fields or in trailers, uppercase and
+/// invalid characters in field names/values, connection-specific fields, and content-length
+/// consistency. The checks are deliberately strict — §4.1.2: "they are deliberately strict
+/// because being permissive can expose implementations to these vulnerabilities."
+/// Return: <c>null</c> = well-formed, otherwise a short reason.
 /// </summary>
 internal static class Http3MessageValidator
 {
     /// <summary>
-    /// Prüft eine Request-Header-Sektion (RFC 9114 §4.3.1). CONNECT (§4.4) gilt als wohlgeformt,
-    /// wenn :authority vorhanden ist und :scheme/:path fehlen — ob er unterstützt wird, entscheidet
-    /// der Server (501).
+    /// Checks a request header section (RFC 9114 §4.3.1). CONNECT (§4.4) counts as well-formed when
+    /// :authority is present and :scheme/:path are absent — whether it is supported is up to the
+    /// server (501).
     /// </summary>
     public static string? ValidateRequestHeaders(IReadOnlyList<HeaderField> fields)
     {
@@ -60,7 +60,7 @@ internal static class Http3MessageValidator
                     case ":path": path++; pathValue = field.Value; break;
                     case ":authority": authority++; authorityValue = field.Value; break;
                     case ":protocol": protocol++; protocolValue = field.Value; break; // RFC 8441 §4
-                    default: return "undefined pseudo-header in request"; // §4.3 (inkl. :status)
+                    default: return "undefined pseudo-header in request"; // §4.3 (incl. :status)
                 }
             }
             else
@@ -78,15 +78,15 @@ internal static class Http3MessageValidator
         if (methodValue.Length == 0)
             return "empty :method";
 
-        // :protocol ist NUR auf CONNECT-Requests definiert (RFC 8441 §4).
+        // :protocol is ONLY defined on CONNECT requests (RFC 8441 §4).
         if (protocol > 0 && methodValue != "CONNECT")
             return ":protocol on non-CONNECT request";
         if (protocol > 1)
             return "multiple :protocol values"; // RFC 8441 §4: single valued
 
-        // Klassischer CONNECT (§4.4): :scheme/:path MÜSSEN fehlen, :authority MUSS vorhanden sein.
-        // Extended CONNECT (RFC 8441 §4): mit :protocol MÜSSEN :scheme und :path vorhanden sein und
-        // :authority folgt den NORMALEN Request-Regeln — dieser Fall fällt unten durch.
+        // Classic CONNECT (§4.4): :scheme/:path MUST be absent, :authority MUST be present.
+        // Extended CONNECT (RFC 8441 §4): with :protocol, :scheme and :path MUST be present and
+        // :authority follows the NORMAL request rules — that case falls through below.
         if (methodValue == "CONNECT" && protocol == 0)
             return scheme > 0 || path > 0 ? "CONNECT with :scheme/:path"
                  : authority != 1 || authorityValue.Length == 0 ? "CONNECT without :authority"
@@ -99,14 +99,14 @@ internal static class Http3MessageValidator
         if (schemeValue.Length == 0)
             return "empty :scheme";
         if (pathValue.Length == 0)
-            return "empty :path"; // §4.3.1: für http/https MUSS „/" bzw. „*" gesendet werden
+            return "empty :path"; // §4.3.1: for http/https, "/" or "*" MUST be sent
         if (authority > 1)
             return "multiple :authority values";
 
         if (schemeValue is "http" or "https")
         {
-            // §4.3.1: :authority ODER Host erforderlich, nicht leer; beide vorhanden ⇒ identisch;
-            // die veraltete userinfo-Komponente („…@…") ist verboten.
+            // §4.3.1: :authority OR Host required, non-empty; both present ⇒ identical;
+            // the deprecated userinfo component ("…@…") is forbidden.
             string? effective = authority == 1 ? authorityValue : hostValue;
             if (effective is not { Length: > 0 })
                 return "missing :authority/Host for http(s) scheme";
@@ -120,8 +120,8 @@ internal static class Http3MessageValidator
     }
 
     /// <summary>
-    /// Prüft eine Response-Header-Sektion (RFC 9114 §4.3.2): genau EIN gültiger <c>:status</c>
-    /// (drei Ziffern, 100–599), keine anderen Pseudo-Header, Pseudo-Header vor regulären Feldern.
+    /// Checks a response header section (RFC 9114 §4.3.2): exactly ONE valid <c>:status</c>
+    /// (three digits, 100–599), no other pseudo-headers, pseudo-headers before regular fields.
     /// </summary>
     public static string? ValidateResponseHeaders(IReadOnlyList<HeaderField> fields, out int status)
     {
@@ -154,7 +154,7 @@ internal static class Http3MessageValidator
     }
 
     /// <summary>
-    /// Prüft eine Trailer-Sektion (RFC 9114 §4.3): Pseudo-Header sind dort verboten.
+    /// Checks a trailer section (RFC 9114 §4.3): pseudo-headers are forbidden there.
     /// </summary>
     public static string? ValidateTrailers(IReadOnlyList<HeaderField> fields)
     {
@@ -169,9 +169,9 @@ internal static class Http3MessageValidator
     }
 
     /// <summary>
-    /// Content-Length-Konsistenz (RFC 9114 §4.1.2): ist ein <c>content-length</c> vorhanden, MUSS er
-    /// der Summe der DATA-Längen entsprechen — außer die Nachricht ist per Definition rumpflos
-    /// (<paramref name="contentNeverPresent"/>: HEAD-Antworten, 204/304) und es kam kein Content.
+    /// Content-length consistency (RFC 9114 §4.1.2): when a <c>content-length</c> is present, it
+    /// MUST equal the sum of the DATA lengths — unless the message is body-less by definition
+    /// (<paramref name="contentNeverPresent"/>: HEAD responses, 204/304) and no content arrived.
     /// </summary>
     public static string? ValidateContentLength(IReadOnlyList<HeaderField> fields, ulong actualLength, bool contentNeverPresent)
     {
@@ -193,8 +193,8 @@ internal static class Http3MessageValidator
     }
 
     /// <summary>
-    /// Reguläres Feld (RFC 9114 §4.2): Name aus ASCII-„token"-Zeichen in Kleinschreibung, Wert ohne
-    /// NUL/CR/LF; verbindungsspezifische Felder sind verboten, <c>te</c> nur mit „trailers".
+    /// Regular field (RFC 9114 §4.2): name of ASCII "token" characters in lowercase, value without
+    /// NUL/CR/LF; connection-specific fields are forbidden, <c>te</c> only with "trailers".
     /// </summary>
     private static string? ValidateRegularField(HeaderField field)
     {
@@ -205,14 +205,14 @@ internal static class Http3MessageValidator
         if (!IsValidFieldValue(field.Value))
             return "invalid characters in field value";
         if (field.Name is "connection" or "proxy-connection" or "keep-alive" or "transfer-encoding" or "upgrade")
-            return "connection-specific field";     // §4.2 (Transfer-Encoding auch §4.1)
+            return "connection-specific field";     // §4.2 (transfer-encoding also §4.1)
         if (field.Name == "te" && !field.Value.Equals("trailers", StringComparison.OrdinalIgnoreCase))
             return "te value other than trailers";  // §4.2
         return null;
     }
 
     /// <summary>
-    /// Feldname: nicht leer, nur „token"-Zeichen (RFC 9110 §5.1) in Kleinschreibung.
+    /// Field name: non-empty, only "token" characters (RFC 9110 §5.1) in lowercase.
     /// </summary>
     private static bool IsValidFieldName(string name)
     {
@@ -230,7 +230,7 @@ internal static class Http3MessageValidator
     }
 
     /// <summary>
-    /// Feldwert: keine NUL-/CR-/LF-Bytes (§4.1.2 „invalid characters", Schutz vor Request Smuggling).
+    /// Field value: no NUL/CR/LF bytes (§4.1.2 "invalid characters", protection against request smuggling).
     /// </summary>
     private static bool IsValidFieldValue(string value)
     {

@@ -27,25 +27,25 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Ein HTTP/3-Request ist endgültig fehlgeschlagen (abgebrochen, zurückgewiesen, malformed oder die
-/// Verbindung wurde geschlossen). <see cref="IsRetryable"/> zeigt an, ob eine Wiederholung auf einer
-/// neuen Verbindung gefahrlos ist (RFC 9114 §5.2: per GOAWAY zurückgewiesene Requests).
+/// An HTTP/3 request has failed for good (cancelled, rejected, malformed or the connection was
+/// closed). <see cref="IsRetryable"/> indicates whether a repetition on a new connection is safe
+/// (RFC 9114 §5.2: requests rejected via GOAWAY).
 /// </summary>
 public sealed class Http3RequestException(string message, bool isRetryable = false) : Exception(message)
 {
     /// <summary>
-    /// Der Request wurde nachweislich nicht verarbeitet und darf gefahrlos wiederholt werden.
+    /// The request was provably not processed and may be repeated safely.
     /// </summary>
     public bool IsRetryable { get; } = isRetryable;
 }
 
 /// <summary>
-/// Task-basierte Fassade über <see cref="Http3ClientConnection"/>: besitzt den UDP-Socket, betreibt
-/// eine Hintergrund-Pump (Empfang, Timer, Senden) und bildet Requests auf <c>await</c>-bare Tasks ab.
-/// Der deterministische, transport-agnostische Kern bleibt unangetastet — diese Klasse ergänzt nur
-/// Socket, Nebenläufigkeit (alle Kern-Zugriffe strikt serialisiert) und die asynchrone API.
-/// Für fortgeschrittene Features (Datagramme, WebTransport, Extended CONNECT) stehen
-/// <see cref="PerformAsync"/>/<see cref="QueryAsync"/>/<see cref="WaitUntilAsync"/> bereit.
+/// Task-based facade over <see cref="Http3ClientConnection"/>: owns the UDP socket, runs a
+/// background pump (receiving, timers, sending) and maps requests onto <c>await</c>-able tasks.
+/// The deterministic, transport-agnostic core remains untouched — this class only adds the socket,
+/// concurrency (all core accesses strictly serialised) and the asynchronous API.
+/// For advanced features (datagrams, WebTransport, Extended CONNECT) there are
+/// <see cref="PerformAsync"/>/<see cref="QueryAsync"/>/<see cref="WaitUntilAsync"/>.
 /// </summary>
 public sealed class Http3Client : IAsyncDisposable
 {
@@ -53,6 +53,7 @@ public sealed class Http3Client : IAsyncDisposable
 
     private readonly string _host;
     private readonly int _port;
+    private readonly TimeProvider _timeProvider;
     private readonly Http3ClientConnection _connection;
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
@@ -67,33 +68,36 @@ public sealed class Http3Client : IAsyncDisposable
                        int port = 443,
                        CertificateValidationOptions? certificateValidation = null,
                        bool enableDatagrams = false,
-                       ulong webTransportMaxSessions = 0)
+                       ulong webTransportMaxSessions = 0,
+                       TimeProvider? timeProvider = null)
     {
         _host = host;
         _port = port;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _connection = new Http3ClientConnection(host,
             certificateValidation: certificateValidation,
             enableDatagrams: enableDatagrams,
-            webTransportMaxSessions: webTransportMaxSessions);
+            webTransportMaxSessions: webTransportMaxSessions,
+            timeProvider: _timeProvider);
     }
 
     /// <summary>
-    /// Die zugrunde liegende Verbindung. Nach <see cref="ConnectAsync"/> läuft die Hintergrund-Pump —
-    /// dann NICHT mehr direkt zugreifen, sondern über <see cref="PerformAsync"/>/<see cref="QueryAsync"/>
-    /// (die Pump und die API teilen sich den single-threaded Kern über ein Mutex).
+    /// The underlying connection. After <see cref="ConnectAsync"/> the background pump is running —
+    /// do NOT access it directly anymore, but via <see cref="PerformAsync"/>/<see cref="QueryAsync"/>
+    /// (the pump and the API share the single-threaded core through a mutex).
     /// </summary>
     public Http3ClientConnection Connection => _connection;
 
     /// <summary>
-    /// Baut die QUIC/TLS-Verbindung auf (Socket, Handshake, HTTP/3-Initialisierung) und startet die
-    /// Hintergrund-Pump. Wirft <see cref="TimeoutException"/>, wenn der Handshake nicht innerhalb von
-    /// <paramref name="timeout"/> (Standard 10 s) bestätigt ist.
+    /// Establishes the QUIC/TLS connection (socket, handshake, HTTP/3 initialisation) and starts the
+    /// background pump. Throws <see cref="TimeoutException"/> when the handshake is not confirmed
+    /// within <paramref name="timeout"/> (default 10 s).
     /// </summary>
     public async Task ConnectAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_pumpTask is not null)
-            throw new InvalidOperationException("ConnectAsync wurde bereits aufgerufen.");
+            throw new InvalidOperationException("ConnectAsync has already been called.");
 
         IPAddress address = (await Dns.GetHostAddressesAsync(_host, cancellationToken).ConfigureAwait(false))
             .First(a => a.AddressFamily == AddressFamily.InterNetwork);
@@ -112,13 +116,13 @@ public sealed class Http3Client : IAsyncDisposable
         _pumpTask = Task.Run(PumpLoopAsync, CancellationToken.None);
 
         if (!await WaitUntilAsync(c => c.HandshakeConfirmed, timeout ?? TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false))
-            throw new TimeoutException($"QUIC/TLS-Handshake mit {_host}:{_port} nicht abgeschlossen.");
+            throw new TimeoutException($"QUIC/TLS handshake with {_host}:{_port} not completed.");
         await PerformAsync(c => c.InitializeHttp3(), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Windows meldet ein ICMP „Port Unreachable" als SocketException auf dem UDP-Socket — für einen
-    /// Client-Socket abschalten, damit die Pump nicht an einem (noch) toten Server-Port scheitert.
+    /// Windows reports an ICMP "port unreachable" as a SocketException on the UDP socket — disable
+    /// that for a client socket so the pump does not fail on a (still) dead server port.
     /// </summary>
     private static void DisableIcmpUnreachableException(UdpClient udp)
     {
@@ -129,9 +133,9 @@ public sealed class Http3Client : IAsyncDisposable
     }
 
     /// <summary>
-    /// Sendet einen Request und liefert die vollständige Antwort. Bei Abbruch über
-    /// <paramref name="cancellationToken"/> wird der Request per RESET_STREAM/STOP_SENDING
-    /// annulliert (RFC 9114 §4.1.1); endgültige Fehlschläge werfen <see cref="Http3RequestException"/>.
+    /// Sends a request and returns the complete response. On cancellation via
+    /// <paramref name="cancellationToken"/> the request is annulled via RESET_STREAM/STOP_SENDING
+    /// (RFC 9114 §4.1.1); final failures throw <see cref="Http3RequestException"/>.
     /// </summary>
     public async Task<Http3Response> SendAsync(Http3Request request, CancellationToken cancellationToken = default)
     {
@@ -154,13 +158,13 @@ public sealed class Http3Client : IAsyncDisposable
     }
 
     /// <summary>
-    /// Bequemer GET-Request.
+    /// Convenient GET request.
     /// </summary>
     public Task<Http3Response> GetAsync(string path = "/", CancellationToken cancellationToken = default)
         => SendAsync(Http3Request.Get(_host, path), cancellationToken);
 
     /// <summary>
-    /// Bequemer POST-Request mit Rumpf.
+    /// Convenient POST request with a body.
     /// </summary>
     public Task<Http3Response> PostAsync(string path, byte[] body,
                                          string contentType = "application/octet-stream",
@@ -168,8 +172,8 @@ public sealed class Http3Client : IAsyncDisposable
         => SendAsync(Http3Request.Post(_host, path, body, contentType), cancellationToken);
 
     /// <summary>
-    /// Führt eine Aktion serialisiert auf der Verbindung aus (z. B. Datagramm senden, WebTransport
-    /// öffnen) und flusht danach ausstehende QUIC-Datagramme.
+    /// Executes an action serialised on the connection (e.g. sending a datagram, opening
+    /// WebTransport) and flushes pending QUIC datagrams afterwards.
     /// </summary>
     public async Task PerformAsync(Action<Http3ClientConnection> action, CancellationToken cancellationToken = default)
     {
@@ -183,7 +187,7 @@ public sealed class Http3Client : IAsyncDisposable
     }
 
     /// <summary>
-    /// Liest serialisiert einen Wert von der Verbindung.
+    /// Reads a value from the connection, serialised.
     /// </summary>
     public async Task<T> QueryAsync<T>(Func<Http3ClientConnection, T> query, CancellationToken cancellationToken = default)
     {
@@ -193,32 +197,32 @@ public sealed class Http3Client : IAsyncDisposable
     }
 
     /// <summary>
-    /// Wartet (pollend, die Pump arbeitet währenddessen weiter), bis die Bedingung erfüllt ist;
-    /// <c>false</c> bei Ablauf von <paramref name="timeout"/>.
+    /// Waits (polling, the pump keeps working meanwhile) until the condition holds;
+    /// <c>false</c> when <paramref name="timeout"/> expires.
     /// </summary>
     public async Task<bool> WaitUntilAsync(Func<Http3ClientConnection, bool> condition, TimeSpan timeout,
                                            CancellationToken cancellationToken = default)
     {
-        long deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
-        while (Environment.TickCount64 < deadline)
+        long start = _timeProvider.GetTimestamp();
+        while (_timeProvider.GetElapsedTime(start) < timeout)
         {
             if (await QueryAsync(condition, cancellationToken).ConfigureAwait(false))
                 return true;
-            await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(TimeSpan.FromMilliseconds(10), _timeProvider, cancellationToken).ConfigureAwait(false);
         }
         return false;
     }
 
     /// <summary>
-    /// Schließt die Verbindung anständig (CONNECTION_CLOSE mit H3_NO_ERROR) und lässt der Gegenseite
-    /// einen Moment, das Close-Paket zu empfangen.
+    /// Closes the connection properly (CONNECTION_CLOSE with H3_NO_ERROR) and gives the peer a
+    /// moment to receive the close packet.
     /// </summary>
     public async Task CloseAsync(CancellationToken cancellationToken = default)
     {
         if (_disposed || _pumpTask is null)
             return;
         await PerformAsync(c => c.CloseGracefully(), cancellationToken).ConfigureAwait(false);
-        await Task.Delay(50, cancellationToken).ConfigureAwait(false); // Close-Paket noch zustellen
+        await Task.Delay(TimeSpan.FromMilliseconds(50), _timeProvider, cancellationToken).ConfigureAwait(false); // still deliver the close packet
     }
 
     // ---- Pump -----------------------------------------------------------------------------
@@ -231,7 +235,7 @@ public sealed class Http3Client : IAsyncDisposable
             try
             {
                 receive ??= _udp!.ReceiveAsync(_cts.Token).AsTask();
-                Task finished = await Task.WhenAny(receive, Task.Delay(TickInterval, _cts.Token)).ConfigureAwait(false);
+                Task finished = await Task.WhenAny(receive, Task.Delay(TickInterval, _timeProvider, _cts.Token)).ConfigureAwait(false);
 
                 await _mutex.WaitAsync(_cts.Token).ConfigureAwait(false);
                 try
@@ -250,7 +254,7 @@ public sealed class Http3Client : IAsyncDisposable
             }
             catch (OperationCanceledException) { break; }
             catch (ObjectDisposedException) { break; }
-            catch (SocketException) { receive = null; } // z. B. ICMP auf Nicht-Windows — weiterpumpen
+            catch (SocketException) { receive = null; } // e.g. ICMP on non-Windows — keep pumping
         }
     }
 
@@ -258,13 +262,13 @@ public sealed class Http3Client : IAsyncDisposable
     {
         if (_udp is null)
             return;
-        // Verbundener Socket (remote = null) ⇒ Send; auf Linux via GSO gebündelt (RFC-neutral, nur Syscalls).
+        // Connected socket (remote = null) ⇒ Send; on Linux bundled via GSO (RFC-neutral, syscalls only).
         _sender.Send(_udp.Client, _connection.GetDatagramsToSend(), remote: null);
     }
 
     /// <summary>
-    /// Vollendet die Tasks aller Requests, deren Ausgang feststeht (Antwort da oder endgültig
-    /// gescheitert); bei geschlossener Verbindung scheitern alle ausstehenden Requests.
+    /// Completes the tasks of all requests whose outcome is settled (response present or failed for
+    /// good); with a closed connection, all outstanding requests fail.
     /// </summary>
     private void CompleteFinishedRequestsLocked()
     {
@@ -276,13 +280,13 @@ public sealed class Http3Client : IAsyncDisposable
                 tcs.TrySetResult(response!);
             else if (_connection.IsRequestRejected(id))
                 tcs.TrySetException(new Http3RequestException(
-                    "Der Request wurde per GOAWAY zurückgewiesen (RFC 9114 §5.2) — auf neuer Verbindung wiederholbar.", isRetryable: true));
+                    "The request was rejected via GOAWAY (RFC 9114 §5.2) — repeatable on a new connection.", isRetryable: true));
             else if (_connection.IsResponseMalformed(id))
-                tcs.TrySetException(new Http3RequestException("Die Antwort war malformed und wurde verworfen (RFC 9114 §4.1.2)."));
+                tcs.TrySetException(new Http3RequestException("The response was malformed and was discarded (RFC 9114 §4.1.2)."));
             else if (_connection.IsResponseTooLarge(id))
-                tcs.TrySetException(new Http3RequestException("Die Antwort-Header überschreiten unser MAX_FIELD_SECTION_SIZE (RFC 9114 §4.2.2)."));
+                tcs.TrySetException(new Http3RequestException("The response headers exceed our MAX_FIELD_SECTION_SIZE (RFC 9114 §4.2.2)."));
             else if (_connection.IsRequestCancelled(id))
-                tcs.TrySetException(new Http3RequestException("Der Request wurde abgebrochen (RFC 9114 §4.1.1)."));
+                tcs.TrySetException(new Http3RequestException("The request was cancelled (RFC 9114 §4.1.1)."));
             else
                 continue;
             _pending.Remove(id);
@@ -291,7 +295,7 @@ public sealed class Http3Client : IAsyncDisposable
         if (_connection.IsClosing || _connection.IsDraining || _connection.IsIdleTimedOut)
         {
             foreach (TaskCompletionSource<Http3Response> tcs in _pending.Values)
-                tcs.TrySetException(new Http3RequestException("Die Verbindung wurde geschlossen."));
+                tcs.TrySetException(new Http3RequestException("The connection was closed."));
             _pending.Clear();
         }
     }
@@ -322,9 +326,9 @@ public sealed class Http3Client : IAsyncDisposable
         _disposed = true;
         _cts.Cancel();
         if (_pumpTask is { } pump)
-            try { await pump.ConfigureAwait(false); } catch { /* Pump-Ende */ }
+            try { await pump.ConfigureAwait(false); } catch { /* pump shutdown */ }
         foreach (TaskCompletionSource<Http3Response> tcs in _pending.Values)
-            tcs.TrySetException(new Http3RequestException("Der Client wurde geschlossen."));
+            tcs.TrySetException(new Http3RequestException("The client was closed."));
         _pending.Clear();
         _udp?.Dispose();
         _connection.Dispose();

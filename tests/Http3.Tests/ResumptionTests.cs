@@ -26,10 +26,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Session Resumption / PSK (RFC 8446 §2.2/§4.6.1) auf TLS-Ebene, in-process: Verbindung 1 führt einen
-/// vollen Handshake und der Server stellt ein NewSessionTicket aus; Verbindung 2 spielt das Ticket im
-/// pre_shared_key zurück, der Server prüft den Binder und resümiert (ohne Zertifikat). Prüft zugleich die
-/// graceful Fallback-Wege, wenn der Server das Ticket nicht kennt.
+/// Session resumption / PSK (RFC 8446 §2.2/§4.6.1) at the TLS level, in-process: connection 1 performs
+/// a full handshake and the server issues a NewSessionTicket; connection 2 plays the ticket back in
+/// pre_shared_key, the server checks the binder and resumes (without a certificate). Also checks the
+/// graceful fallback paths when the server does not know the ticket.
 /// </summary>
 [TestFixture]
 public class ResumptionTests
@@ -43,27 +43,27 @@ public class ResumptionTests
         var cache = new ServerResumptionCache();
         var trusting = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
 
-        // Verbindung 1: voller Handshake; der Server stellt anschließend ein Ticket aus.
+        // Connection 1: full handshake; the server then issues a ticket.
         var client1 = new TlsClientHandshake("localhost", Tp, certificateValidation: trusting);
         using var server1 = new TlsServerHandshake(cert, Tp, resumptionCache: cache);
         RunHandshake(client1, server1);
         Assert.That(client1.ServerCertificateValid, Is.True);
         Assert.That(client1.ResumptionAccepted, Is.False);
 
-        // NewSessionTicket kommt post-Handshake auf Application-Level – einmal nachpumpen.
+        // The NewSessionTicket arrives post-handshake at application level — pump once more.
         Pump(server1, client1);
         Assert.That(client1.NewSessionTickets, Is.Not.Empty);
         ResumptionTicket ticket = client1.NewSessionTickets[0];
         client1.Dispose();
 
-        // Verbindung 2: Resumption mit dem Ticket.
+        // Connection 2: resumption with the ticket.
         var client2 = new TlsClientHandshake("localhost", Tp, certificateValidation: trusting, resumptionTicket: ticket);
         using var server2 = new TlsServerHandshake(cert, Tp, resumptionCache: cache);
         RunHandshake(client2, server2);
 
-        Assert.That(client2.ResumptionAccepted, Is.True, "Client muss die PSK-Annahme (selected_identity) erkennen.");
-        Assert.That(server2.ResumptionAccepted, Is.True, "Server muss den PSK-Binder akzeptiert haben.");
-        Assert.That(client2.ServerCertificateValid, Is.False); // Resumption ⇒ kein Zertifikat
+        Assert.That(client2.ResumptionAccepted, Is.True, "The client must detect the PSK acceptance (selected_identity).");
+        Assert.That(server2.ResumptionAccepted, Is.True, "The server must have accepted the PSK binder.");
+        Assert.That(client2.ServerCertificateValid, Is.False); // resumption ⇒ no certificate
         AssertMatchingSecrets(client2, server2);
         client2.Dispose();
     }
@@ -82,14 +82,14 @@ public class ResumptionTests
         ResumptionTicket ticket = client1.NewSessionTickets[0];
         client1.Dispose();
 
-        // Zweiter Server mit LEEREM Store ⇒ kennt das Ticket nicht ⇒ voller Handshake mit Zertifikat.
+        // Second server with an EMPTY store ⇒ does not know the ticket ⇒ full handshake with certificate.
         var client2 = new TlsClientHandshake("localhost", Tp, certificateValidation: trusting, resumptionTicket: ticket);
         using var server2 = new TlsServerHandshake(cert, Tp, resumptionCache: new ServerResumptionCache());
         RunHandshake(client2, server2);
 
         Assert.That(client2.ResumptionAccepted, Is.False);
         Assert.That(server2.ResumptionAccepted, Is.False);
-        Assert.That(client2.ServerCertificateValid, Is.True, "Ohne Resumption muss das Zertifikat geprüft werden.");
+        Assert.That(client2.ServerCertificateValid, Is.True, "Without resumption the certificate must be validated.");
         AssertMatchingSecrets(client2, server2);
         client2.Dispose();
     }
@@ -102,8 +102,8 @@ public class ResumptionTests
             Pump(client, server);
             Pump(server, client);
         }
-        Assert.That(client.IsComplete, Is.True, "Client-Handshake unvollständig.");
-        Assert.That(server.IsComplete, Is.True, "Server-Handshake unvollständig.");
+        Assert.That(client.IsComplete, Is.True, "Client handshake incomplete.");
+        Assert.That(server.IsComplete, Is.True, "Server handshake incomplete.");
     }
 
     private static void AssertMatchingSecrets(ITlsHandshake client, ITlsHandshake server)

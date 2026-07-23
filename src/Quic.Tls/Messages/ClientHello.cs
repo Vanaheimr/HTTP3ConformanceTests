@@ -26,17 +26,17 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 /// <summary>
-/// Konfiguration für einen ClientHello (RFC 8446 §4.1.2, für QUIC/HTTP-3 zugeschnitten).
+/// Configuration for a ClientHello (RFC 8446 §4.1.2, tailored to QUIC/HTTP-3).
 /// </summary>
 public sealed class ClientHelloOptions
 {
     /// <summary>
-    /// Server-Name für die SNI-Extension (z. B. "cloudflare-quic.com").
+    /// Server name for the SNI extension (e.g. "cloudflare-quic.com").
     /// </summary>
     public required string ServerName { get; init; }
 
     /// <summary>
-    /// ALPN-Protokolle; für HTTP/3 zwingend "h3".
+    /// ALPN protocols; for HTTP/3 mandatorily "h3".
     /// </summary>
     public IReadOnlyList<string> AlpnProtocols { get; init; } = ["h3"];
 
@@ -55,62 +55,64 @@ public sealed class ClientHelloOptions
         SignatureScheme.RsaPssRsaeSha512,
         SignatureScheme.EcdsaSecp384r1Sha384,
         SignatureScheme.RsaPkcs1Sha256,
-        // Post-Quantum (draft-ietf-tls-mldsa): wir VERIFIZIEREN ML-DSA-signierte CertificateVerify.
+        // Post-quantum (draft-ietf-tls-mldsa): we VERIFY ML-DSA-signed CertificateVerify.
         SignatureScheme.MLDsa65,
         SignatureScheme.MLDsa44,
         SignatureScheme.MLDsa87,
     ];
 
     /// <summary>
-    /// Die mitgesendeten Key Shares (Gruppe + öffentlicher Schlüssel), in Präferenzreihenfolge.
+    /// The key shares sent along (group + public key), in order of preference.
     /// </summary>
     public required IReadOnlyList<KeyShareEntry> KeyShares { get; init; }
 
     /// <summary>
-    /// Opake Bytes der QUIC-Transport-Parameter (von der QUIC-Schicht kodiert).
+    /// Opaque bytes of the QUIC transport parameters (encoded by the QUIC layer).
     /// </summary>
     public required ReadOnlyMemory<byte> QuicTransportParameters { get; init; }
 
     /// <summary>
-    /// 32-Byte-Zufall; wenn leer, wird kryptografisch sicher erzeugt.
+    /// 32-byte random; when empty, generated cryptographically securely.
     /// </summary>
     public ReadOnlyMemory<byte> Random { get; init; }
 
     /// <summary>
-    /// Optionales PSK-Angebot für Session Resumption (RFC 8446 §4.2.11). Ist es gesetzt, schreibt der Builder
-    /// zusätzlich psk_key_exchange_modes und – als <b>letzte</b> Extension – pre_shared_key inklusive Binder.
+    /// Optional PSK offer for session resumption (RFC 8446 §4.2.11). When set, the builder
+    /// additionally writes psk_key_exchange_modes and – as the <b>last</b> extension – pre_shared_key
+    /// including the binder.
     /// </summary>
     public PskIdentity? PskIdentity { get; init; }
 
     /// <summary>
-    /// Länge eines PSK-Binders in Byte (= Hash-Länge der Suite, 32/48). Nur mit <see cref="PskIdentity"/>.
+    /// Length of a PSK binder in bytes (= hash length of the suite, 32/48). Only with <see cref="PskIdentity"/>.
     /// </summary>
     public int PskBinderLength { get; init; }
 
     /// <summary>
-    /// Berechnet den PSK-Binder über den abgeschnittenen ClientHello (bis vor die Binder-Liste, RFC 8446
-    /// §4.2.11.2). Der Aufrufer kapselt hier <c>HMAC(finished_key(binder_key), Transcript-Hash(truncated))</c>.
+    /// Computes the PSK binder over the truncated ClientHello (up to just before the binder list,
+    /// RFC 8446 §4.2.11.2). The caller encapsulates
+    /// <c>HMAC(finished_key(binder_key), transcript hash(truncated))</c> here.
     /// </summary>
     public Func<ReadOnlyMemory<byte>, byte[]>? ComputeBinder { get; init; }
 
     /// <summary>
-    /// Fügt (für 0-RTT, Phase B) die leere early_data-Extension hinzu. Nur mit gesetztem PSK sinnvoll.
+    /// Adds (for 0-RTT, phase B) the empty early_data extension. Only meaningful with a PSK set.
     /// </summary>
     public bool OfferEarlyData { get; init; }
 }
 
 /// <summary>
-/// Ein Key-Share-Eintrag: Named Group + öffentlicher Schlüssel (Wire-Format der Gruppe).
+/// A key-share entry: named group + public key (the group's wire format).
 /// </summary>
 public readonly record struct KeyShareEntry(NamedGroup Group, ReadOnlyMemory<byte> PublicKey);
 
 /// <summary>
-/// Eine PSK-Identity im pre_shared_key-Angebot: das Ticket + sein verschleiertes Alter (RFC 8446 §4.2.11).
+/// A PSK identity in the pre_shared_key offer: the ticket + its obfuscated age (RFC 8446 §4.2.11).
 /// </summary>
 public readonly record struct PskIdentity(ReadOnlyMemory<byte> Identity, uint ObfuscatedTicketAge);
 
 /// <summary>
-/// Serialisiert einen ClientHello als vollständige TLS-Handshake-Nachricht (mit Typ + 3-Byte-Länge).
+/// Serialises a ClientHello as a complete TLS handshake message (with type + 3-byte length).
 /// </summary>
 public static class ClientHello
 {
@@ -121,7 +123,7 @@ public static class ClientHello
         var w = new BufferWriter(512);
         try
         {
-            // Handshake-Header: msg_type (1) + length (3, nachträglich).
+            // Handshake header: msg_type (1) + length (3, filled in afterwards).
             w.WriteByte((byte)HandshakeType.ClientHello);
             int bodyLengthOffset = TlsWriter.BeginVector(ref w, prefixBytes: 3);
 
@@ -129,8 +131,8 @@ public static class ClientHello
 
             TlsWriter.EndVector(ref w, bodyLengthOffset, prefixBytes: 3);
 
-            // PSK-Binder (RFC 8446 §4.2.11.2): HMAC über den ClientHello bis vor die Binder-Liste – alle
-            // Längenfelder sind bereits so gesetzt, als wären die Binder vorhanden. Erst jetzt patchbar.
+            // PSK binder (RFC 8446 §4.2.11.2): HMAC over the ClientHello up to just before the binder
+            // list – all length fields are already set as if the binders were present. Only patchable now.
             if (binderValueOffset >= 0 && options.ComputeBinder is not null)
             {
                 ReadOnlyMemory<byte> truncated = w.WrittenSpan[..binderListOffset].ToArray();
@@ -149,10 +151,10 @@ public static class ClientHello
     private static void WriteBody(ref BufferWriter w, ClientHelloOptions options,
         out int binderListOffset, out int binderValueOffset)
     {
-        // legacy_version = TLS 1.2 (0x0303) – die echte Version steckt in supported_versions.
+        // legacy_version = TLS 1.2 (0x0303) – the real version is in supported_versions.
         w.WriteUInt16(TlsVersions.Tls12);
 
-        // Random (32 Byte).
+        // Random (32 bytes).
         Span<byte> random = stackalloc byte[32];
         if (options.Random.Length == 32)
             options.Random.Span.CopyTo(random);
@@ -160,20 +162,20 @@ public static class ClientHello
             RandomNumberGenerator.Fill(random);
         w.WriteBytes(random);
 
-        // legacy_session_id: leer – QUIC nutzt keinen TLS-Compatibility-Mode (RFC 9001 §8.4).
+        // legacy_session_id: empty – QUIC uses no TLS compatibility mode (RFC 9001 §8.4).
         w.WriteByte(0);
 
-        // cipher_suites (2-Byte-Längenpräfix).
+        // cipher_suites (2-byte length prefix).
         int csOffset = TlsWriter.BeginVector(ref w, 2);
         foreach (CipherSuite suite in options.CipherSuites)
             w.WriteUInt16((ushort)suite);
         TlsWriter.EndVector(ref w, csOffset, 2);
 
-        // legacy_compression_methods: nur "null" (0), 1-Byte-Länge.
+        // legacy_compression_methods: only "null" (0), 1-byte length.
         w.WriteByte(1);
         w.WriteByte(0);
 
-        // extensions (2-Byte-Längenpräfix).
+        // extensions (2-byte length prefix).
         int extOffset = TlsWriter.BeginVector(ref w, 2);
         WriteExtensions(ref w, options, out binderListOffset, out binderValueOffset);
         TlsWriter.EndVector(ref w, extOffset, 2);
@@ -193,11 +195,11 @@ public static class ClientHello
         WriteAlpn(ref w, options.AlpnProtocols);
         TlsWriter.WriteExtension(ref w, ExtensionType.QuicTransportParameters, options.QuicTransportParameters.Span);
 
-        // psk_key_exchange_modes IMMER senden: signalisiert Resumption-Fähigkeit, damit der Server auch ohne
-        // aktuelles PSK-Angebot ein NewSessionTicket ausstellt (RFC 8446 §4.2.9).
+        // ALWAYS send psk_key_exchange_modes: signals resumption capability so the server issues a
+        // NewSessionTicket even without a current PSK offer (RFC 8446 §4.2.9).
         WritePskKeyExchangeModes(ref w);
 
-        // Bei Resumption zusätzlich: optional early_data und pre_shared_key als ALLERLETZTE Extension.
+        // With resumption additionally: optional early_data and pre_shared_key as the VERY LAST extension.
         if (options.PskIdentity is { } identity)
         {
             if (options.OfferEarlyData)
@@ -231,7 +233,7 @@ public static class ClientHello
             w.WriteUInt32(identity.ObfuscatedTicketAge);
             TlsWriter.EndVector(ref w, idsLen, 2);
 
-            // binders<33..2^16-1> – Werte zunächst 0; sie liegen NACH der Trunkierungsgrenze und werden gepatcht.
+            // binders<33..2^16-1> – values initially 0; they lie AFTER the truncation boundary and get patched.
             binderListOffset = w.Length;
             int bindersLen = TlsWriter.BeginVector(ref w, 2);
             w.WriteByte(checked((byte)binderLength)); // PskBinderEntry<32..255>
@@ -289,7 +291,7 @@ public static class ClientHello
         w.WriteUInt16((ushort)ExtensionType.SupportedVersions);
         int extLen = TlsWriter.BeginVector(ref w, 2);
         {
-            int listLen = TlsWriter.BeginVector(ref w, 1); // 1-Byte-Länge (ClientHello-Form)
+            int listLen = TlsWriter.BeginVector(ref w, 1); // 1-byte length (ClientHello form)
             w.WriteUInt16(TlsVersions.Tls13);
             TlsWriter.EndVector(ref w, listLen, 1);
         }

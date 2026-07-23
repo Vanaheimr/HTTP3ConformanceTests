@@ -53,7 +53,7 @@ public class PacketNumberSpaceTests
         AckFrame? ack = space.BuildAck();
         Assert.That(ack, Is.Not.Null);
         Assert.That(ack!.LargestAcknowledged, Is.EqualTo(1UL));
-        Assert.That(space.AckPending, Is.False); // nach dem Bauen quittiert
+        Assert.That(space.AckPending, Is.False); // acknowledged after building
         Assert.That(space.LargestReceived, Is.EqualTo(1));
     }
 
@@ -65,7 +65,7 @@ public class PacketNumberSpaceTests
 
         space.OnAckReceived(5);
         Assert.That(space.LargestAckedByPeer, Is.EqualTo(5));
-        space.OnAckReceived(3); // kleinerer Wert ändert nichts
+        space.OnAckReceived(3); // a smaller value changes nothing
         Assert.That(space.LargestAckedByPeer, Is.EqualTo(5));
     }
 }
@@ -80,21 +80,21 @@ public class TlsClientHandshakeTests
 
         Assert.That(tls.TryGetOutgoingCrypto(out EncryptionLevel level, out byte[] data), Is.True);
         Assert.That(level, Is.EqualTo(EncryptionLevel.Initial));
-        Assert.That(data[0], Is.EqualTo(0x01)); // Handshake-Typ ClientHello
-        Assert.That(tls.TryGetOutgoingCrypto(out _, out _), Is.False); // nur eine Nachricht
+        Assert.That(data[0], Is.EqualTo(0x01)); // handshake type ClientHello
+        Assert.That(tls.TryGetOutgoingCrypto(out _, out _), Is.False); // only one message
     }
 
     [Test]
     public void ProvideServerHello_DerivesHandshakeSecrets()
     {
-        // Server-Key-Share aus einem echten P-256-Schlüsselpaar.
+        // Server key share from a real P-256 key pair.
         using var serverKex = EcdheKeyExchange.Create(NamedGroup.Secp256r1);
         byte[] serverHello = BuildServerHello((ushort)CipherSuite.Aes128GcmSha256,
             (ushort)NamedGroup.Secp256r1, serverKex.PublicKey);
 
         using var tls = new TlsClientHandshake("example.com", new byte[] { 0x01, 0x01, 0x00 });
         tls.Start();
-        tls.TryGetOutgoingCrypto(out _, out _); // ClientHello abholen
+        tls.TryGetOutgoingCrypto(out _, out _); // fetch the ClientHello
 
         tls.ProvideCrypto(EncryptionLevel.Initial, serverHello);
 

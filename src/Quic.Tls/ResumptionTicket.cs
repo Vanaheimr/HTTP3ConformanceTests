@@ -18,11 +18,11 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 
 /// <summary>
-/// Ein clientseitig gespeichertes Session-Ticket (RFC 8446 §2.2/§4.6.1) für die spätere Wiederaufnahme
-/// (Resumption / PSK). Enthält die aus dem NewSessionTicket abgeleitete Resumption-PSK, die Ticket-Identity,
-/// den Verschleierungs-Offset für das Ticket-Alter, die Cipher-Suite (die PSK ist an ihren Hash gebunden)
-/// sowie den Empfangszeitpunkt. <see cref="MaxEarlyDataSize"/> und <see cref="PeerTransportParameters"/>
-/// werden erst für 0-RTT (Phase B) gebraucht.
+/// A client-side stored session ticket (RFC 8446 §2.2/§4.6.1) for later resumption (PSK).
+/// Contains the resumption PSK derived from the NewSessionTicket, the ticket identity,
+/// the obfuscation offset for the ticket age, the cipher suite (the PSK is bound to its hash)
+/// and the time of receipt. <see cref="MaxEarlyDataSize"/> and <see cref="PeerTransportParameters"/>
+/// are only needed for 0-RTT (phase B).
 /// </summary>
 public sealed class ResumptionTicket
 {
@@ -59,13 +59,13 @@ public sealed class ResumptionTicket
     }
 
     /// <summary>
-    /// <c>true</c>, wenn 0-RTT-Daten mit diesem Ticket zulässig sind (Server kündigte max_early_data_size an).
+    /// <c>true</c> when 0-RTT data is permitted with this ticket (the server announced max_early_data_size).
     /// </summary>
     public bool AllowsEarlyData => MaxEarlyDataSize > 0;
 
     /// <summary>
-    /// Das verschleierte Ticket-Alter (RFC 8446 §4.2.11.1): <c>(verstrichene ms + age_add) mod 2^32</c>.
-    /// Der Server rechnet den <see cref="AgeAdd"/> wieder heraus und prüft das Alter gegen die Lebensdauer.
+    /// The obfuscated ticket age (RFC 8446 §4.2.11.1): <c>(elapsed ms + age_add) mod 2^32</c>.
+    /// The server subtracts the <see cref="AgeAdd"/> again and checks the age against the lifetime.
     /// </summary>
     public uint ObfuscatedTicketAge(DateTimeOffset now)
     {

@@ -24,24 +24,24 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// Ergebnis eines Frame-Parse-Vorgangs.
+/// Result of a frame parse operation.
 /// </summary>
 public enum FrameParseResult
 {
     Ok,
     /// <summary>
-    /// Ein Frame war abgeschnitten oder syntaktisch ungültig ⇒ FRAME_ENCODING_ERROR.
+    /// A frame was truncated or syntactically invalid ⇒ FRAME_ENCODING_ERROR.
     /// </summary>
     EncodingError,
     /// <summary>
-    /// Unbekannter Frame-Typ ⇒ FRAME_ENCODING_ERROR (Frames sind nicht selbstbeschreibend).
+    /// Unknown frame type ⇒ FRAME_ENCODING_ERROR (frames are not self-describing).
     /// </summary>
     UnknownFrameType,
 }
 
 /// <summary>
-/// Zerlegt einen entschlüsselten Paket-Payload in seine Frame-Folge (RFC 9000, §12.4).
-/// Aufeinanderfolgende PADDING-Bytes werden zu einem <see cref="PaddingFrame"/> zusammengefasst.
+/// Splits a decrypted packet payload into its frame sequence (RFC 9000, §12.4).
+/// Consecutive PADDING bytes are merged into one <see cref="PaddingFrame"/>.
 /// </summary>
 public static class FrameParser
 {
@@ -52,7 +52,7 @@ public static class FrameParser
 
         while (!reader.IsEmpty)
         {
-            // PADDING (0x00) als Lauflänge zusammenfassen.
+            // Merge PADDING (0x00) as a run length.
             if (payload[reader.Position] == FrameType.Padding)
             {
                 int start = reader.Position;
@@ -203,7 +203,7 @@ public static class FrameParser
     }
 
     /// <summary>
-    /// Serialisiert eine Frame-Folge in einen bereits vorhandenen Writer (Hot Path).
+    /// Serialises a frame sequence into an existing writer (hot path).
     /// </summary>
     public static void WriteAll(ref BufferWriter writer, IEnumerable<Frame> frames)
     {
@@ -212,8 +212,8 @@ public static class FrameParser
     }
 
     /// <summary>
-    /// Bequemlichkeit: serialisiert eine Frame-Folge in ein frisches Byte-Array. Verwaltet den
-    /// (mit <c>ref</c> unvereinbaren) <c>using</c>-Konflikt intern per try/finally.
+    /// Convenience: serialises a frame sequence into a fresh byte array. Manages the
+    /// <c>using</c> conflict (incompatible with <c>ref</c>) internally via try/finally.
     /// </summary>
     public static byte[] Serialize(IEnumerable<Frame> frames)
     {

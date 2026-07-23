@@ -24,7 +24,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// MAX_DATA-Frame (Typ 0x10, RFC 9000 §19.9): erhöht das Verbindungs-Flow-Control-Limit.
+/// MAX_DATA frame (type 0x10, RFC 9000 §19.9): raises the connection flow-control limit.
 /// </summary>
 public sealed record MaxDataFrame(ulong MaximumData) : Frame
 {
@@ -42,7 +42,7 @@ public sealed record MaxDataFrame(ulong MaximumData) : Frame
 }
 
 /// <summary>
-/// MAX_STREAM_DATA-Frame (Typ 0x11, RFC 9000 §19.10): erhöht das Limit eines Streams.
+/// MAX_STREAM_DATA frame (type 0x11, RFC 9000 §19.10): raises the limit of a stream.
 /// </summary>
 public sealed record MaxStreamDataFrame(ulong StreamId, ulong MaximumStreamData) : Frame
 {
@@ -64,7 +64,7 @@ public sealed record MaxStreamDataFrame(ulong StreamId, ulong MaximumStreamData)
 }
 
 /// <summary>
-/// MAX_STREAMS-Frame (Typ 0x12 bidi / 0x13 uni, RFC 9000 §19.11).
+/// MAX_STREAMS frame (type 0x12 bidi / 0x13 uni, RFC 9000 §19.11).
 /// </summary>
 public sealed record MaxStreamsFrame(bool Bidirectional, ulong MaximumStreams) : Frame
 {
@@ -82,7 +82,7 @@ public sealed record MaxStreamsFrame(bool Bidirectional, ulong MaximumStreams) :
 }
 
 /// <summary>
-/// DATA_BLOCKED-Frame (Typ 0x14, RFC 9000 §19.12): Sender ist am Verbindungslimit blockiert.
+/// DATA_BLOCKED frame (type 0x14, RFC 9000 §19.12): the sender is blocked at the connection limit.
 /// </summary>
 public sealed record DataBlockedFrame(ulong MaximumData) : Frame
 {
@@ -100,7 +100,7 @@ public sealed record DataBlockedFrame(ulong MaximumData) : Frame
 }
 
 /// <summary>
-/// STREAM_DATA_BLOCKED-Frame (Typ 0x15, RFC 9000 §19.13): am Stream-Limit blockiert.
+/// STREAM_DATA_BLOCKED frame (type 0x15, RFC 9000 §19.13): blocked at the stream limit.
 /// </summary>
 public sealed record StreamDataBlockedFrame(ulong StreamId, ulong MaximumStreamData) : Frame
 {
@@ -122,7 +122,7 @@ public sealed record StreamDataBlockedFrame(ulong StreamId, ulong MaximumStreamD
 }
 
 /// <summary>
-/// STREAMS_BLOCKED-Frame (Typ 0x16 bidi / 0x17 uni, RFC 9000 §19.14).
+/// STREAMS_BLOCKED frame (type 0x16 bidi / 0x17 uni, RFC 9000 §19.14).
 /// </summary>
 public sealed record StreamsBlockedFrame(bool Bidirectional, ulong MaximumStreams) : Frame
 {
@@ -140,7 +140,7 @@ public sealed record StreamsBlockedFrame(bool Bidirectional, ulong MaximumStream
 }
 
 /// <summary>
-/// RESET_STREAM-Frame (Typ 0x04, RFC 9000 §19.4): bricht die Sendeseite eines Streams ab.
+/// RESET_STREAM frame (type 0x04, RFC 9000 §19.4): aborts the send side of a stream.
 /// </summary>
 public sealed record ResetStreamFrame(ulong StreamId, ulong ApplicationErrorCode, ulong FinalSize) : Frame
 {
@@ -163,10 +163,10 @@ public sealed record ResetStreamFrame(ulong StreamId, ulong ApplicationErrorCode
 }
 
 /// <summary>
-/// RESET_STREAM_AT-Frame (Typ 0x24, draft-ietf-quic-reliable-stream-reset §4): wie RESET_STREAM, aber mit
-/// einer zusätzlichen <paramref name="ReliableSize"/> — der Sender garantiert die zuverlässige Zustellung
-/// der ersten <paramref name="ReliableSize"/> Bytes, obwohl der Stream zurückgesetzt wird. Reliable Size 0
-/// ist gleichbedeutend mit einem gewöhnlichen RESET_STREAM.
+/// RESET_STREAM_AT frame (type 0x24, draft-ietf-quic-reliable-stream-reset §4): like RESET_STREAM,
+/// but with an additional <paramref name="ReliableSize"/> — the sender guarantees reliable delivery
+/// of the first <paramref name="ReliableSize"/> bytes although the stream is being reset. Reliable
+/// size 0 is equivalent to an ordinary RESET_STREAM.
 /// </summary>
 public sealed record ResetStreamAtFrame(ulong StreamId, ulong ApplicationErrorCode, ulong FinalSize, ulong ReliableSize) : Frame
 {
@@ -191,9 +191,9 @@ public sealed record ResetStreamAtFrame(ulong StreamId, ulong ApplicationErrorCo
 }
 
 /// <summary>
-/// DATAGRAM-Frame (Typ 0x30/0x31, RFC 9221 §4): unzuverlässige Anwendungsdaten — nicht retransmittiert,
-/// nicht flow-controlled, aber ack-eliciting und congestion-controlled. Wir senden stets die Variante
-/// MIT Length-Feld (0x31); geparst werden beide (bei 0x30 reicht die Nutzlast bis ans Paketende).
+/// DATAGRAM frame (type 0x30/0x31, RFC 9221 §4): unreliable application data — not retransmitted,
+/// not flow-controlled, but ack-eliciting and congestion-controlled. We always send the variant
+/// WITH the length field (0x31); both are parsed (for 0x30 the payload extends to the end of the packet).
 /// </summary>
 public sealed record DatagramFrame(ReadOnlyMemory<byte> Data) : Frame
 {
@@ -215,7 +215,7 @@ public sealed record DatagramFrame(ReadOnlyMemory<byte> Data) : Frame
             count = (int)length;
         }
         else
-            count = reader.Remaining; // LEN-Bit 0: Daten bis zum Paketende (RFC 9221 §4)
+            count = reader.Remaining; // LEN bit 0: data up to the end of the packet (RFC 9221 §4)
         if (!reader.TryReadBytes(count, out ReadOnlySpan<byte> data))
             return false;
         frame = new DatagramFrame(data.ToArray());
@@ -224,7 +224,7 @@ public sealed record DatagramFrame(ReadOnlyMemory<byte> Data) : Frame
 }
 
 /// <summary>
-/// STOP_SENDING-Frame (Typ 0x05, RFC 9000 §19.5): bittet den Peer, das Senden einzustellen.
+/// STOP_SENDING frame (type 0x05, RFC 9000 §19.5): asks the peer to stop sending.
 /// </summary>
 public sealed record StopSendingFrame(ulong StreamId, ulong ApplicationErrorCode) : Frame
 {

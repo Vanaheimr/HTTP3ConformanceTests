@@ -30,8 +30,8 @@ public class ServerHelloTests
     [Test]
     public void Parse_MinimalServerHello_ExtractsKeyScheduleFields()
     {
-        // Handgebauter ServerHello: cipher=0x1301, supported_versions=0x0304,
-        // key_share = secp256r1 (0x0017) mit 2-Byte-Dummy-Key aabb.
+        // Hand-built ServerHello: cipher=0x1301, supported_versions=0x0304,
+        // key_share = secp256r1 (0x0017) with a 2-byte dummy key aabb.
         //   Body: legacy_version(0303) random(32×00) sessid(00) cipher(1301) comp(00)
         //         extlen(0010) [supported_versions 002b0002 0304][key_share 00330006 0017 0002 aabb]
         string supportedVersions = "002b" + "0002" + "0304";
@@ -57,7 +57,7 @@ public class ServerHelloTests
     [Test]
     public void Parse_DetectsHelloRetryRequest()
     {
-        // Random == SHA-256("HelloRetryRequest"); minimaler Rest mit leeren Extensions.
+        // Random == SHA-256("HelloRetryRequest"); minimal remainder with empty extensions.
         string hrrRandom = "cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c";
         string body = "0303" + hrrRandom + "00" + "1301" + "00" + "0000";
         int bodyLen = body.Length / 2;

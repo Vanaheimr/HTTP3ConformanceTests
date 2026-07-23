@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Hilfsfunktionen, um die (oft mit Leerzeichen/Umbrüchen gruppierten) RFC-Hex-Vektoren zu parsen.
+/// Helper functions to parse the RFC hex vectors (often grouped with spaces/line breaks).
 /// </summary>
 internal static class Hex
 {

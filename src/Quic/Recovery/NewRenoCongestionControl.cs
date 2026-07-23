@@ -18,8 +18,8 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Recovery;
 
 /// <summary>
-/// NewReno-Congestion-Control nach RFC 9002 §7 / Anhang B: Slow Start, Congestion Avoidance und
-/// Recovery über ein Congestion Window (in Bytes). Bewusst schlicht gehalten (kein CUBIC/BBR).
+/// NewReno congestion control per RFC 9002 §7 / appendix B: slow start, congestion avoidance and
+/// recovery over a congestion window (in bytes). Deliberately kept simple (no CUBIC/BBR).
 /// </summary>
 public sealed class NewRenoCongestionControl
 {
@@ -27,12 +27,12 @@ public sealed class NewRenoCongestionControl
     private const double LossReductionFactor = 0.5;
 
     /// <summary>
-    /// Minimales Fenster (RFC 9002: kMinimumWindow = 2 · max_datagram_size).
+    /// Minimum window (RFC 9002: kMinimumWindow = 2 · max_datagram_size).
     /// </summary>
     public static int MinimumWindow => 2 * MaxDatagramSize;
 
     /// <summary>
-    /// Startfenster (RFC 9002: kInitialWindow = min(10·MDS, max(2·MDS, 14720))).
+    /// Initial window (RFC 9002: kInitialWindow = min(10·MDS, max(2·MDS, 14720))).
     /// </summary>
     public static int InitialWindow => Math.Min(10 * MaxDatagramSize, Math.Max(2 * MaxDatagramSize, 14720));
 
@@ -45,30 +45,30 @@ public sealed class NewRenoCongestionControl
     public bool InSlowStart => CongestionWindow < SlowStartThreshold;
 
     /// <summary>
-    /// Es darf gesendet werden, solange die Daten im Flug unter dem Fenster liegen.
+    /// Sending is allowed as long as the bytes in flight stay below the window.
     /// </summary>
     public bool CanSend(int bytes) => BytesInFlight + bytes <= CongestionWindow;
 
     /// <summary>
-    /// Verfügbares Sendevolumen (Fenster minus Daten im Flug).
+    /// Available send volume (window minus bytes in flight).
     /// </summary>
     public long Available => Math.Max(0, CongestionWindow - BytesInFlight);
 
     public void OnPacketSent(int bytes) => BytesInFlight += bytes;
 
     /// <summary>
-    /// Beim Verwerfen eines Packet-Number-Space (RFC 9002 §6.4): Bytes im Flug ohne Congestion-Event abziehen.
+    /// When discarding a packet-number space (RFC 9002 §6.4): subtract bytes in flight without a congestion event.
     /// </summary>
     public void OnPacketDiscarded(int bytes) => BytesInFlight = Math.Max(0, BytesInFlight - bytes);
 
     /// <summary>
-    /// Ein Paket wurde bestätigt (RFC 9002 §7.3.1/§B.5).
+    /// A packet was acknowledged (RFC 9002 §7.3.1/§B.5).
     /// </summary>
     public void OnPacketAcked(int bytes, long sentTimeTicks)
     {
         BytesInFlight = Math.Max(0, BytesInFlight - bytes);
 
-        // Bestätigungen für vor Recovery gesendete Pakete erhöhen das Fenster nicht.
+        // Acknowledgments for packets sent before recovery do not increase the window.
         if (_recoveryStartTimeTicks >= 0 && sentTimeTicks <= _recoveryStartTimeTicks)
             return;
 
@@ -79,7 +79,7 @@ public sealed class NewRenoCongestionControl
     }
 
     /// <summary>
-    /// Paketverlust erkannt (RFC 9002 §7.3.2/§B.6): Fenster halbieren, Recovery beginnen.
+    /// Packet loss detected (RFC 9002 §7.3.2/§B.6): halve the window, begin recovery.
     /// </summary>
     public void OnPacketsLost(int bytes, long largestLostSentTimeTicks, long nowTicks)
     {
@@ -88,16 +88,16 @@ public sealed class NewRenoCongestionControl
     }
 
     /// <summary>
-    /// Reaktion auf eine ECN-CE-Meldung (RFC 9002 §7.3): Der Sender behandelt einen gestiegenen CE-Zähler wie
-    /// einen Verlust – Fenster halbieren, Recovery beginnen. <paramref name="largestAckedSentTimeTicks"/> ist der
-    /// Sendezeitpunkt des größten quittierten Pakets, damit pro Recovery-Periode nur einmal verkleinert wird.
+    /// Reaction to an ECN-CE report (RFC 9002 §7.3): the sender treats an increased CE counter like a
+    /// loss – halve the window, begin recovery. <paramref name="largestAckedSentTimeTicks"/> is the
+    /// send time of the largest acknowledged packet, so the window shrinks only once per recovery period.
     /// </summary>
     public void OnEcnCongestionEvent(long largestAckedSentTimeTicks, long nowTicks)
         => OnCongestionEvent(largestAckedSentTimeTicks, nowTicks);
 
     private void OnCongestionEvent(long sentTimeTicks, long nowTicks)
     {
-        // Innerhalb einer laufenden Recovery-Periode kein erneutes Verkleinern.
+        // No renewed shrinking within an ongoing recovery period.
         if (_recoveryStartTimeTicks >= 0 && sentTimeTicks <= _recoveryStartTimeTicks)
             return;
 
@@ -107,9 +107,9 @@ public sealed class NewRenoCongestionControl
     }
 
     /// <summary>
-    /// Persistent Congestion erkannt (RFC 9002 §7.6/§B.8): Das Fenster kollabiert auf das Minimum und
-    /// die Recovery-Periode wird zurückgesetzt (<c>congestion_recovery_start_time = 0</c>), sodass die
-    /// nächsten Bestätigungen wieder in Slow Start hochlaufen.
+    /// Persistent congestion detected (RFC 9002 §7.6/§B.8): the window collapses to the minimum and
+    /// the recovery period is reset (<c>congestion_recovery_start_time = 0</c>), so the next
+    /// acknowledgments ramp up again in slow start.
     /// </summary>
     public void OnPersistentCongestion()
     {

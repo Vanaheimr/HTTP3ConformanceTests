@@ -29,48 +29,48 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Malformed-Erkennung (RFC 9114 §4.1.2, §4.2, §4.3): malformed Requests beantwortet der Server mit
-/// 400 (MAY) und bricht das Lesen mit dem Stream-Fehler H3_MESSAGE_ERROR ab, OHNE den Handler
-/// aufzurufen; malformed Responses DARF der Client nicht akzeptieren. Die Verbindung lebt jeweils weiter.
+/// Malformed detection (RFC 9114 §4.1.2, §4.2, §4.3): the server answers malformed requests with
+/// 400 (MAY) and aborts reading with the stream error H3_MESSAGE_ERROR, WITHOUT invoking the
+/// handler; the client MUST NOT accept malformed responses. The connection lives on in each case.
 /// </summary>
 [TestFixture]
 public class Http3MalformedTests
 {
-    // ---- Validator-Units (Grenzfälle) -----------------------------------------------------
+    // ---- Validator units (edge cases) ------------------------------------------------------
 
     [Test]
     public void Validator_CatchesPseudoHeaderViolations()
     {
-        // Großbuchstabe im Feldnamen (§4.2 MUST).
+        // Uppercase letter in a field name (§4.2 MUST).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "GET"), new(":scheme", "https"), new(":authority", "h"), new(":path", "/"), new("X-Bad", "1")]), Is.Not.Null);
-        // Pseudo-Header nach regulärem Feld (§4.3).
+        // Pseudo-header after a regular field (§4.3).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "GET"), new("accept", "*/*"), new(":scheme", "https"), new(":path", "/"), new(":authority", "h")]), Is.Not.Null);
-        // Antwort-Pseudo-Header im Request (§4.3).
+        // Response pseudo-header in a request (§4.3).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":status", "200"), new(":method", "GET"), new(":scheme", "https"), new(":authority", "h"), new(":path", "/")]), Is.Not.Null);
         // userinfo in :authority (§4.3.1).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "GET"), new(":scheme", "https"), new(":authority", "user@host"), new(":path", "/")]), Is.Not.Null);
-        // :authority und Host widersprechen sich (§4.3.1).
+        // :authority and Host contradict each other (§4.3.1).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "GET"), new(":scheme", "https"), new(":authority", "a"), new(":path", "/"), new("host", "b")]), Is.Not.Null);
-        // CR/LF im Feldwert (Request-Smuggling-Schutz).
+        // CR/LF in a field value (request-smuggling protection).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "GET"), new(":scheme", "https"), new(":authority", "h"), new(":path", "/"), new("x", "a\r\nb")]), Is.Not.Null);
-        // Wohlgeformt (mit Host statt :authority).
+        // Well-formed (with Host instead of :authority).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "GET"), new(":scheme", "https"), new(":path", "/"), new("host", "h")]), Is.Null);
 
-        // Antworten: :status fehlt / doppelt / nicht numerisch (§4.3.2).
+        // Responses: :status missing / duplicated / non-numeric (§4.3.2).
         Assert.That(Http3MessageValidator.ValidateResponseHeaders([new("content-type", "text/plain")], out _), Is.Not.Null);
         Assert.That(Http3MessageValidator.ValidateResponseHeaders([new(":status", "200"), new(":status", "204")], out _), Is.Not.Null);
         Assert.That(Http3MessageValidator.ValidateResponseHeaders([new(":status", "abc")], out _), Is.Not.Null);
         Assert.That(Http3MessageValidator.ValidateResponseHeaders([new(":status", "204")], out int ok), Is.Null);
         Assert.That(ok, Is.EqualTo(204));
 
-        // Widersprüchliche content-length-Werte (§4.1.2).
+        // Contradictory content-length values (§4.1.2).
         Assert.That(Http3MessageValidator.ValidateContentLength(
             [new("content-length", "5"), new("content-length", "6")], 5, contentNeverPresent: false), Is.Not.Null);
     }
@@ -87,18 +87,18 @@ public class Http3MalformedTests
             Pump(client, server);
         client.InitializeHttp3();
 
-        // Großbuchstaben-Header ⇒ MUST NOT generate (§4.2) ⇒ lokal abgelehnt.
+        // Uppercase header ⇒ MUST NOT generate (§4.2) ⇒ refused locally.
         Assert.Throws<ArgumentException>(() => client.SendRequest(
             Http3Request.Get("localhost", "/") with { AdditionalHeaders = [new HeaderField("X-Bad", "1")] }));
-        // Verbindungsspezifisches Feld ⇒ ebenso.
+        // Connection-specific field ⇒ likewise.
         Assert.Throws<ArgumentException>(() => client.SendRequest(
             Http3Request.Get("localhost", "/") with { AdditionalHeaders = [new HeaderField("connection", "keep-alive")] }));
-        // Pseudo-Header im Trailer ⇒ ebenso (§4.3).
+        // Pseudo-header in a trailer ⇒ likewise (§4.3).
         Assert.Throws<ArgumentException>(() => client.SendRequest(
             Http3Request.Get("localhost", "/") with { Trailers = [new HeaderField(":method", "GET")] }));
     }
 
-    // ---- Malformed Requests ⇒ Server: 400 + H3_MESSAGE_ERROR, kein Handler ----------------
+    // ---- Malformed requests ⇒ server: 400 + H3_MESSAGE_ERROR, no handler ------------------
 
     [Test]
     public void UppercaseFieldName_IsRejectedWith400()
@@ -141,7 +141,7 @@ public class Http3MalformedTests
             WriteHeaders(stream,
                 [new(":method", "POST"), new(":scheme", "https"), new(":authority", "localhost"), new(":path", "/")]);
             stream.Write(Http3Frames.Build(Http3FrameType.Data, [1]));
-            WriteHeaders(stream, [new(":status", "200")]); // Pseudo-Header im Trailer (§4.3)
+            WriteHeaders(stream, [new(":status", "200")]); // pseudo-header in a trailer (§4.3)
         });
 
     [Test]
@@ -157,14 +157,14 @@ public class Http3MalformedTests
     [Test]
     public void Connect_IsWellFormed_ButAnsweredWith501()
     {
-        // §4.4: gültiger CONNECT (nur :method + :authority) — dieser Server unterstützt ihn nicht.
+        // §4.4: a valid CONNECT (only :method + :authority) — this server does not support it.
         (int status, ulong? _, int handled) = RunRawRequest(stream => WriteHeaders(stream,
             [new(":method", "CONNECT"), new(":authority", "localhost:443")]));
         Assert.That(status, Is.EqualTo(501));
         Assert.That(handled, Is.EqualTo(0));
     }
 
-    // ---- Malformed Responses ⇒ Client: verwerfen (MUST NOT accept), Verbindung lebt -------
+    // ---- Malformed responses ⇒ client: discard (MUST NOT accept), connection lives --------
 
     [Test]
     public void ResponseWithoutStatus_IsDiscardedAsMalformed()
@@ -198,8 +198,8 @@ public class Http3MalformedTests
     [Test]
     public void NoContent204_WithContentLength_IsAccepted()
     {
-        // §4.1.2: rumpflos definierte Antworten (204) dürfen einen content-length tragen,
-        // obwohl kein Content in DATA-Frames folgt.
+        // §4.1.2: responses defined as bodyless (204) may carry a content-length,
+        // even though no content follows in DATA frames.
         (Http3ClientConnection client, QuicServerConnection server, ulong streamId, ServerCertificate cert) = StartRawServerExchange();
         using ServerCertificate certGuard = cert;
         using Http3ClientConnection c = client;
@@ -221,22 +221,22 @@ public class Http3MalformedTests
         Assert.That(response.Body, Is.Empty);
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static void WriteHeaders(QuicStream stream, HeaderField[] fields)
         => stream.Write(Http3Frames.Build(Http3FrameType.Headers, EncodeSectionRaw(fields)));
 
     /// <summary>
-    /// Kodiert eine Field Section ausschließlich als „Literal Field Line with Literal Name" und lässt
-    /// die Namen UNVERÄNDERT — anders als <see cref="QpackEncoder"/>, der Namen konventionsgemäß
-    /// kleinschreibt. Nur so lassen sich Großbuchstaben-Verstöße (§4.2) auf der Leitung nachstellen.
+    /// Encodes a field section exclusively as "Literal Field Line with Literal Name" and leaves
+    /// the names UNCHANGED — unlike <see cref="QpackEncoder"/>, which lowercases names by
+    /// convention. Only this way can uppercase violations (§4.2) be reproduced on the wire.
     /// </summary>
     private static byte[] EncodeSectionRaw(HeaderField[] fields)
     {
         var writer = new org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers.BufferWriter(128);
         try
         {
-            writer.WriteByte(0x00); // Field Section Prefix: Required Insert Count = 0, Base = 0
+            writer.WriteByte(0x00); // field section prefix: Required Insert Count = 0, Base = 0
             writer.WriteByte(0x00);
             foreach (HeaderField field in fields)
             {
@@ -249,8 +249,8 @@ public class Http3MalformedTests
     }
 
     /// <summary>
-    /// Roh-Client sendet einen (bösen) Request; erwartet: 400, kein Handler-Aufruf, Leseabbruch des
-    /// Servers mit H3_MESSAGE_ERROR (§4.1.2), Verbindung bleibt offen.
+    /// A raw client sends an (evil) request; expected: 400, no handler invocation, the server's
+    /// read abort with H3_MESSAGE_ERROR (§4.1.2), the connection stays open.
     /// </summary>
     private static void AssertRejected400(Action<QuicStream> writeRequest)
     {
@@ -261,8 +261,8 @@ public class Http3MalformedTests
     }
 
     /// <summary>
-    /// Fährt Handshake + Control-Stream hoch, sendet den Request per <paramref name="writeRequest"/>
-    /// (FIN wird ergänzt) und liefert (Status der Antwort, STOP_SENDING-Code, Handler-Aufrufe).
+    /// Brings up the handshake + control stream, sends the request via <paramref name="writeRequest"/>
+    /// (FIN is added) and returns (status of the response, STOP_SENDING code, handler invocations).
     /// </summary>
     private static (int Status, ulong? StopCode, int Handled) RunRawRequest(Action<QuicStream> writeRequest)
     {
@@ -290,7 +290,7 @@ public class Http3MalformedTests
             Pump(client, server);
             received.AddRange(request.Read());
         }
-        Assert.That(server.IsClosing, Is.False, "Malformed ist ein Stream-, kein Verbindungsfehler.");
+        Assert.That(server.IsClosing, Is.False, "Malformed is a stream error, not a connection error.");
 
         Assert.That(Http3Frames.TryReadAll(received.ToArray(), out List<Http3Frame> frames, out _), Is.True);
         Http3Frame headersFrame = frames.First(f => f.Type == Http3FrameType.Headers);
@@ -300,8 +300,8 @@ public class Http3MalformedTests
     }
 
     /// <summary>
-    /// Roh-Server sendet die angegebene Antwort-Sektion (+ FIN); erwartet: der Client verwirft die
-    /// Antwort als malformed, die Verbindung bleibt offen.
+    /// A raw server sends the given response section (+ FIN); expected: the client discards the
+    /// response as malformed, the connection stays open.
     /// </summary>
     private static void AssertResponseMalformed(HeaderField[] section)
     {
@@ -316,7 +316,7 @@ public class Http3MalformedTests
 
         for (int round = 0; round < 10 && !client.IsResponseMalformed(streamId); round++)
             Pump2(client, server);
-        Assert.That(client.IsResponseMalformed(streamId), Is.True, "Die malformed Antwort muss verworfen werden.");
+        Assert.That(client.IsResponseMalformed(streamId), Is.True, "The malformed response must be discarded.");
         Assert.That(client.TryGetResponse(streamId, out _), Is.False);
         Assert.That(client.IsClosing, Is.False);
     }

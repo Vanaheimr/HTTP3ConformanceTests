@@ -27,19 +27,19 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Baut Client-Initial-Pakete zusammen (CRYPTO-Frame + PADDING + Packet/Header Protection).
+/// Assembles client Initial packets (CRYPTO frame + PADDING + packet/header protection).
 /// </summary>
 public static class InitialPacketFactory
 {
     /// <summary>
-    /// Ein Client-Initial-Datagramm MUSS mindestens 1200 Byte groß sein (RFC 9000 §14.1), damit der
-    /// Server ausreichend Amplification-Budget hat. Trägt der ClientHello weniger, wird mit PADDING aufgefüllt.
+    /// A client Initial datagram MUST be at least 1200 bytes (RFC 9000 §14.1) so the server has
+    /// sufficient amplification budget. If the ClientHello carries less, PADDING fills the rest.
     /// </summary>
     public const int MinimumClientInitialSize = 1200;
 
     /// <summary>
-    /// Erzeugt ein geschütztes Client-Initial, das <paramref name="cryptoData"/> (typischerweise den
-    /// ClientHello) in einem CRYPTO-Frame ab Offset 0 transportiert und auf ≥ 1200 Byte gepolstert ist.
+    /// Creates a protected client Initial that carries <paramref name="cryptoData"/> (typically the
+    /// ClientHello) in a CRYPTO frame starting at offset 0, padded to ≥ 1200 bytes.
     /// </summary>
     public static byte[] BuildClientInitial(
         PacketProtection clientProtection,
@@ -57,9 +57,9 @@ public static class InitialPacketFactory
     }
 
     /// <summary>
-    /// Baut ein Initial-Paket aus beliebigen bereits serialisierten Frames und polstert es mit
-    /// PADDING auf ≥ 1200 Byte. Nutzbar für das erste Initial (CRYPTO) wie für spätere Initials
-    /// (z. B. nur ein ACK) – jedes Datagramm mit einem Client-Initial muss die Mindestgröße erfüllen.
+    /// Builds an Initial packet from arbitrary already-serialised frames and pads it with PADDING to
+    /// ≥ 1200 bytes. Usable for the first Initial (CRYPTO) as well as later Initials (e.g. just an
+    /// ACK) – every datagram containing a client Initial must satisfy the minimum size.
     /// </summary>
     public static byte[] BuildPadded(
         PacketProtection clientProtection,
@@ -71,15 +71,15 @@ public static class InitialPacketFactory
         int packetNumberLength,
         ReadOnlySpan<byte> frames)
     {
-        // Header-Overhead vorab berechnen, um die nötige PADDING-Menge zu bestimmen.
-        // Length-Feld ist bei ~1200-Byte-Paketen 2 Bytes lang (Wert < 16384).
+        // Pre-compute the header overhead to determine the needed amount of PADDING.
+        // The length field is 2 bytes for ~1200-byte packets (value < 16384).
         int headerOverhead =
-            1                                     // erstes Byte
-            + 4                                   // Version
-            + 1 + destinationConnectionId.Length  // DCID-Länge + DCID
-            + 1 + sourceConnectionId.Length       // SCID-Länge + SCID
+            1                                     // first byte
+            + 4                                   // version
+            + 1 + destinationConnectionId.Length  // DCID length + DCID
+            + 1 + sourceConnectionId.Length       // SCID length + SCID
             + VarInt.GetLength((ulong)token.Length) + token.Length
-            + 2                                   // Length-VarInt (Annahme: 2 Byte)
+            + 2                                   // length varint (assumption: 2 bytes)
             + packetNumberLength;
         const int authTag = 16;
 
@@ -88,7 +88,7 @@ public static class InitialPacketFactory
 
         byte[] payload = new byte[payloadLength];
         frames.CopyTo(payload);
-        // Rest bleibt 0 => PADDING-Frames.
+        // The remainder stays 0 => PADDING frames.
 
         return LongHeader.Build(
             clientProtection, LongPacketType.Initial, version,

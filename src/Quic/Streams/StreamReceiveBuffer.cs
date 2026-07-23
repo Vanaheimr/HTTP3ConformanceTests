@@ -18,118 +18,118 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 
 /// <summary>
-/// Ergebnis der Aufnahme eines STREAM-Fragments in den Empfangspuffer.
+/// Result of taking a STREAM fragment into the receive buffer.
 /// </summary>
 public enum StreamReceiveResult
 {
     Ok,
     /// <summary>
-    /// Der höchste Offset überschreitet das gewährte Flow-Control-Fenster ⇒ FLOW_CONTROL_ERROR.
+    /// The highest offset exceeds the granted flow-control window ⇒ FLOW_CONTROL_ERROR.
     /// </summary>
     FlowControlError,
     /// <summary>
-    /// Widersprüchliche Final Size (FIN) ⇒ FINAL_SIZE_ERROR.
+    /// Contradictory final size (FIN) ⇒ FINAL_SIZE_ERROR.
     /// </summary>
     FinalSizeError,
     /// <summary>
-    /// RESET_STREAM_AT mit Reliable Size &gt; Final Size (draft §4) ⇒ FRAME_ENCODING_ERROR.
+    /// RESET_STREAM_AT with reliable size &gt; final size (draft §4) ⇒ FRAME_ENCODING_ERROR.
     /// </summary>
     FrameEncodingError,
     /// <summary>
-    /// Ein weiteres RESET_STREAM_AT/RESET_STREAM ändert den Fehlercode (draft §5.2) ⇒ STREAM_STATE_ERROR.
+    /// Another RESET_STREAM_AT/RESET_STREAM changes the error code (draft §5.2) ⇒ STREAM_STATE_ERROR.
     /// </summary>
     StreamStateError,
 }
 
 /// <summary>
-/// Empfangsseite eines Streams (RFC 9000 §2.2, §3.2): reassembliert (auch ungeordnete, überlappende)
-/// STREAM-Daten zu einem geordneten Byte-Strom, verfolgt das FIN/die Final Size und erzwingt das
-/// Flow-Control-Fenster. Konsumierte Bytes werden verworfen; <see cref="ReadAvailable"/> liefert den
-/// nächsten zusammenhängenden Abschnitt.
+/// Receive side of a stream (RFC 9000 §2.2, §3.2): reassembles (also unordered, overlapping)
+/// STREAM data into an ordered byte stream, tracks the FIN/final size and enforces the
+/// flow-control window. Consumed bytes are discarded; <see cref="ReadAvailable"/> returns the
+/// next contiguous section.
 /// </summary>
 public sealed class StreamReceiveBuffer
 {
     private readonly SortedDictionary<ulong, byte[]> _fragments = new();
     private ulong _readOffset;
     private ulong? _finalSize;
-    private ulong _flowControlConsumed; // bei RESET(_AT) übernommene Final Size (Kredit-Abrechnung, entkoppelt vom Lese-Offset)
-    private ulong? _reliableSize;       // kleinste Reliable Size eines RESET_STREAM_AT (draft §5.2)
+    private ulong _flowControlConsumed; // final size adopted at RESET(_AT) (credit accounting, decoupled from the read offset)
+    private ulong? _reliableSize;       // smallest reliable size of a RESET_STREAM_AT (draft §5.2)
 
     /// <summary>
-    /// Höchster empfangener Offset (Ende des am weitesten reichenden Fragments).
+    /// Highest received offset (end of the farthest-reaching fragment).
     /// </summary>
     public ulong HighestReceivedOffset { get; private set; }
 
     /// <summary>
-    /// Gewährtes Flow-Control-Limit für diesen Stream (max_stream_data). Wächst über MAX_STREAM_DATA.
+    /// Granted flow-control limit for this stream (max_stream_data). Grows via MAX_STREAM_DATA.
     /// </summary>
     public ulong MaxData { get; set; } = ulong.MaxValue;
 
     /// <summary>
-    /// Auto-Tuning des empfangsseitigen Stream-Fensters (Phase 9). <c>null</c> = festes Fenster (etwa
-    /// bei Streams ohne gesetztes Limit); wird vom Endpoint beim Öffnen mit dem passenden Startwert und
-    /// Wachstumslimit belegt.
+    /// Auto-tuning of the receive-side stream window (phase 9). <c>null</c> = fixed window (e.g. for
+    /// streams without a set limit); populated by the endpoint on open with the matching starting
+    /// value and growth limit.
     /// </summary>
     public ReceiveWindowTuner? WindowTuner { get; set; }
 
     /// <summary>
-    /// Für die Flow-Control-Abrechnung „verbrauchter" Offset. Nach einem RESET(_AT) zählt die Final Size
-    /// vollständig als verbraucht (§4.5), auch wenn der Lese-Offset (bei RESET_STREAM_AT) noch bei der
-    /// Reliable Size verharrt, während die Anwendung die zuverlässig zugestellten Bytes abholt.
+    /// Offset "consumed" for flow-control accounting. After a RESET(_AT) the final size counts fully
+    /// as consumed (§4.5), even if the read offset (with RESET_STREAM_AT) still lingers at the
+    /// reliable size while the application collects the reliably delivered bytes.
     /// </summary>
     public ulong BytesConsumed => Math.Max(_readOffset, _flowControlConsumed);
 
     /// <summary>
-    /// Der Peer hat die Empfangsseite per RESET_STREAM_AT mit garantierter Teilzustellung abgebrochen; dies
-    /// ist die (kleinste) Reliable Size, bis zu der Bytes noch an die Anwendung geliefert werden (draft §5).
-    /// <c>null</c> = kein RESET_STREAM_AT.
+    /// The peer aborted the receive side via RESET_STREAM_AT with guaranteed partial delivery; this
+    /// is the (smallest) reliable size up to which bytes are still delivered to the application
+    /// (draft §5). <c>null</c> = no RESET_STREAM_AT.
     /// </summary>
     public ulong? ReliableSize => _reliableSize;
 
     /// <summary>
-    /// FIN empfangen (Final Size bekannt).
+    /// FIN received (final size known).
     /// </summary>
     public bool FinReceived => _finalSize.HasValue;
 
     /// <summary>
-    /// Der Peer hat diese Empfangsseite per RESET_STREAM abgebrochen (RFC 9000 §19.4).
+    /// The peer aborted this receive side via RESET_STREAM (RFC 9000 §19.4).
     /// </summary>
     public bool ResetReceived { get; private set; }
 
     /// <summary>
-    /// Der Fehlercode aus dem RESET_STREAM des Peers (gültig, wenn <see cref="ResetReceived"/>).
+    /// The error code from the peer's RESET_STREAM (valid when <see cref="ResetReceived"/>).
     /// </summary>
     public ulong ResetErrorCode { get; private set; }
 
     /// <summary>
-    /// Wir haben das Lesen abgebrochen (RFC 9000 §3.5); ein STOP_SENDING wartet ggf. auf Emission.
+    /// We aborted reading (RFC 9000 §3.5); a STOP_SENDING may be waiting for emission.
     /// </summary>
     public bool ReadingAborted { get; private set; }
 
     /// <summary>
-    /// Der Fehlercode unseres Leseabbruchs (gültig, wenn <see cref="ReadingAborted"/>).
+    /// The error code of our read abort (valid when <see cref="ReadingAborted"/>).
     /// </summary>
     public ulong AbortErrorCode { get; private set; }
 
     /// <summary>
-    /// Ein STOP_SENDING-Frame wartet auf die Emission (wird vom Endpoint abgeholt).
+    /// A STOP_SENDING frame is waiting to be emitted (picked up by the endpoint).
     /// </summary>
     public bool StopSendingPending { get; private set; }
 
     /// <summary>
-    /// Alle Daten bis zum FIN wurden gelesen. Ein per RESET abgebrochener Stream gilt NIE als
-    /// vollständig – die Anwendung erkennt den Abbruch über <see cref="ResetReceived"/>.
+    /// All data up to the FIN has been read. A stream aborted via RESET NEVER counts as complete –
+    /// the application recognises the abort via <see cref="ResetReceived"/>.
     /// </summary>
     public bool IsComplete => !ResetReceived && _finalSize == _readOffset && _fragments.Count == 0;
 
     /// <summary>
-    /// Bricht das Lesen ab (RFC 9000 §3.5): der Endpoint sendet ein STOP_SENDING mit
-    /// <paramref name="errorCode"/>; bereits gepufferte Daten werden verworfen. Idempotent.
+    /// Aborts reading (RFC 9000 §3.5): the endpoint sends a STOP_SENDING with
+    /// <paramref name="errorCode"/>; already-buffered data is discarded. Idempotent.
     /// </summary>
     public void AbortReading(ulong errorCode)
     {
         if (ReadingAborted || ResetReceived)
-            return; // §3.5: STOP_SENDING nur für Streams, die der Peer nicht schon zurückgesetzt hat
+            return; // §3.5: STOP_SENDING only for streams the peer has not already reset
         ReadingAborted = true;
         StopSendingPending = true;
         AbortErrorCode = errorCode;
@@ -137,8 +137,8 @@ public sealed class StreamReceiveBuffer
     }
 
     /// <summary>
-    /// Holt das zu sendende STOP_SENDING-Frame ab (einmalig; Verlust-Wiederholung übernimmt die
-    /// Loss Recovery). Gibt die Stream-ID nicht mit – der Aufrufer kennt sie.
+    /// Fetches the STOP_SENDING frame to send (once; loss repetition is handled by loss recovery).
+    /// Does not include the stream ID – the caller knows it.
     /// </summary>
     public ulong? TakeStopSendingErrorCode()
     {
@@ -149,28 +149,28 @@ public sealed class StreamReceiveBuffer
     }
 
     /// <summary>
-    /// Verarbeitet ein empfangenes RESET_STREAM (RFC 9000 §19.4/§4.5): prüft die Final Size gegen
-    /// Flow Control und bereits Gesehenes, übernimmt sie (verbindliche Flow-Control-Abrechnung) und
-    /// verwirft gepufferte Daten (§19.4: „can discard any data").
+    /// Processes a received RESET_STREAM (RFC 9000 §19.4/§4.5): checks the final size against flow
+    /// control and what was already seen, adopts it (binding flow-control accounting) and discards
+    /// buffered data (§19.4: "can discard any data").
     /// </summary>
     public StreamReceiveResult Reset(ulong errorCode, ulong finalSize)
     {
         if (finalSize > MaxData)
-            return StreamReceiveResult.FlowControlError;   // §4.1: Final Size verbraucht Kredit
+            return StreamReceiveResult.FlowControlError;   // §4.1: the final size consumes credit
         if (_finalSize is { } known && known != finalSize)
-            return StreamReceiveResult.FinalSizeError;     // §4.5: bekannte Final Size ist unveränderlich
+            return StreamReceiveResult.FinalSizeError;     // §4.5: a known final size is immutable
         if (HighestReceivedOffset > finalSize)
-            return StreamReceiveResult.FinalSizeError;     // §4.5: Daten jenseits der Final Size gesehen
+            return StreamReceiveResult.FinalSizeError;     // §4.5: data seen beyond the final size
 
         if (ResetReceived)
-            return StreamReceiveResult.Ok; // idempotent (Retransmission des RESET_STREAM)
+            return StreamReceiveResult.Ok; // idempotent (retransmission of the RESET_STREAM)
 
         ResetReceived = true;
         ResetErrorCode = errorCode;
         _finalSize = finalSize;
         HighestReceivedOffset = finalSize;
-        // §4.5: die Final Size zählt vollständig als verbrauchter Flow-Control-Kredit — als „konsumiert"
-        // verbuchen, damit die MAX_DATA-Fensterrechnung der Verbindung stimmig bleibt.
+        // §4.5: the final size counts fully as consumed flow-control credit — book it as "consumed"
+        // so the connection's MAX_DATA window arithmetic stays consistent.
         _flowControlConsumed = finalSize;
         _readOffset = finalSize;
         _fragments.Clear();
@@ -178,27 +178,27 @@ public sealed class StreamReceiveBuffer
     }
 
     /// <summary>
-    /// Verarbeitet ein empfangenes RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset §4/§5): wie
-    /// <see cref="Reset"/>, aber die ersten <paramref name="reliableSize"/> Bytes werden weiterhin an die
-    /// Anwendung geliefert. Mehrfache Frames dürfen die Reliable Size nur senken (§5.2); Erhöhungen (durch
-    /// Reordering) werden ignoriert, ein geänderter Fehlercode ist ein STREAM_STATE_ERROR.
+    /// Processes a received RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset §4/§5): like
+    /// <see cref="Reset"/>, but the first <paramref name="reliableSize"/> bytes are still delivered
+    /// to the application. Repeated frames may only lower the reliable size (§5.2); increases (from
+    /// reordering) are ignored, a changed error code is a STREAM_STATE_ERROR.
     /// </summary>
     public StreamReceiveResult ResetAt(ulong errorCode, ulong finalSize, ulong reliableSize)
     {
         if (reliableSize > finalSize)
             return StreamReceiveResult.FrameEncodingError; // draft §4
         if (finalSize > MaxData)
-            return StreamReceiveResult.FlowControlError;    // §4.1: Final Size verbraucht Kredit
+            return StreamReceiveResult.FlowControlError;    // §4.1: the final size consumes credit
         if (_finalSize is { } known && known != finalSize)
-            return StreamReceiveResult.FinalSizeError;      // §4.5: bekannte Final Size ist unveränderlich
+            return StreamReceiveResult.FinalSizeError;      // §4.5: a known final size is immutable
         if (!ResetReceived && HighestReceivedOffset > finalSize)
-            return StreamReceiveResult.FinalSizeError;      // §4.5: Daten jenseits der Final Size gesehen
+            return StreamReceiveResult.FinalSizeError;      // §4.5: data seen beyond the final size
         if (ResetReceived && errorCode != ResetErrorCode)
-            return StreamReceiveResult.StreamStateError;    // draft §5.2: Fehlercode darf sich nicht ändern
+            return StreamReceiveResult.StreamStateError;    // draft §5.2: the error code must not change
 
         if (ResetReceived)
         {
-            // §5.2: die Reliable Size darf nur sinken; Erhöhungen (Reordering) ignorieren.
+            // §5.2: the reliable size may only decrease; ignore increases (reordering).
             if (_reliableSize is { } prev && reliableSize < prev)
             {
                 _reliableSize = reliableSize;
@@ -212,16 +212,16 @@ public sealed class StreamReceiveBuffer
         _finalSize = finalSize;
         _reliableSize = reliableSize;
         HighestReceivedOffset = finalSize;
-        // §4.5: die volle Final Size zählt als verbrauchter Kredit; der Lese-Offset verharrt aber bei der
-        // Reliable Size, bis die Anwendung die zuverlässig zugestellten Bytes abgeholt hat.
+        // §4.5: the full final size counts as consumed credit; the read offset however lingers at the
+        // reliable size until the application has collected the reliably delivered bytes.
         _flowControlConsumed = finalSize;
-        TrimAboveReliable(reliableSize); // Daten jenseits der Reliable Size werden nicht mehr zugestellt
+        TrimAboveReliable(reliableSize); // data beyond the reliable size is no longer delivered
         return StreamReceiveResult.Ok;
     }
 
     /// <summary>
-    /// Verwirft gepufferte Fragmente jenseits der Reliable Size und kürzt ein Fragment, das die Grenze
-    /// überschreitet (draft §5.2: jenseits der Reliable Size wird nichts mehr zugestellt).
+    /// Discards buffered fragments beyond the reliable size and trims a fragment crossing the
+    /// boundary (draft §5.2: nothing beyond the reliable size is delivered anymore).
     /// </summary>
     private void TrimAboveReliable(ulong reliableSize)
     {
@@ -239,7 +239,7 @@ public sealed class StreamReceiveBuffer
     }
 
     /// <summary>
-    /// Nimmt ein STREAM-Fragment auf.
+    /// Takes in a STREAM fragment.
     /// </summary>
     public StreamReceiveResult Receive(ulong offset, ReadOnlySpan<byte> data, bool fin)
     {
@@ -251,7 +251,7 @@ public sealed class StreamReceiveBuffer
         {
             if (_finalSize is { } existing && existing != end)
                 return StreamReceiveResult.FinalSizeError;
-            // Daten dürfen nicht über die Final Size hinausgehen.
+            // Data must not extend past the final size.
             if (HighestReceivedOffset > end)
                 return StreamReceiveResult.FinalSizeError;
             _finalSize = end;
@@ -264,7 +264,7 @@ public sealed class StreamReceiveBuffer
         if (end > HighestReceivedOffset)
             HighestReceivedOffset = end;
 
-        // Bereits konsumierte Daten überspringen.
+        // Skip data already consumed.
         if (!data.IsEmpty && end > _readOffset)
         {
             ulong start = offset;
@@ -274,7 +274,7 @@ public sealed class StreamReceiveBuffer
                 slice = data[(int)(_readOffset - start)..];
                 start = _readOffset;
             }
-            // Nach RESET_STREAM_AT nichts jenseits der Reliable Size mehr puffern (draft §5.2).
+            // After RESET_STREAM_AT, buffer nothing beyond the reliable size (draft §5.2).
             if (_reliableSize is { } rel)
             {
                 if (start >= rel)
@@ -289,23 +289,23 @@ public sealed class StreamReceiveBuffer
     }
 
     /// <summary>
-    /// Liefert den nächsten zusammenhängenden, noch nicht gelesenen Abschnitt und rückt den
-    /// Lese-Offset vor. Leeres Array, wenn (noch) keine zusammenhängenden Daten anliegen.
-    /// Zero-Alloc-Pfad: der häufige Leer-Fall (jeder Pump-Durchlauf fragt jeden Stream) kostet
-    /// nichts; sonst wird die Gesamtlänge vorab bestimmt und genau EIN Ergebnis-Array gefüllt.
+    /// Returns the next contiguous, not-yet-read section and advances the read offset. An empty
+    /// array when no contiguous data is (yet) available. Zero-alloc path: the frequent empty case
+    /// (every pump pass queries every stream) costs nothing; otherwise the total length is
+    /// determined up front and exactly ONE result array is filled.
     /// </summary>
     public byte[] ReadAvailable()
     {
         if (_fragments.Count == 0)
             return [];
 
-        // Erster Durchlauf: zusammenhängende Länge ab dem Lese-Offset bestimmen (ohne zu kopieren).
+        // First pass: determine the contiguous length from the read offset (without copying).
         ulong cursor = _readOffset;
         int total = 0;
         foreach ((ulong start, byte[] data) in _fragments)
         {
             if (start > cursor)
-                break; // Lücke
+                break; // gap
             ulong end = start + (ulong)data.Length;
             if (end > cursor)
                 total += (int)(end - cursor);
@@ -314,7 +314,7 @@ public sealed class StreamReceiveBuffer
         if (total == 0)
             return [];
 
-        // Zweiter Durchlauf: genau ein Ergebnis-Array füllen, konsumierte Fragmente entfernen.
+        // Second pass: fill exactly one result array, remove consumed fragments.
         byte[] result = new byte[total];
         int written = 0;
         while (_fragments.Count > 0)

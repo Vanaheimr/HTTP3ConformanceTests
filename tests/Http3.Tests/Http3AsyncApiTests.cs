@@ -28,9 +28,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Die Task-basierte async API (<see cref="Http3Client"/>/<see cref="Http3Server"/>): echte UDP-
-/// Sockets über Loopback, Hintergrund-Pump, await-bare Requests — der deterministische Kern bleibt
-/// darunter unverändert.
+/// The Task-based async API (<see cref="Http3Client"/>/<see cref="Http3Server"/>): real UDP
+/// sockets over loopback, background pump, awaitable requests — the deterministic core underneath
+/// remains unchanged.
 /// </summary>
 [TestFixture]
 public class Http3AsyncApiTests
@@ -42,7 +42,7 @@ public class Http3AsyncApiTests
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
 
         await using var server = new Http3Server(cert,
-            request => new Http3Response { Status = 200, Body = Encoding.UTF8.GetBytes($"hallo {request.Path}") },
+            request => new Http3Response { Status = 200, Body = Encoding.UTF8.GetBytes($"hello {request.Path}") },
             port: 0);
         server.Start();
         Assert.That(server.Port, Is.GreaterThan(0));
@@ -52,7 +52,7 @@ public class Http3AsyncApiTests
 
         Http3Response response = await client.GetAsync("/async");
         Assert.That(response.Status, Is.EqualTo(200));
-        Assert.That(response.BodyText, Is.EqualTo("hallo /async"));
+        Assert.That(response.BodyText, Is.EqualTo("hello /async"));
         Assert.That(server.ConnectionCount, Is.EqualTo(1));
 
         await client.CloseAsync();
@@ -72,12 +72,12 @@ public class Http3AsyncApiTests
         await using var client = new Http3Client("localhost", server.Port, validation);
         await client.ConnectAsync(TimeSpan.FromSeconds(10));
 
-        // Mehrere Requests gleichzeitig — die Pump serialisiert den Kern, die Tasks laufen parallel.
+        // Several requests at once — the pump serializes the core, the tasks run in parallel.
         Http3Response[] responses = await Task.WhenAll(
-            client.GetAsync("/eins"), client.GetAsync("/zwei"), client.GetAsync("/drei"));
+            client.GetAsync("/one"), client.GetAsync("/two"), client.GetAsync("/three"));
 
         Assert.That(responses.Select(r => r.Status), Is.All.EqualTo(200));
-        Assert.That(responses.Select(r => r.BodyText), Is.EquivalentTo(new[] { "/eins", "/zwei", "/drei" }));
+        Assert.That(responses.Select(r => r.BodyText), Is.EquivalentTo(new[] { "/one", "/two", "/three" }));
     }
 
     [Test]
@@ -94,7 +94,7 @@ public class Http3AsyncApiTests
         await using var client = new Http3Client("localhost", server.Port, validation);
         await client.ConnectAsync(TimeSpan.FromSeconds(10));
 
-        byte[] body = Encoding.UTF8.GetBytes("async-POST-Rumpf");
+        byte[] body = Encoding.UTF8.GetBytes("async-POST-body");
         Http3Response response = await client.PostAsync("/echo", body, "text/plain");
         Assert.That(response.Status, Is.EqualTo(200));
         Assert.That(response.Body, Is.EqualTo(body));
@@ -103,7 +103,7 @@ public class Http3AsyncApiTests
     [Test]
     public async Task ConnectAsync_AgainstDeadPort_ThrowsTimeout()
     {
-        // Kein Server: der Handshake kann nie bestätigt werden ⇒ TimeoutException statt Hänger.
+        // No server: the handshake can never be confirmed ⇒ TimeoutException instead of a hang.
         await using var client = new Http3Client("localhost", 1, CertificateValidationOptions.Insecure);
         Assert.ThrowsAsync<TimeoutException>(() => client.ConnectAsync(TimeSpan.FromMilliseconds(500)));
     }
@@ -121,7 +121,7 @@ public class Http3AsyncApiTests
         await client.ConnectAsync(TimeSpan.FromSeconds(10));
 
         Assert.That(await client.QueryAsync(c => c.HandshakeConfirmed), Is.True);
-        // WaitUntilAsync pollt, während die Pump weiterläuft (hier trivial sofort erfüllt).
+        // WaitUntilAsync polls while the pump keeps running (trivially satisfied immediately here).
         Assert.That(await client.WaitUntilAsync(c => c.HandshakeConfirmed, TimeSpan.FromSeconds(1)), Is.True);
     }
 }

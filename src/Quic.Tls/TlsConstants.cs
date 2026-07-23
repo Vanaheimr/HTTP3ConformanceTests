@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 
 /// <summary>
-/// TLS-1.3-Handshake-Nachrichtentypen (RFC 8446, §4).
+/// TLS 1.3 handshake message types (RFC 8446, §4).
 /// </summary>
 public enum HandshakeType : byte
 {
@@ -33,7 +33,7 @@ public enum HandshakeType : byte
 }
 
 /// <summary>
-/// TLS-Extension-Typen (RFC 8446 §4.2 und RFC 9001 §8.2).
+/// TLS extension types (RFC 8446 §4.2 and RFC 9001 §8.2).
 /// </summary>
 public enum ExtensionType : ushort
 {
@@ -41,7 +41,7 @@ public enum ExtensionType : ushort
     SupportedGroups = 10,
     SignatureAlgorithms = 13,
     Alpn = 16,
-    PreSharedKey = 41,          // RFC 8446 §4.2.11 – muss die LETZTE Extension im ClientHello sein
+    PreSharedKey = 41,          // RFC 8446 §4.2.11 – must be the LAST extension in the ClientHello
     EarlyData = 42,             // RFC 8446 §4.2.10 – 0-RTT
     SupportedVersions = 43,
     PskKeyExchangeModes = 45,   // RFC 8446 §4.2.9
@@ -50,16 +50,16 @@ public enum ExtensionType : ushort
 }
 
 /// <summary>
-/// PSK-Key-Exchange-Modi (RFC 8446 §4.2.9). Für QUIC nutzen wir psk_dhe_ke (PSK mit (EC)DHE).
+/// PSK key-exchange modes (RFC 8446 §4.2.9). For QUIC we use psk_dhe_ke (PSK with (EC)DHE).
 /// </summary>
 public enum PskKeyExchangeMode : byte
 {
-    PskKe = 0,     // reine PSK ohne (EC)DHE – kein Forward Secrecy
-    PskDheKe = 1,  // PSK + (EC)DHE (Standard)
+    PskKe = 0,     // pure PSK without (EC)DHE – no forward secrecy
+    PskDheKe = 1,  // PSK + (EC)DHE (default)
 }
 
 /// <summary>
-/// TLS-1.3-Cipher-Suites (RFC 8446 §B.4). Initial nutzt fest TLS_AES_128_GCM_SHA256.
+/// TLS 1.3 cipher suites (RFC 8446 §B.4). Initial packets use TLS_AES_128_GCM_SHA256 by definition.
 /// </summary>
 public enum CipherSuite : ushort
 {
@@ -69,7 +69,7 @@ public enum CipherSuite : ushort
 }
 
 /// <summary>
-/// Named Groups / Schlüsselaustauschverfahren (RFC 8446 §4.2.7).
+/// Named groups / key-exchange methods (RFC 8446 §4.2.7).
 /// </summary>
 public enum NamedGroup : ushort
 {
@@ -77,11 +77,11 @@ public enum NamedGroup : ushort
     Secp384r1 = 0x0018,
     X25519 = 0x001d,
     X448 = 0x001e,
-    X25519MlKem768 = 0x11ec, // Post-Quantum-Hybrid (ML-KEM-768 + X25519), draft-ietf-tls-ecdhe-mlkem
+    X25519MlKem768 = 0x11ec, // post-quantum hybrid (ML-KEM-768 + X25519), draft-ietf-tls-ecdhe-mlkem
 }
 
 /// <summary>
-/// Signaturverfahren für signature_algorithms / CertificateVerify (RFC 8446 §4.2.3).
+/// Signature schemes for signature_algorithms / CertificateVerify (RFC 8446 §4.2.3).
 /// </summary>
 public enum SignatureScheme : ushort
 {
@@ -96,8 +96,8 @@ public enum SignatureScheme : ushort
     RsaPkcs1Sha384 = 0x0501,
 
     /// <summary>
-    /// ML-DSA-44 (FIPS 204, draft-ietf-tls-mldsa §3): Post-Quantum-Signatur, pure (kein Vor-Hash),
-    /// FIPS-204-Kontextparameter MUSS leer sein.
+    /// ML-DSA-44 (FIPS 204, draft-ietf-tls-mldsa §3): post-quantum signature, pure (no pre-hash),
+    /// the FIPS 204 context parameter MUST be empty.
     /// </summary>
     MLDsa44 = 0x0904,
 
@@ -113,17 +113,17 @@ public enum SignatureScheme : ushort
 }
 
 /// <summary>
-/// Gemeinsame TLS-Konstanten.
+/// Shared TLS constants.
 /// </summary>
 public static class TlsVersions
 {
     /// <summary>
-    /// Wird im legacy_version-Feld aus Kompatibilitätsgründen gesendet.
+    /// Sent in the legacy_version field for compatibility reasons.
     /// </summary>
     public const ushort Tls12 = 0x0303;
 
     /// <summary>
-    /// Die real ausgehandelte Version (via supported_versions).
+    /// The actually negotiated version (via supported_versions).
     /// </summary>
     public const ushort Tls13 = 0x0304;
 }

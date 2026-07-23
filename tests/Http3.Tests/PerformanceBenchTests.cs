@@ -28,10 +28,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Mess-Harness der Phase 9 (Zero-Alloc): misst Zeit und Allokationen der In-Process-Hot-Paths mit
-/// <see cref="GC.GetAllocatedBytesForCurrentThread"/> (die Pump ist single-threaded ⇒ exakt).
-/// Die Zahlen landen im Assert.Pass-Text; als Regressionswache dienen BEWUSST großzügige
-/// Obergrenzen (Faktor ≥ 2 über dem Ist), damit die Tests nie flaky werden.
+/// Measurement harness of phase 9 (zero-alloc): measures time and allocations of the in-process hot
+/// paths with <see cref="GC.GetAllocatedBytesForCurrentThread"/> (the pump is single-threaded ⇒ exact).
+/// The numbers land in the Assert.Pass text; DELIBERATELY generous upper bounds (factor ≥ 2 above
+/// the actual) serve as regression guards so the tests never become flaky.
 /// </summary>
 [TestFixture]
 public class PerformanceBenchTests
@@ -47,7 +47,7 @@ public class PerformanceBenchTests
         using Http3ClientConnection c = client;
         using Http3ServerConnection s = server;
 
-        // Warmlauf (JIT + statische Tabellen) mit einem kleinen Request.
+        // Warm-up (JIT + static tables) with a small request.
         RunRequest(client, server, "/small");
 
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
@@ -57,12 +57,12 @@ public class PerformanceBenchTests
         long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
 
         Assert.That(response.Body, Has.Length.EqualTo(BigBodySize));
-        // Regressionswache: Ist nach der Zero-Alloc-Umstellung ~7 MiB (vorher ~51 MiB) — die Grenze
-        // fängt eine Rückkehr zum List<byte>-Shifting, lässt aber reichlich Headroom für JIT/GC-Rauschen.
+        // Regression guard: actual after the zero-alloc conversion is ~7 MiB (previously ~51 MiB) — the
+        // limit catches a return to List<byte> shifting but leaves plenty of headroom for JIT/GC noise.
         Assert.That(allocated, Is.LessThan(20L * 1024 * 1024),
-            $"300-KB-Download allozierte {allocated / 1024.0 / 1024.0:F1} MiB — Regression im Zero-Alloc-Pfad?");
-        Assert.Pass($"300-KB-Download: {watch.Elapsed.TotalMilliseconds:F1} ms, " +
-                    $"{allocated / 1024.0 / 1024.0:F2} MiB alloziert ({allocated / (double)BigBodySize:F1} B/Nutzbyte).");
+            $"300-KB download allocated {allocated / 1024.0 / 1024.0:F1} MiB — regression in the zero-alloc path?");
+        Assert.Pass($"300-KB download: {watch.Elapsed.TotalMilliseconds:F1} ms, " +
+                    $"{allocated / 1024.0 / 1024.0:F2} MiB allocated ({allocated / (double)BigBodySize:F1} B/payload byte).");
     }
 
     [Test]
@@ -73,7 +73,7 @@ public class PerformanceBenchTests
         using Http3ClientConnection c = client;
         using Http3ServerConnection s = server;
 
-        RunRequest(client, server, "/small"); // Warmlauf
+        RunRequest(client, server, "/small"); // warm-up
 
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         var watch = Stopwatch.StartNew();
@@ -83,12 +83,12 @@ public class PerformanceBenchTests
         long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
 
         Assert.That(allocated / SmallRequestCount, Is.LessThan(600L * 1024),
-            $"Kleiner Request allozierte im Schnitt {allocated / SmallRequestCount / 1024.0:F1} KiB — Regression?");
-        Assert.Pass($"{SmallRequestCount} kleine Requests: {watch.Elapsed.TotalMilliseconds:F1} ms gesamt, " +
-                    $"{allocated / SmallRequestCount / 1024.0:F1} KiB/Request alloziert.");
+            $"A small request allocated {allocated / SmallRequestCount / 1024.0:F1} KiB on average — regression?");
+        Assert.Pass($"{SmallRequestCount} small requests: {watch.Elapsed.TotalMilliseconds:F1} ms total, " +
+                    $"{allocated / SmallRequestCount / 1024.0:F1} KiB/request allocated.");
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static readonly byte[] BigBodyBytes = CreateBody();
 
@@ -126,7 +126,7 @@ public class PerformanceBenchTests
             Pump(client, server);
             client.TryGetResponse(id, out response);
         }
-        Assert.That(response, Is.Not.Null, "Antwort kam nicht an.");
+        Assert.That(response, Is.Not.Null, "The response did not arrive.");
         return response!;
     }
 

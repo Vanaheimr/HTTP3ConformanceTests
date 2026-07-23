@@ -18,19 +18,19 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 /// <summary>
-/// Die Finished-Handshake-Nachricht (RFC 8446 §4.4.4): Typ 0x14 + 3-Byte-Länge + verify_data.
-/// verify_data ist ein HMAC über den Transcript (siehe <c>KeySchedule.FinishedVerifyData</c>).
+/// The Finished handshake message (RFC 8446 §4.4.4): type 0x14 + 3-byte length + verify_data.
+/// verify_data is an HMAC over the transcript (see <c>KeySchedule.FinishedVerifyData</c>).
 /// </summary>
 public static class Finished
 {
     /// <summary>
-    /// Baut die vollständige Finished-Nachricht aus der verify_data.
+    /// Builds the complete Finished message from the verify_data.
     /// </summary>
     public static byte[] BuildMessage(ReadOnlySpan<byte> verifyData)
     {
         byte[] message = new byte[4 + verifyData.Length];
         message[0] = (byte)HandshakeType.Finished;
-        // 3-Byte-Länge (verify_data ist 32 oder 48 Byte, passt in ein Byte).
+        // 3-byte length (verify_data is 32 or 48 bytes, fits into one byte).
         message[1] = 0;
         message[2] = 0;
         message[3] = (byte)verifyData.Length;

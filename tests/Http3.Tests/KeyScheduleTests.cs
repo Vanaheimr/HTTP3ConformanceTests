@@ -25,13 +25,13 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Verifiziert den TLS-1.3-Key-Schedule byte-genau gegen die Beispiel-Traces aus RFC 8448
-/// ("Simple 1-RTT Handshake"). Das ist der Prüfstein aus Phase 2 des Plans.
+/// Verifies the TLS 1.3 key schedule byte for byte against the example traces from RFC 8448
+/// ("Simple 1-RTT Handshake"). This is the touchstone from phase 2 of the plan.
 /// </summary>
 [TestFixture]
 public class KeyScheduleTests
 {
-    // ClientHello (196 Byte) und ServerHello (90 Byte) aus RFC 8448 §3.
+    // ClientHello (196 bytes) and ServerHello (90 bytes) from RFC 8448 §3.
     private const string ClientHelloHex = """
         01 00 00 c0 03 03 cb 34 ec b1 e7 81 63 ba 1c 38 c6 da cb 19 6a 6d ff a2 1a 8d 99 12 ec 18 a2 ef 62 83
         02 4d ec e7 00 00 06 13 01 13 03 13 02 01 00 00 91 00 00 00 0b
@@ -94,8 +94,8 @@ public class KeyScheduleTests
     [Test]
     public void TrafficKeyDerivation_FromServerHsSecret_MatchesRfc8448()
     {
-        // RFC 8448 nutzt die TLS-Labels "key"/"iv"; das prüft HKDF-Expand-Label direkt.
-        // (QUIC nutzt "quic key"/"quic iv" — dieselbe Mechanik, andere Labels, in RFC 9001 verifiziert.)
+        // RFC 8448 uses the TLS labels "key"/"iv"; this checks HKDF-Expand-Label directly.
+        // (QUIC uses "quic key"/"quic iv" — same mechanics, different labels, verified in RFC 9001.)
         byte[] sHsSecret = Hex.Parse("b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38");
         byte[] key = TlsHkdf.ExpandLabel(System.Security.Cryptography.HashAlgorithmName.SHA256, sHsSecret, "key", 16);
         byte[] iv = TlsHkdf.ExpandLabel(System.Security.Cryptography.HashAlgorithmName.SHA256, sHsSecret, "iv", 12);

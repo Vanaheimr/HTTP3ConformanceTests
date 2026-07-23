@@ -18,8 +18,8 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 
 /// <summary>
-/// Die Encryption Levels von QUIC/TLS 1.3 (RFC 9001 §2.1). Jeder Level hat eigene Schlüssel, einen
-/// eigenen Packet-Number-Space und einen eigenen CRYPTO-Byte-Strom. 0-RTT wird (noch) nicht genutzt.
+/// The encryption levels of QUIC/TLS 1.3 (RFC 9001 §2.1). Each level has its own keys, its own
+/// packet-number space and its own CRYPTO byte stream. 0-RTT is not (yet) used.
 /// </summary>
 public enum EncryptionLevel : byte
 {

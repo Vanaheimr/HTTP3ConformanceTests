@@ -28,8 +28,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Integrationstest für Keep-Alive via PING (RFC 9000 §10.1.2): regelmäßige PINGs halten eine Verbindung
-/// über einen kurzen Idle-Timeout hinaus offen, wo sie sonst still geschlossen würde.
+/// Integration test for keep-alive via PING (RFC 9000 §10.1.2): regular PINGs keep a connection open
+/// past a short idle timeout where it would otherwise be closed silently.
 /// </summary>
 [TestFixture]
 public class KeepAliveTests
@@ -40,7 +40,7 @@ public class KeepAliveTests
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
 
-        // Server kündigt einen kurzen Idle-Timeout an (250 ms); der Client sendet alle 60 ms ein Keep-Alive-PING.
+        // The server announces a short idle timeout (250 ms); the client sends a keep-alive PING every 60 ms.
         var serverParams = new TransportParameters { MaxIdleTimeoutMs = 250 };
         using var client = new QuicClientConnection("localhost", certificateValidation: validation);
         using var server = new QuicServerConnection(cert, serverParams);
@@ -48,21 +48,21 @@ public class KeepAliveTests
 
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
-        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake must come about.");
 
         client.KeepAliveInterval = TimeSpan.FromMilliseconds(60);
 
-        // Deutlich länger als der Idle-Timeout (250 ms) verstreichen lassen, dabei regelmäßig pumpen.
+        // Let considerably more than the idle timeout (250 ms) pass, pumping regularly.
         for (int round = 0; round < 18; round++)
         {
             Pump(client, server);
             client.CheckIdleTimeout();
             server.CheckIdleTimeout();
-            Thread.Sleep(30); // ~540 ms gesamt ⇒ > 250 ms Idle-Timeout
+            Thread.Sleep(30); // ~540 ms total ⇒ > 250 ms idle timeout
         }
 
-        Assert.That(server.IsIdleTimedOut, Is.False, "Keep-Alive-PINGs müssen den Server-Idle-Timeout verhindern.");
-        Assert.That(client.IsIdleTimedOut, Is.False, "Der Client bleibt durch die PINGs (und die ACKs des Servers) aktiv.");
+        Assert.That(server.IsIdleTimedOut, Is.False, "Keep-alive PINGs must prevent the server idle timeout.");
+        Assert.That(client.IsIdleTimedOut, Is.False, "The client stays active through the PINGs (and the server's ACKs).");
     }
 
     private static void Pump(QuicClientConnection client, QuicServerConnection server)

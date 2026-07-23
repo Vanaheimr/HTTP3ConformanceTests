@@ -26,9 +26,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Session Resumption über den vollen QUIC-Datagramm-Pfad: Verbindung 1 schließt den Handshake ab und
-/// empfängt das NewSessionTicket des Servers (Application-Level-CRYPTO im 1-RTT-Paket); Verbindung 2
-/// resümiert mit dem Ticket. Prüft damit auch das Senden/Empfangen von Post-Handshake-CRYPTO.
+/// Session resumption over the full QUIC datagram path: connection 1 completes the handshake and
+/// receives the server's NewSessionTicket (application-level CRYPTO in the 1-RTT packet); connection 2
+/// resumes with the ticket. This also checks sending/receiving post-handshake CRYPTO.
 /// </summary>
 [TestFixture]
 public class QuicResumptionTests
@@ -46,7 +46,7 @@ public class QuicResumptionTests
         var cache = new ServerResumptionCache();
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
 
-        // --- Verbindung 1: voller Handshake + Ticket-Empfang ---
+        // --- Connection 1: full handshake + ticket reception ---
         ResumptionTicket ticket;
         using (var client = new QuicClientConnection("localhost", certificateValidation: validation))
         using (var server = new QuicServerConnection(cert, resumptionCache: cache))
@@ -54,24 +54,24 @@ public class QuicResumptionTests
             client.Start();
             for (int r = 0; r < 40 && !client.HandshakeConfirmed; r++)
                 Pump(client, server);
-            Assert.That(client.HandshakeConfirmed, Is.True, "Handshake (Verbindung 1) muss abschließen.");
+            Assert.That(client.HandshakeConfirmed, Is.True, "Handshake (connection 1) must complete.");
 
-            // Das NewSessionTicket kommt post-Handshake auf Application-Level – ein paar Runden nachpumpen.
+            // The NewSessionTicket arrives post-handshake at application level — pump a few more rounds.
             for (int r = 0; r < 6 && client.NewSessionTickets.Count == 0; r++)
                 Pump(client, server);
             Assert.That(client.NewSessionTickets, Is.Not.Empty);
             ticket = client.NewSessionTickets[0];
         }
 
-        // --- Verbindung 2: Resumption mit dem Ticket ---
+        // --- Connection 2: resumption with the ticket ---
         using var client2 = new QuicClientConnection("localhost", certificateValidation: validation, resumptionTicket: ticket);
         using var server2 = new QuicServerConnection(cert, resumptionCache: cache);
         client2.Start();
         for (int r = 0; r < 40 && !client2.HandshakeConfirmed; r++)
             Pump(client2, server2);
 
-        Assert.That(client2.HandshakeConfirmed, Is.True, "Handshake (Verbindung 2) muss abschließen.");
-        Assert.That(client2.ResumptionAccepted, Is.True, "Client muss die PSK-Annahme erkennen.");
-        Assert.That(server2.ResumptionAccepted, Is.True, "Server muss den Binder akzeptiert haben.");
+        Assert.That(client2.HandshakeConfirmed, Is.True, "Handshake (connection 2) must complete.");
+        Assert.That(client2.ResumptionAccepted, Is.True, "The client must detect the PSK acceptance.");
+        Assert.That(server2.ResumptionAccepted, Is.True, "The server must have accepted the binder.");
     }
 }

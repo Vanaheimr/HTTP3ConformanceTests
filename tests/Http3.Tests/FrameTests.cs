@@ -29,7 +29,7 @@ public class FrameTests
 {
     private static byte[] Serialize(params Frame[] frames) => FrameParser.Serialize(frames);
 
-    // --- RFC-9001-A.3-Payload: der echte Server-Initial-Inhalt (ACK + CRYPTO) -----------------
+    // --- RFC 9001 A.3 payload: the real server-Initial content (ACK + CRYPTO) -----------------
 
     private const string ServerPayloadHex = """
         02000000000600405a020000560303ee fce7f7b37ba1d1632e96677825ddf739
@@ -71,12 +71,12 @@ public class FrameTests
         Assert.That(Hex.ToHex(reencoded), Is.EqualTo(Hex.ToHex(payload)));
     }
 
-    // --- Client-Initial-Payload: CRYPTO + PADDING ---------------------------------------------
+    // --- Client-Initial payload: CRYPTO + PADDING ---------------------------------------------
 
     [Test]
     public void Parse_ClientInitialPayload_CoalescesPadding()
     {
-        // CRYPTO(245 Byte) + PADDING bis 1162.
+        // CRYPTO(245 bytes) + PADDING up to 1162.
         byte[] cryptoFrame = Hex.Parse("""
             060040f1010000ed0303ebf8fa56f129 39b9584a3896472ec40bb863cfd3e868
             04fe3a47f06a2b69484c000004130113 02010000c000000010000e00000b6578
@@ -97,11 +97,11 @@ public class FrameTests
         var padding = Expect.Type<PaddingFrame>(frames[1]);
         Assert.That(padding.Length, Is.EqualTo(1162 - cryptoFrame.Length));
 
-        // Round-Trip: exakt dieselben Bytes.
+        // Round trip: exactly the same bytes.
         Assert.That(Hex.ToHex(Serialize([.. frames])), Is.EqualTo(Hex.ToHex(payload)));
     }
 
-    // --- ACK mit mehreren Bereichen -----------------------------------------------------------
+    // --- ACK with multiple ranges -------------------------------------------------------------
 
     [Test]
     public void AckFrame_MultipleRanges_RoundTrips()
@@ -133,14 +133,14 @@ public class FrameTests
     [Test]
     public void ConnectionClose_Transport_RoundTrips()
     {
-        var close = ConnectionCloseFrame.Transport(TransportError.ProtocolViolation, "böse Frames", triggeringFrameType: 0x06);
+        var close = ConnectionCloseFrame.Transport(TransportError.ProtocolViolation, "evil frames", triggeringFrameType: 0x06);
 
         Assert.That(FrameParser.TryParseAll(Serialize(close), out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
         var parsed = Expect.Type<ConnectionCloseFrame>(Expect.Single(frames));
         Assert.That(parsed.ErrorCode, Is.EqualTo((ulong)TransportError.ProtocolViolation));
         Assert.That(parsed.IsApplicationError, Is.False);
         Assert.That(parsed.TriggeringFrameType, Is.EqualTo(0x06UL));
-        Assert.That(parsed.ReasonPhrase, Is.EqualTo("böse Frames"));
+        Assert.That(parsed.ReasonPhrase, Is.EqualTo("evil frames"));
     }
 
         [TestCase(0UL, false)]
@@ -170,12 +170,12 @@ public class FrameTests
         Assert.That(frames[2], Is.TypeOf<PingFrame>());
     }
 
-    // --- Fehlerpfade --------------------------------------------------------------------------
+    // --- Error paths --------------------------------------------------------------------------
 
     [Test]
     public void Parse_UnknownFrameType_ReportsError()
     {
-        // 0x40 als 1-Byte-VarInt ist Typ 0 (Padding); nutze 0x1f (reserviert/unbekannt hier).
+        // 0x40 as a 1-byte VarInt is type 0 (padding); use 0x1f (reserved/unknown here).
         byte[] bytes = [0x1f];
         Assert.That(FrameParser.TryParseAll(bytes, out _), Is.EqualTo(FrameParseResult.UnknownFrameType));
     }
@@ -183,7 +183,7 @@ public class FrameTests
     [Test]
     public void Parse_TruncatedCryptoFrame_ReportsEncodingError()
     {
-        // CRYPTO, Offset 0, Länge 10, aber nur 2 Datenbytes vorhanden.
+        // CRYPTO, offset 0, length 10, but only 2 data bytes present.
         byte[] bytes = [0x06, 0x00, 0x0a, 0xaa, 0xbb];
         Assert.That(FrameParser.TryParseAll(bytes, out _), Is.EqualTo(FrameParseResult.EncodingError));
     }

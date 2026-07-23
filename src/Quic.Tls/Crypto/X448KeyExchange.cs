@@ -26,9 +26,9 @@ using Org.BouncyCastle.Security;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// X448-Schlüsselaustausch (RFC 7748, Curve448/„Goldilocks") über BouncyCastle. Wie <see cref="X25519KeyExchange"/>
-/// eine BCL-Lücke, die BouncyCastle füllt — gekapselt hinter <see cref="IKeyExchange"/>. Öffentlicher
-/// Schlüssel und Geheimnis sind je 56 Byte. In TLS 1.3 ist das die Named Group <c>x448</c> (0x001e).
+/// X448 key exchange (RFC 7748, Curve448/"Goldilocks") via BouncyCastle. Like <see cref="X25519KeyExchange"/>
+/// a BCL gap that BouncyCastle fills — encapsulated behind <see cref="IKeyExchange"/>. Public key
+/// and secret are 56 bytes each. In TLS 1.3 this is the named group <c>x448</c> (0x001e).
 /// </summary>
 public sealed class X448KeyExchange : IKeyExchange
 {
@@ -40,7 +40,7 @@ public sealed class X448KeyExchange : IKeyExchange
     public X448KeyExchange() : this(new X448PrivateKeyParameters(new SecureRandom())) { }
 
     /// <summary>
-    /// Übernimmt einen festen privaten Schlüssel (56 Byte) — v. a. für RFC-7748-Testvektoren.
+    /// Takes a fixed private key (56 bytes) — mainly for RFC 7748 test vectors.
     /// </summary>
     internal X448KeyExchange(ReadOnlySpan<byte> privateKey)
         : this(new X448PrivateKeyParameters(privateKey.ToArray(), 0)) { }
@@ -54,7 +54,7 @@ public sealed class X448KeyExchange : IKeyExchange
     public byte[] DeriveSharedSecret(ReadOnlySpan<byte> peerPublicKey)
     {
         if (peerPublicKey.Length != X448PublicKeyParameters.KeySize)
-            throw new ArgumentException("X448-Public-Key muss 56 Byte lang sein.", nameof(peerPublicKey));
+            throw new ArgumentException("X448 public key must be 56 bytes long.", nameof(peerPublicKey));
 
         var peer = new X448PublicKeyParameters(peerPublicKey.ToArray(), 0);
         var agreement = new X448Agreement();

@@ -29,9 +29,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// GOAWAY / Graceful Shutdown (RFC 9114 §5.2): der Server kündigt die erste nicht mehr angenommene
-/// Request-Stream-ID an, bedient Laufendes zu Ende, weist Späteres mit H3_REQUEST_REJECTED zurück;
-/// der Client startet keine neuen Requests mehr und behandelt zurückgewiesene als wiederholbar.
+/// GOAWAY / graceful shutdown (RFC 9114 §5.2): the server announces the first no-longer-accepted
+/// request stream ID, serves in-flight work to completion, rejects later work with
+/// H3_REQUEST_REJECTED; the client starts no new requests and treats rejected ones as repeatable.
 /// </summary>
 [TestFixture]
 public class Http3GoAwayTests
@@ -56,8 +56,8 @@ public class Http3GoAwayTests
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
 
-        // Erster Request läuft normal durch.
-        ulong first = client.SendRequest(Http3Request.Get("localhost", "/eins"));
+        // The first request runs through normally.
+        ulong first = client.SendRequest(Http3Request.Get("localhost", "/one"));
         Http3Response? response = null;
         for (int round = 0; round < 30 && response is null; round++)
         {
@@ -67,17 +67,17 @@ public class Http3GoAwayTests
         Assert.That(response, Is.Not.Null);
         Assert.That(response!.Status, Is.EqualTo(200));
 
-        // Server leitet den Graceful Shutdown ein: GOAWAY mit der nächsten Request-Stream-ID (0 + 4).
+        // The server initiates the graceful shutdown: GOAWAY with the next request stream ID (0 + 4).
         server.InitiateGracefulShutdown();
         Assert.That(server.GoAwaySent, Is.EqualTo(4UL));
         for (int round = 0; round < 10 && client.GoAwayStreamId is null; round++)
             Pump(client, server);
 
-        // Der Client kennt die Grenze und MUSS neue Requests verweigern (§5.2).
+        // The client knows the limit and MUST refuse new requests (§5.2).
         Assert.That(client.GoAwayStreamId, Is.EqualTo(4UL));
-        Assert.Throws<InvalidOperationException>(() => client.SendRequest(Http3Request.Get("localhost", "/zwei")));
+        Assert.Throws<InvalidOperationException>(() => client.SendRequest(Http3Request.Get("localhost", "/two")));
 
-        // Alles bedient ⇒ der Server schließt anständig mit H3_NO_ERROR (Typ 0x1d).
+        // Everything served ⇒ the server closes decently with H3_NO_ERROR (type 0x1d).
         Assert.That(server.HasPendingRequests, Is.False);
         server.CloseGracefully();
         for (int round = 0; round < 10 && client.PeerCloseFrame is null; round++)
@@ -92,8 +92,8 @@ public class Http3GoAwayTests
     [Test]
     public void LateRequest_AfterGoAway_IsRejectedWithRequestRejected()
     {
-        // Ein „ungezogener" Roh-QUIC-Client ignoriert das GOAWAY und schickt trotzdem einen Request —
-        // der Server MUSS ihn zurückweisen (H3_REQUEST_REJECTED), ohne den Handler aufzurufen (§5.2).
+        // A "misbehaved" raw QUIC client ignores the GOAWAY and sends a request anyway —
+        // the server MUST reject it (H3_REQUEST_REJECTED) without invoking the handler (§5.2).
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         int handled = 0;
         using var server = new Http3ServerConnection(cert, request => { handled++; return new Http3Response { Status = 200, Body = [] }; });
@@ -104,12 +104,12 @@ public class Http3GoAwayTests
             Pump(client, server);
         Assert.That(client.HandshakeConfirmed, Is.True);
 
-        // Ordentlicher Control-Stream + erster Request (Stream 0) — wird noch bedient.
+        // Proper control stream + first request (stream 0) — still served.
         QuicStream control = client.OpenUnidirectionalStream();
         control.Write([(byte)Http3StreamType.Control]);
         control.Write(Http3Frames.Build(Http3FrameType.Settings, []));
         QuicStream firstRequest = client.OpenBidirectionalStream();
-        firstRequest.Write(Http3Frames.Build(Http3FrameType.Headers, EncodeGetHeaders("/eins")));
+        firstRequest.Write(Http3Frames.Build(Http3FrameType.Headers, EncodeGetHeaders("/one")));
         firstRequest.Finish();
         for (int round = 0; round < 10; round++)
             Pump(client, server);
@@ -120,24 +120,24 @@ public class Http3GoAwayTests
         for (int round = 0; round < 5; round++)
             Pump(client, server);
 
-        // Der Roh-Client sendet TROTZDEM einen zweiten Request (Stream 4).
+        // The raw client sends a second request (stream 4) ANYWAY.
         QuicStream lateRequest = client.OpenBidirectionalStream();
-        lateRequest.Write(Http3Frames.Build(Http3FrameType.Headers, EncodeGetHeaders("/zwei")));
+        lateRequest.Write(Http3Frames.Build(Http3FrameType.Headers, EncodeGetHeaders("/two")));
         lateRequest.Finish();
         for (int round = 0; round < 10 && !lateRequest.IsResetByPeer; round++)
             Pump(client, server);
 
-        Assert.That(handled, Is.EqualTo(1)); // der Handler wurde für den späten Request NICHT aufgerufen
-        Assert.That(lateRequest.IsResetByPeer, Is.True, "Der Server muss den späten Request zurücksetzen.");
+        Assert.That(handled, Is.EqualTo(1)); // the handler was NOT invoked for the late request
+        Assert.That(lateRequest.IsResetByPeer, Is.True, "The server must reset the late request.");
         Assert.That(lateRequest.PeerResetErrorCode, Is.EqualTo(Http3Error.RequestRejected));
-        Assert.That(server.IsClosing, Is.False, "Ein später Request ist KEIN Verbindungsfehler.");
+        Assert.That(server.IsClosing, Is.False, "A late request is NOT a connection error.");
     }
 
     [Test]
     public void ClientInFlightRequests_AboveGoAwayId_AreMarkedRejected()
     {
-        // Roh-QUIC-Server: beantwortet nichts, sendet aber ein GOAWAY mit ID 0 —
-        // der bereits laufende Client-Request (Stream 0) gilt damit als NICHT verarbeitet.
+        // Raw QUIC server: answers nothing, but sends a GOAWAY with ID 0 —
+        // the already-running client request (stream 0) thus counts as NOT processed.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         using var client = new Http3ClientConnection("localhost", certificateValidation: validation);
@@ -148,20 +148,20 @@ public class Http3GoAwayTests
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
 
-        ulong streamId = client.SendRequest(Http3Request.Get("localhost", "/haengt"));
+        ulong streamId = client.SendRequest(Http3Request.Get("localhost", "/hangs"));
         for (int round = 0; round < 5; round++)
             Pump(client, server);
 
         QuicStream control = server.OpenUnidirectionalStream();
         control.Write([(byte)Http3StreamType.Control]);
         control.Write(Http3Frames.Build(Http3FrameType.Settings, []));
-        control.Write(Http3Frames.Build(Http3FrameType.GoAway, [0x00])); // ID 0: NICHTS wurde verarbeitet
+        control.Write(Http3Frames.Build(Http3FrameType.GoAway, [0x00])); // ID 0: NOTHING was processed
         for (int round = 0; round < 10 && !client.IsRequestRejected(streamId); round++)
             Pump(client, server);
 
-        Assert.That(client.IsRequestRejected(streamId), Is.True, "Der In-Flight-Request muss als zurückgewiesen gelten.");
+        Assert.That(client.IsRequestRejected(streamId), Is.True, "The in-flight request must count as rejected.");
         Assert.That(client.TryGetResponse(streamId, out _), Is.False);
-        // §5.2: der Client räumt den Transportzustand auf (Reset der Sendeseite beim Roh-Server sichtbar).
+        // §5.2: the client cleans up the transport state (send-side reset visible at the raw server).
         for (int round = 0; round < 10 && !server.Streams[streamId].IsResetByPeer; round++)
             Pump(client, server);
         Assert.That(server.Streams[streamId].IsResetByPeer, Is.True);
@@ -188,18 +188,18 @@ public class Http3GoAwayTests
             Pump(client, server);
         Assert.That(client.GoAwayStreamId, Is.EqualTo(0UL));
 
-        // §5.2: die GOAWAY-ID darf NIE anwachsen ⇒ H3_ID_ERROR.
+        // §5.2: the GOAWAY ID must NEVER grow ⇒ H3_ID_ERROR.
         control.Write(Http3Frames.Build(Http3FrameType.GoAway, [0x08]));
         for (int round = 0; round < 10 && !client.IsClosing; round++)
             Pump(client, server);
-        Pump(client, server); // das CONNECTION_CLOSE des Clients noch zustellen
+        Pump(client, server); // still deliver the client's CONNECTION_CLOSE
 
         Assert.That(client.IsClosing, Is.True);
         Assert.That(server.PeerCloseFrame, Is.Not.Null);
         Assert.That(server.PeerCloseFrame!.ErrorCode, Is.EqualTo(Http3Error.IdError));
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static byte[] EncodeGetHeaders(string path)
         => QpackEncoder.Encode(

@@ -24,17 +24,17 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
 
 /// <summary>
-/// Eine WebTransport-Datenstrom (draft-webtrans-http3 §4.1/§4.2): ein nativer QUIC-Stream, dessen
-/// Kopf (Uni-Typ 0x54 bzw. WT_STREAM-Signal 0x41, jeweils gefolgt von der Session-ID) bereits
-/// abgetrennt ist — <see cref="Read"/>/<see cref="Write"/> arbeiten auf den reinen Nutzdaten.
-/// Reset/StopSending bilden 32-Bit-App-Fehlercodes in den WT_APPLICATION_ERROR-Bereich ab (§4.3).
+/// A WebTransport data stream (draft-webtrans-http3 §4.1/§4.2): a native QUIC stream whose header
+/// (uni type 0x54 or WT_STREAM signal 0x41, each followed by the session ID) has already been
+/// stripped — <see cref="Read"/>/<see cref="Write"/> operate on the pure payload.
+/// Reset/StopSending map 32-bit app error codes into the WT_APPLICATION_ERROR range (§4.3).
 /// </summary>
 public sealed class WebTransportStream
 {
     private readonly QuicStream _stream;
-    private readonly bool _canSend;    // Senderichtung vorhanden (bidi oder lokal geöffneter Uni)
-    private readonly bool _canReceive; // Empfangsrichtung vorhanden (bidi oder eingehender Uni)
-    private byte[] _leftover; // zusammen mit dem Kopf gelesene Nutzdaten, die zuerst zurückkommen
+    private readonly bool _canSend;    // send direction present (bidi or locally opened uni)
+    private readonly bool _canReceive; // receive direction present (bidi or incoming uni)
+    private byte[] _leftover; // payload read together with the header, returned first
 
     internal WebTransportStream(QuicStream stream, bool bidirectional, bool canSend, bool canReceive, byte[]? leftover = null)
     {
@@ -46,46 +46,46 @@ public sealed class WebTransportStream
     }
 
     /// <summary>
-    /// <c>true</c> = bidirektionaler WebTransport-Stream, <c>false</c> = unidirektional.
+    /// <c>true</c> = bidirectional WebTransport stream, <c>false</c> = unidirectional.
     /// </summary>
     public bool IsBidirectional { get; }
 
     /// <summary>
-    /// Die zugrunde liegende QUIC-Stream-ID.
+    /// The underlying QUIC stream ID.
     /// </summary>
     public ulong StreamId => _stream.Id.Value;
 
     /// <summary>
-    /// Liest den nächsten zusammenhängenden Nutzdaten-Abschnitt (Kopf bereits abgetrennt).
+    /// Reads the next contiguous payload section (header already stripped).
     /// </summary>
     public byte[] Read()
     {
         byte[] fresh = _stream.Read();
         if (_leftover.Length == 0)
             return fresh;
-        byte[] combined = [.. _leftover, .. fresh]; // einmalig den Header-Rest voranstellen
+        byte[] combined = [.. _leftover, .. fresh]; // prepend the header remainder once
         _leftover = [];
         return combined;
     }
 
     /// <summary>
-    /// Schreibt Nutzdaten (nur auf Bidi- bzw. lokal initiierten Uni-Streams sinnvoll).
+    /// Writes payload (only meaningful on bidi or locally initiated uni streams).
     /// </summary>
     public void Write(ReadOnlySpan<byte> data) => _stream.Write(data);
 
     /// <summary>
-    /// Beendet die Senderichtung (FIN).
+    /// Ends the send direction (FIN).
     /// </summary>
     public void Finish() => _stream.Finish();
 
     /// <summary>
-    /// Der Peer hat seine Senderichtung beendet (FIN) und alles ist gelesen.
+    /// The peer has ended its send direction (FIN) and everything has been read.
     /// </summary>
     public bool IsReceiveComplete => _stream.IsReceiveComplete;
 
     /// <summary>
-    /// Bricht die Senderichtung ab (RESET_STREAM); <paramref name="applicationErrorCode"/> ist ein
-    /// 32-Bit-WebTransport-Fehler und wird in den WT_APPLICATION_ERROR-Bereich abgebildet (§4.3).
+    /// Aborts the send direction (RESET_STREAM); <paramref name="applicationErrorCode"/> is a
+    /// 32-bit WebTransport error and is mapped into the WT_APPLICATION_ERROR range (§4.3).
     /// </summary>
     public void Reset(uint applicationErrorCode)
     {
@@ -94,7 +94,7 @@ public sealed class WebTransportStream
     }
 
     /// <summary>
-    /// Bricht das Lesen ab (STOP_SENDING), mit in den WT_APPLICATION_ERROR-Bereich abgebildetem Code.
+    /// Aborts reading (STOP_SENDING), with the code mapped into the WT_APPLICATION_ERROR range.
     /// </summary>
     public void StopSending(uint applicationErrorCode)
     {
@@ -103,25 +103,25 @@ public sealed class WebTransportStream
     }
 
     /// <summary>
-    /// Der Peer hat diese Stream-Seite zurückgesetzt (RESET_STREAM).
+    /// The peer reset this stream side (RESET_STREAM).
     /// </summary>
     public bool IsResetByPeer => _stream.IsResetByPeer;
 
     /// <summary>
-    /// Der (zurückgerechnete) WebTransport-Anwendungsfehlercode eines Peer-Resets, falls im
-    /// WT_APPLICATION_ERROR-Bereich; sonst <c>null</c>.
+    /// The (back-computed) WebTransport application error code of a peer reset, when in the
+    /// WT_APPLICATION_ERROR range; otherwise <c>null</c>.
     /// </summary>
     public uint? PeerResetErrorCode
         => _stream.PeerResetErrorCode is { } http ? WebTransportConstants.HttpToApplicationError(http) : null;
 
     /// <summary>
-    /// Vom Session-Management aufgerufen, wenn die Session endet (§6): beide Richtungen mit
-    /// WT_SESSION_GONE abbrechen.
+    /// Called by the session management when the session ends (§6): abort both directions with
+    /// WT_SESSION_GONE.
     /// </summary>
     internal void AbortForSessionGone()
     {
-        // Nur die tatsächlich vorhandene(n) Richtung(en) abbrechen — sonst STREAM_STATE_ERROR
-        // (STOP_SENDING auf einen send-only-Uni bzw. RESET_STREAM auf einen receive-only-Uni).
+        // Abort only the direction(s) actually present — otherwise STREAM_STATE_ERROR
+        // (STOP_SENDING on a send-only uni or RESET_STREAM on a receive-only uni).
         if (_canSend)
             _stream.Reset(WebTransportConstants.SessionGone);
         if (_canReceive)

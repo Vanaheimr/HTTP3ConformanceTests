@@ -27,9 +27,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
 
 /// <summary>
-/// Die von einer <see cref="WebTransportSession"/> benötigten Dienste ihrer HTTP/3-Verbindung:
-/// WebTransport-Streams öffnen, WT-Datagramme senden, Capsules auf dem CONNECT-Stream schreiben
-/// und dessen Senderichtung beenden.
+/// The services a <see cref="WebTransportSession"/> needs from its HTTP/3 connection: opening
+/// WebTransport streams, sending WT datagrams, writing capsules on the CONNECT stream and ending
+/// its send direction.
 /// </summary>
 internal interface IWebTransportHost
 {
@@ -47,17 +47,17 @@ internal interface IWebTransportHost
     ulong PeerInitialMaxData { get; }
 
     /// <summary>
-    /// TLS-Keying-Material-Exporter der zugrunde liegenden QUIC-Verbindung (RFC 8446 §7.5).
+    /// TLS keying-material exporter of the underlying QUIC connection (RFC 8446 §7.5).
     /// </summary>
     byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length);
 }
 
 /// <summary>
-/// Eine WebTransport-Session über HTTP/3 (draft-ietf-webtrans-http3-13): läuft über einen
-/// Extended-CONNECT-Stream (<c>:protocol = webtransport</c>) und multiplext darüber uni-/
-/// bidirektionale WebTransport-Streams (§4.1/§4.2), unzuverlässige Datagramme (§4.4) und
-/// Session-Steuerung/Flow Control per Capsules (§5.6, §6). Die Session-ID ist die Stream-ID des
-/// CONNECT-Streams.
+/// A WebTransport session over HTTP/3 (draft-ietf-webtrans-http3-13): runs over an
+/// Extended-CONNECT stream (<c>:protocol = webtransport</c>) and multiplexes over it uni-/
+/// bidirectional WebTransport streams (§4.1/§4.2), unreliable datagrams (§4.4) and session
+/// control/flow control via capsules (§5.6, §6). The session ID is the stream ID of the
+/// CONNECT stream.
 /// </summary>
 public sealed class WebTransportSession
 {
@@ -68,11 +68,11 @@ public sealed class WebTransportSession
     private readonly Queue<byte[]> _datagrams = new();
     private readonly List<WebTransportStream> _allStreams = [];
 
-    // Flow Control (nur aktiv, wenn beide WT_MAX_SESSIONS > 1 angekündigt haben, §5.1).
-    private ulong _peerMaxStreamsUni, _peerMaxStreamsBidi, _peerMaxData; // vom Peer gewährt
-    private ulong _localMaxStreamsUni, _localMaxStreamsBidi, _localMaxData; // von uns gewährt
-    private ulong _openedUni, _openedBidi;   // von uns eröffnete Streams (kumulativ)
-    private ulong _acceptedUni, _acceptedBidi; // vom Peer eröffnete (kumulativ)
+    // Flow control (only active when both sides announced WT_MAX_SESSIONS > 1, §5.1).
+    private ulong _peerMaxStreamsUni, _peerMaxStreamsBidi, _peerMaxData; // granted by the peer
+    private ulong _localMaxStreamsUni, _localMaxStreamsBidi, _localMaxData; // granted by us
+    private ulong _openedUni, _openedBidi;   // streams opened by us (cumulative)
+    private ulong _acceptedUni, _acceptedBidi; // opened by the peer (cumulative)
     private ulong _dataSent, _dataReceived;
 
     internal WebTransportSession(ulong sessionId, IWebTransportHost host)
@@ -87,39 +87,39 @@ public sealed class WebTransportSession
         _localMaxData = host.LocalInitialMaxData;
     }
 
-    /// <summary>Die Session-ID = Stream-ID des CONNECT-Streams (§4).</summary>
+    /// <summary>The session ID = stream ID of the CONNECT stream (§4).</summary>
     public ulong SessionId { get; }
 
-    /// <summary>Die Session ist beendet (§6: CONNECT-Stream geschlossen oder WT_CLOSE_SESSION).</summary>
+    /// <summary>The session has ended (§6: CONNECT stream closed or WT_CLOSE_SESSION).</summary>
     public bool IsClosed { get; private set; }
 
-    /// <summary>Fehlercode/-meldung eines empfangenen (oder impliziten) WT_CLOSE_SESSION.</summary>
+    /// <summary>Error code/message of a received (or implicit) WT_CLOSE_SESSION.</summary>
     public uint? CloseErrorCode { get; private set; }
     public string? CloseReason { get; private set; }
 
-    /// <summary>Flow Control ist aktiv (beide Seiten WT_MAX_SESSIONS &gt; 1, §5.1).</summary>
+    /// <summary>Flow control is active (both sides WT_MAX_SESSIONS &gt; 1, §5.1).</summary>
     public bool FlowControlEnabled => _host.FlowControlEnabled;
 
     /// <summary>
-    /// Das per WT-Available-Protocols/WT-Protocol ausgehandelte Anwendungsprotokoll (draft §3.3,
-    /// ALPN-artig); <c>null</c>, wenn keines angeboten oder vom Server keines gewählt wurde.
+    /// The application protocol negotiated via WT-Available-Protocols/WT-Protocol (draft §3.3,
+    /// ALPN-like); <c>null</c> when none was offered or the server picked none.
     /// </summary>
     public string? NegotiatedProtocol { get; internal set; }
 
     /// <summary>
-    /// Session-gebundener Keying-Material-Exporter (draft §4.7): der TLS-Exporter (RFC 8446 §7.5) der
-    /// QUIC-Verbindung mit festem Label <c>EXPORTER-WebTransport</c> und dem „WebTransport Exporter
-    /// Context"-Struct (Session-ID ‖ Label ‖ Kontext) — dadurch erhalten verschiedene Sessions
-    /// derselben Verbindung getrenntes Material, beide Enden derselben Session aber identisches.
-    /// Das anwendungsgegebene Label muss 1–255 UTF-8-Bytes lang sein, der Kontext 0–255 Bytes.
+    /// Session-bound keying-material exporter (draft §4.7): the QUIC connection's TLS exporter
+    /// (RFC 8446 §7.5) with the fixed label <c>EXPORTER-WebTransport</c> and the "WebTransport
+    /// Exporter Context" struct (session ID ‖ label ‖ context) — thereby different sessions of the
+    /// same connection obtain separate material, but both ends of the same session identical
+    /// material. The application-supplied label must be 1–255 UTF-8 bytes long, the context 0–255 bytes.
     /// </summary>
     public byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
     {
         byte[] labelBytes = Encoding.UTF8.GetBytes(label);
         if (labelBytes.Length is < 1 or > 255)
-            throw new ArgumentException("Das Exporter-Label muss 1–255 UTF-8-Bytes lang sein (draft §4.7).", nameof(label));
+            throw new ArgumentException("The exporter label must be 1–255 UTF-8 bytes long (draft §4.7).", nameof(label));
         if (context.Length > 255)
-            throw new ArgumentException("Der Exporter-Kontext darf höchstens 255 Bytes lang sein (draft §4.7).", nameof(context));
+            throw new ArgumentException("The exporter context may be at most 255 bytes long (draft §4.7).", nameof(context));
 
         // WebTransport Exporter Context { Session ID (64) ‖ LabelLen (8) ‖ Label ‖ ContextLen (8) ‖ Context }
         byte[] exporterContext = new byte[8 + 1 + labelBytes.Length + 1 + context.Length];
@@ -135,9 +135,9 @@ public sealed class WebTransportSession
     // ---- Streams (§4.1/§4.2) --------------------------------------------------------------
 
     /// <summary>
-    /// Öffnet einen unidirektionalen WebTransport-Stream (Kopf 0x54 ‖ Session-ID wird geschrieben).
-    /// <c>null</c>, wenn die Session zu ist oder das Stream-Limit des Peers erreicht ist (§5.3) —
-    /// dann wird ein WT_STREAMS_BLOCKED-Capsule gesendet.
+    /// Opens a unidirectional WebTransport stream (header 0x54 ‖ session ID is written).
+    /// <c>null</c> when the session is closed or the peer's stream limit is reached (§5.3) —
+    /// a WT_STREAMS_BLOCKED capsule is then sent.
     /// </summary>
     public WebTransportStream? OpenUnidirectionalStream()
     {
@@ -150,15 +150,15 @@ public sealed class WebTransportSession
             return null;
         }
         _openedUni++;
-        // Lokal geöffneter Uni-Stream: send-only.
+        // Locally opened uni stream: send-only.
         var stream = new WebTransportStream(_host.OpenWebTransportUniStream(SessionId), bidirectional: false, canSend: true, canReceive: false);
         _allStreams.Add(stream);
         return stream;
     }
 
     /// <summary>
-    /// Öffnet einen bidirektionalen WebTransport-Stream (Kopf WT_STREAM 0x41 ‖ Session-ID); Limit-/
-    /// Zustandsregeln wie bei <see cref="OpenUnidirectionalStream"/>.
+    /// Opens a bidirectional WebTransport stream (header WT_STREAM 0x41 ‖ session ID); limit/state
+    /// rules as in <see cref="OpenUnidirectionalStream"/>.
     /// </summary>
     public WebTransportStream? OpenBidirectionalStream()
     {
@@ -176,22 +176,22 @@ public sealed class WebTransportSession
         return stream;
     }
 
-    /// <summary>Nimmt den nächsten vom Peer geöffneten unidirektionalen Stream ab, falls vorhanden.</summary>
+    /// <summary>Accepts the next peer-opened unidirectional stream, if any.</summary>
     public WebTransportStream? AcceptUnidirectionalStream() => _incomingUni.Count > 0 ? _incomingUni.Dequeue() : null;
 
-    /// <summary>Nimmt den nächsten vom Peer geöffneten bidirektionalen Stream ab, falls vorhanden.</summary>
+    /// <summary>Accepts the next peer-opened bidirectional stream, if any.</summary>
     public WebTransportStream? AcceptBidirectionalStream() => _incomingBidi.Count > 0 ? _incomingBidi.Dequeue() : null;
 
-    // ---- Datagramme (§4.4) ----------------------------------------------------------------
+    // ---- Datagrams (§4.4) -----------------------------------------------------------------
 
     /// <summary>
-    /// Sendet ein WebTransport-Datagramm (unzuverlässig); die Nutzlast folgt direkt der Quarter Stream
-    /// ID des CONNECT-Streams (§4.4). <c>false</c>, wenn die Session zu ist oder das Datagramm nicht
-    /// gesendet werden kann.
+    /// Sends a WebTransport datagram (unreliable); the payload directly follows the quarter stream
+    /// ID of the CONNECT stream (§4.4). <c>false</c> when the session is closed or the datagram
+    /// cannot be sent.
     /// </summary>
     public bool SendDatagram(byte[] payload) => !IsClosed && _host.SendWebTransportDatagram(SessionId, payload);
 
-    /// <summary>Nimmt das nächste empfangene Datagramm ab, falls vorhanden.</summary>
+    /// <summary>Accepts the next received datagram, if any.</summary>
     public bool TryReceiveDatagram(out byte[]? payload)
     {
         if (_datagrams.Count > 0) { payload = _datagrams.Dequeue(); return true; }
@@ -199,11 +199,11 @@ public sealed class WebTransportSession
         return false;
     }
 
-    // ---- Session-Ende (§6) ----------------------------------------------------------------
+    // ---- Session end (§6) -----------------------------------------------------------------
 
     /// <summary>
-    /// Beendet die Session (§6): sendet ein WT_CLOSE_SESSION-Capsule und danach ein FIN auf dem
-    /// CONNECT-Stream; alle zugehörigen Streams werden mit WT_SESSION_GONE abgebrochen.
+    /// Ends the session (§6): sends a WT_CLOSE_SESSION capsule and then a FIN on the CONNECT
+    /// stream; all associated streams are aborted with WT_SESSION_GONE.
     /// </summary>
     public void Close(uint errorCode = 0, string reason = "")
     {
@@ -215,12 +215,12 @@ public sealed class WebTransportSession
         MarkClosed(errorCode, reason);
     }
 
-    // ---- Vom Manager aufgerufen -----------------------------------------------------------
+    // ---- Called by the manager ------------------------------------------------------------
 
     internal void OnIncomingUniStream(QuicStream stream, byte[] leftover)
     {
         _acceptedUni++;
-        // Eingehender Uni-Stream: receive-only.
+        // Incoming uni stream: receive-only.
         var wt = new WebTransportStream(stream, bidirectional: false, canSend: false, canReceive: true, leftover);
         _allStreams.Add(wt);
         _incomingUni.Enqueue(wt);
@@ -239,8 +239,8 @@ public sealed class WebTransportSession
     internal void OnDatagram(byte[] payload) => _datagrams.Enqueue(payload);
 
     /// <summary>
-    /// Verarbeitet ein auf dem CONNECT-Stream empfangenes Capsule (§5.6/§6). Unbekannte Typen werden
-    /// still übersprungen (RFC 9297 §3.2).
+    /// Processes a capsule received on the CONNECT stream (§5.6/§6). Unknown types are skipped
+    /// silently (RFC 9297 §3.2).
     /// </summary>
     internal void HandleCapsule(WebTransportCapsule capsule)
     {
@@ -253,7 +253,7 @@ public sealed class WebTransportSession
                 MarkClosed(code, reason);
                 break;
 
-            // Flow-Control-Capsules werden ignoriert, solange Flow Control nicht ausgehandelt ist (§5.1).
+            // Flow-control capsules are ignored while flow control is not negotiated (§5.1).
             case WebTransportConstants.CapsuleMaxStreamsUni when FlowControlEnabled:
                 if (ReadVarInt(capsule.Value, out ulong maxUni)) _peerMaxStreamsUni = Math.Max(_peerMaxStreamsUni, maxUni);
                 break;
@@ -266,12 +266,12 @@ public sealed class WebTransportSession
             case WebTransportConstants.CapsuleStreamsBlockedUni when FlowControlEnabled:
             case WebTransportConstants.CapsuleStreamsBlockedBidi when FlowControlEnabled:
             case WebTransportConstants.CapsuleDataBlocked when FlowControlEnabled:
-                break; // rein informativ – wir gewähren Streams/Data ohnehin proaktiv (MaybeGrant*)
-            // Unbekannte Capsules: still überspringen (RFC 9297 §3.2).
+                break; // purely informational – we grant streams/data proactively anyway (MaybeGrant*)
+            // Unknown capsules: skip silently (RFC 9297 §3.2).
         }
     }
 
-    /// <summary>Session-Ende durch geschlossenen CONNECT-Stream (§6, ohne WT_CLOSE_SESSION = Code 0).</summary>
+    /// <summary>Session end via a closed CONNECT stream (§6, without WT_CLOSE_SESSION = code 0).</summary>
     internal void OnConnectStreamClosed() => MarkClosed(CloseErrorCode ?? 0, CloseReason ?? "");
 
     internal bool TryRecordSentData(int bytes)
@@ -293,7 +293,7 @@ public sealed class WebTransportSession
         if (!FlowControlEnabled)
             return;
         _dataReceived += (ulong)bytes;
-        // Fenster nachführen (§5.4): ab halbem verbrauchtem Fenster mehr Kredit gewähren.
+        // Replenish the window (§5.4): grant more credit once half the window is consumed.
         if (_localMaxData - _dataReceived < _localMaxData / 2)
         {
             _localMaxData += Math.Max(_host.LocalInitialMaxData, 65536);
@@ -306,7 +306,7 @@ public sealed class WebTransportSession
     {
         if (!FlowControlEnabled)
             return;
-        // Kumulatives Limit nachführen, sobald der Peer sich seinem aktuellen Limit nähert (§5.3).
+        // Replenish the cumulative limit once the peer approaches its current limit (§5.3).
         if (uni && _acceptedUni + 1 >= _localMaxStreamsUni)
         {
             _localMaxStreamsUni += Math.Max(_host.LocalInitialMaxStreamsUni, 1);
@@ -328,7 +328,7 @@ public sealed class WebTransportSession
         IsClosed = true;
         CloseErrorCode = code;
         CloseReason = reason;
-        foreach (WebTransportStream stream in _allStreams) // §6: alle zugehörigen Streams abbrechen
+        foreach (WebTransportStream stream in _allStreams) // §6: abort all associated streams
             stream.AbortForSessionGone();
     }
 

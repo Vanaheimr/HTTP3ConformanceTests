@@ -26,17 +26,17 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Byte-genaue Verifikation der QUIC-Initial-Krypto gegen die Testvektoren aus
-/// RFC 9001, Appendix A. Das ist das Fundament des gesamten Stacks – stimmt hier ein Bit nicht,
-/// scheitert später jeder echte Handshake.
+/// Byte-exact verification of the QUIC Initial crypto against the test vectors from
+/// RFC 9001, Appendix A. This is the foundation of the entire stack — if a single bit is off here,
+/// every real handshake fails later.
 /// </summary>
 [TestFixture]
 public class Rfc9001VectorTests
 {
-    // Von beiden Seiten genutzte Destination Connection ID (RFC 9001 A).
+    // Destination connection ID used by both sides (RFC 9001 A).
     private static readonly byte[] Dcid = Hex.Parse("8394c8f03e515708");
 
-    // --- A.1: Key-Schedule ------------------------------------------------------------------
+    // --- A.1: key schedule ------------------------------------------------------------------
 
     [Test]
     public void A1_InitialSecret_Matches()
@@ -68,7 +68,7 @@ public class Rfc9001VectorTests
     [Test]
     public void A1_HkdfLabel_Encoding_Matches()
     {
-        // RFC 9001 A.1 zeigt die vollständige HkdfLabel-Kodierung.
+        // RFC 9001 A.1 shows the complete HkdfLabel encoding.
         Assert.That(Hex.ToHex(TlsHkdf.BuildHkdfLabel("client in", default, 32)), Is.EqualTo("00200f746c73313320636c69656e7420696e00"));
         Assert.That(Hex.ToHex(TlsHkdf.BuildHkdfLabel("server in", default, 32)), Is.EqualTo("00200f746c7331332073657276657220696e00"));
         Assert.That(Hex.ToHex(TlsHkdf.BuildHkdfLabel("quic key", default, 16)), Is.EqualTo("00100e746c7331332071756963206b657900"));
@@ -97,7 +97,7 @@ public class Rfc9001VectorTests
 
         byte[] header = Hex.Parse("c300000001088394c8f03e5157080000449e00000002");
         byte[] payload = new byte[1162];
-        Hex.Parse(ClientCryptoFrameHex).CopyTo(payload, 0); // Rest bleibt 0 => PADDING-Frames
+        Hex.Parse(ClientCryptoFrameHex).CopyTo(payload, 0); // the rest stays 0 => PADDING frames
 
         byte[] packet = prot.ProtectPacket(header, packetNumberLength: 4, packetNumber: 2, payload, longHeader: true);
 
@@ -168,7 +168,7 @@ public class Rfc9001VectorTests
         byte[] packet = Hex.Parse(ExpectedServerInitial);
         byte[] plaintext = new byte[packet.Length];
 
-        // pnOffset = 18 (Header ist 20 Bytes, 2-Byte-Paketnummer).
+        // pnOffset = 18 (the header is 20 bytes, 2-byte packet number).
         bool ok = prot.UnprotectPacket(
             packet, packetNumberOffset: 18, largestAckedPacketNumber: -1, longHeader: true,
             plaintext, out ulong pn, out int len);
@@ -183,7 +183,7 @@ public class Rfc9001VectorTests
     [Test]
     public void A4_RetryIntegrityTag_Matches()
     {
-        // Retry-Paket inkl. Tag; die letzten 16 Bytes sind der Tag.
+        // Retry packet incl. tag; the last 16 bytes are the tag.
         byte[] retry = Hex.Parse("ff000000010008f067a5502a4262b5746f6b656e04a265ba2eff4d829058fb3f0f2496ba");
         ReadOnlySpan<byte> retryWithoutTag = retry.AsSpan(0, retry.Length - 16);
         ReadOnlySpan<byte> expectedTag = retry.AsSpan(retry.Length - 16);
@@ -194,7 +194,7 @@ public class Rfc9001VectorTests
         Assert.That(RetryIntegrity.Verify(Dcid, retryWithoutTag, expectedTag), Is.True);
     }
 
-    // --- Erwarteter Client-Initial (1200 Bytes) ---------------------------------------------
+    // --- Expected client Initial (1200 bytes) -----------------------------------------------
 
     private const string ExpectedClientInitial = "c000000001088394c8f03e5157080000" +
         "449e7b9aec34d1b1c98dd7689fb8ec11" + "d242b123dc9bd8bab936b47d92ec356c" +

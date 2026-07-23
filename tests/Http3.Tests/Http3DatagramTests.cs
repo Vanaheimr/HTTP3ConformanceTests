@@ -29,9 +29,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// HTTP-Datagramme (RFC 9297) über QUIC-DATAGRAM-Frames (RFC 9221): Aushandlung per
-/// max_datagram_frame_size (QUIC-TP 0x20) + SETTINGS_H3_DATAGRAM (0x33), Quarter-Stream-ID-Mapping,
-/// unzuverlässige Zustellung an Extended-CONNECT-Tunnel.
+/// HTTP datagrams (RFC 9297) over QUIC DATAGRAM frames (RFC 9221): negotiation via
+/// max_datagram_frame_size (QUIC TP 0x20) + SETTINGS_H3_DATAGRAM (0x33), quarter-stream-ID mapping,
+/// unreliable delivery to Extended-CONNECT tunnels.
 /// </summary>
 [TestFixture]
 public class Http3DatagramTests
@@ -39,12 +39,12 @@ public class Http3DatagramTests
     [Test]
     public void DatagramFrame_RoundTrips_BothTypeVariants()
     {
-        // Mit Length-Feld (0x31) — unsere Sendevariante.
+        // With a length field (0x31) — our send variant.
         byte[] bytes = FrameParser.Serialize([new DatagramFrame(new byte[] { 1, 2, 3 })]);
         Assert.That(FrameParser.TryParseAll(bytes, out List<Frame> parsed), Is.EqualTo(FrameParseResult.Ok));
         Assert.That(Expect.Type<DatagramFrame>(parsed[0]).Data.ToArray(), Is.EqualTo(new byte[] { 1, 2, 3 }));
 
-        // Ohne Length-Feld (0x30): die Daten reichen bis zum Paketende (RFC 9221 §4).
+        // Without a length field (0x30): the data extends to the end of the packet (RFC 9221 §4).
         byte[] noLength = [0x30, 9, 8, 7, 6];
         Assert.That(FrameParser.TryParseAll(noLength, out List<Frame> parsed2), Is.EqualTo(FrameParseResult.Ok));
         Assert.That(Expect.Type<DatagramFrame>(parsed2[0]).Data.ToArray(), Is.EqualTo(new byte[] { 9, 8, 7, 6 }));
@@ -53,7 +53,7 @@ public class Http3DatagramTests
     [Test]
     public void Datagrams_AreNotSent_WithoutNegotiation()
     {
-        // Server ohne enableDatagrams ⇒ weder TP noch Setting ⇒ Senden verweigert (RFC 9221 §3 /
+        // Server without enableDatagrams ⇒ neither TP nor setting ⇒ sending refused (RFC 9221 §3 /
         // RFC 9297 §2.1.1 MUST NOT).
         (Http3ClientConnection client, Http3ServerConnection server, _, ServerCertificate cert) =
             DatagramPair(serverDatagrams: false);
@@ -82,7 +82,7 @@ public class Http3DatagramTests
 
         (Http3Tunnel tunnel, ulong _) = OpenTunnel(client, server);
 
-        // Client → Server.
+        // Client → server.
         Assert.That(tunnel.TrySendDatagram([10, 20, 30]), Is.True);
         byte[]? received = null;
         for (int round = 0; round < 10 && received is null; round++)
@@ -92,7 +92,7 @@ public class Http3DatagramTests
         }
         Assert.That(received, Is.EqualTo(new byte[] { 10, 20, 30 }));
 
-        // Server → Client (Echo).
+        // Server → client (echo).
         Assert.That(serverTunnel()!.TrySendDatagram([30, 20, 10]), Is.True);
         byte[]? echo = null;
         for (int round = 0; round < 10 && echo is null; round++)
@@ -108,9 +108,9 @@ public class Http3DatagramTests
     [Test]
     public void Datagram_ForRequestWithoutDatagramSemantics_AbortsTheRequestStream()
     {
-        // RFC 9297 §2: GET definiert keine Datagram-Semantik ⇒ der Server MUSS den Request beenden
-        // (STREAM-Fehler H3_DATAGRAM_ERROR 0x33) — die Verbindung lebt weiter. Der Request darf dafür
-        // noch nicht beantwortet sein ⇒ Roh-Client sendet ein GET OHNE FIN (Server wartet auf den Rest).
+        // RFC 9297 §2: GET defines no datagram semantics ⇒ the server MUST terminate the request
+        // (STREAM error H3_DATAGRAM_ERROR 0x33) — the connection lives on. For that the request must
+        // not yet be answered ⇒ the raw client sends a GET WITHOUT FIN (the server waits for the rest).
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         using var server = new Http3ServerConnection(cert, _ => new Http3Response { Status = 200, Body = [] },
                                                      enableDatagrams: true);
@@ -129,18 +129,18 @@ public class Http3DatagramTests
             new HeaderField(":method", "GET"),
             new HeaderField(":scheme", "https"),
             new HeaderField(":authority", "localhost"),
-            new HeaderField(":path", "/haengt"),
-        ]))); // KEIN Finish ⇒ der Server wartet und hat den Request unbeantwortet offen
+            new HeaderField(":path", "/hangs"),
+        ]))); // NO Finish ⇒ the server waits and has the request open unanswered
         for (int round = 0; round < 5; round++)
             PumpRaw(client, server);
 
-        Assert.That(client.TrySendDatagram([0x00, 0x01]), Is.True); // Quarter 0 ⇒ Stream 0 (der offene GET)
+        Assert.That(client.TrySendDatagram([0x00, 0x01]), Is.True); // quarter 0 ⇒ stream 0 (the open GET)
         for (int round = 0; round < 10 && !request.IsResetByPeer; round++)
             PumpRaw(client, server);
 
-        Assert.That(request.IsResetByPeer, Is.True, "Der Server muss den Request-Stream abbrechen.");
+        Assert.That(request.IsResetByPeer, Is.True, "The server must abort the request stream.");
         Assert.That(request.PeerResetErrorCode, Is.EqualTo(Http3Error.DatagramError));
-        Assert.That(server.IsClosing, Is.False, "Stream-Fehler, KEIN Verbindungsfehler (§2).");
+        Assert.That(server.IsClosing, Is.False, "Stream error, NOT a connection error (§2).");
     }
 
     private static void PumpRaw(Quic.Connection.QuicClientConnection client, Http3ServerConnection server)
@@ -155,14 +155,14 @@ public class Http3DatagramTests
     [Test]
     public void MalformedHttpDatagram_IsConnectionError()
     {
-        // Leeres QUIC-DATAGRAM ⇒ Quarter Stream ID nicht parsbar ⇒ H3_DATAGRAM_ERROR (RFC 9297 §2.1).
+        // Empty QUIC DATAGRAM ⇒ quarter stream ID unparsable ⇒ H3_DATAGRAM_ERROR (RFC 9297 §2.1).
         (Http3ClientConnection client, Http3ServerConnection server, _, ServerCertificate cert) =
             DatagramPair(serverDatagrams: true);
         using ServerCertificate certGuard = cert;
         using Http3ClientConnection c = client;
         using Http3ServerConnection s = server;
 
-        Assert.That(client.Quic.TrySendDatagram([]), Is.True); // roh, unter der HTTP-Schicht vorbei
+        Assert.That(client.Quic.TrySendDatagram([]), Is.True); // raw, bypassing the HTTP layer
         for (int round = 0; round < 10 && !server.IsClosing; round++)
             Pump(client, server);
         Pump(client, server);
@@ -181,16 +181,16 @@ public class Http3DatagramTests
         using Http3ClientConnection c = client;
         using Http3ServerConnection s = server;
 
-        Assert.That(client.Quic.TrySendDatagram([0x2a, 0xff]), Is.True); // Quarter 42 ⇒ Stream 168: nie geöffnet
+        Assert.That(client.Quic.TrySendDatagram([0x2a, 0xff]), Is.True); // quarter 42 ⇒ stream 168: never opened
         for (int round = 0; round < 10; round++)
             Pump(client, server);
-        Assert.That(server.IsClosing, Is.False, "Unbekannter Stream ⇒ still verwerfen (§2.1 SHALL).");
+        Assert.That(server.IsClosing, Is.False, "Unknown stream ⇒ drop silently (§2.1 SHALL).");
     }
 
     [Test]
     public void H3DatagramSetting_WithInvalidValue_IsSettingsError()
     {
-        // SETTINGS_H3_DATAGRAM MUSS 0 oder 1 sein (RFC 9297 §2.1.1) — Wert 2 ⇒ H3_SETTINGS_ERROR.
+        // SETTINGS_H3_DATAGRAM MUST be 0 or 1 (RFC 9297 §2.1.1) — value 2 ⇒ H3_SETTINGS_ERROR.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         using var server = new Http3ServerConnection(cert, _ => new Http3Response { Status = 200, Body = [] });
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
@@ -224,11 +224,11 @@ public class Http3DatagramTests
 
 
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     /// <summary>
-    /// Client (Datagramme an) + Server (Datagramme je nach <paramref name="serverDatagrams"/>) mit
-    /// „datagram-echo"-connectHandler; Handshake + SETTINGS gepumpt.
+    /// Client (datagrams on) + server (datagrams per <paramref name="serverDatagrams"/>) with a
+    /// "datagram-echo" connectHandler; handshake + SETTINGS pumped.
     /// </summary>
     private static (Http3ClientConnection, Http3ServerConnection, Func<Http3Tunnel?>, ServerCertificate)
         DatagramPair(bool serverDatagrams)
@@ -250,7 +250,7 @@ public class Http3DatagramTests
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
         for (int round = 0; round < 5; round++)
-            Pump(client, server); // SETTINGS beidseitig eintreffen lassen
+            Pump(client, server); // let the SETTINGS arrive on both sides
 
         return (client, server, () => serverTunnel, cert);
     }

@@ -32,51 +32,51 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// RESET_STREAM/STOP_SENDING (RFC 9000 §2.4, §3.5, §19.4/§19.5) und die darauf aufbauende
-/// HTTP/3-Request-Cancellation (RFC 9114 §4.1.1).
+/// RESET_STREAM/STOP_SENDING (RFC 9000 §2.4, §3.5, §19.4/§19.5) and the HTTP/3 request
+/// cancellation built on top of them (RFC 9114 §4.1.1).
 /// </summary>
 [TestFixture]
 public class StreamCancellationTests
 {
-    // ---- Unit: Sende-/Empfangspuffer ------------------------------------------------------
+    // ---- Unit: send/receive buffers --------------------------------------------------------
 
     [Test]
     public void SendBuffer_Reset_DropsPendingData_AndEmitsSingleResetFrame()
     {
         var send = new StreamSendBuffer(4) { MaxData = 100 };
         send.Write([1, 2, 3, 4, 5]);
-        Assert.That(send.NextFrame(3), Is.Not.Null); // 3 Bytes gesendet ⇒ Final Size = 3 (RFC 9000 §4.5)
+        Assert.That(send.NextFrame(3), Is.Not.Null); // 3 bytes sent ⇒ final size = 3 (RFC 9000 §4.5)
 
         send.Reset(0x0c);
         Assert.That(send.IsReset, Is.True);
-        Assert.That(send.HasPending, Is.False);                    // ungesendete Daten verworfen
-        Assert.That(send.NextFrame(100), Is.Null);                 // §19.4: keine STREAM-Frames mehr
+        Assert.That(send.HasPending, Is.False);                    // unsent data discarded
+        Assert.That(send.NextFrame(100), Is.Null);                 // §19.4: no more STREAM frames
         var frame = Expect.Type<ResetStreamFrame>(send.TakeResetFrame(peerSupportsResetAt: false));
         Assert.That(frame.FinalSize, Is.EqualTo(3UL));
         Assert.That(frame.ApplicationErrorCode, Is.EqualTo(0x0cUL));
-        Assert.That(send.TakeResetFrame(peerSupportsResetAt: false), Is.Null);   // nur einmal abholbar
-        send.Write([9]);                                  // nach Reset ignoriert
+        Assert.That(send.TakeResetFrame(peerSupportsResetAt: false), Is.Null);   // retrievable only once
+        send.Write([9]);                                  // ignored after the reset
         Assert.That(send.HasPending, Is.False);
     }
 
     [Test]
     public void ReceiveBuffer_Reset_ValidatesFinalSize_AndNeverCompletes()
     {
-        // Final Size kleiner als bereits Gesehenes ⇒ FINAL_SIZE_ERROR (RFC 9000 §4.5).
+        // Final size smaller than what was already seen ⇒ FINAL_SIZE_ERROR (RFC 9000 §4.5).
         var recv1 = new StreamReceiveBuffer();
         Assert.That(recv1.Receive(0, new byte[10], fin: false), Is.EqualTo(StreamReceiveResult.Ok));
         Assert.That(recv1.Reset(0x0c, finalSize: 5), Is.EqualTo(StreamReceiveResult.FinalSizeError));
 
-        // Widerspruch zu bekannter Final Size (FIN) ⇒ FINAL_SIZE_ERROR.
+        // Contradiction with a known final size (FIN) ⇒ FINAL_SIZE_ERROR.
         var recv2 = new StreamReceiveBuffer();
         Assert.That(recv2.Receive(0, new byte[4], fin: true), Is.EqualTo(StreamReceiveResult.Ok));
         Assert.That(recv2.Reset(0x0c, finalSize: 8), Is.EqualTo(StreamReceiveResult.FinalSizeError));
 
-        // Final Size über dem Flow-Control-Fenster ⇒ FLOW_CONTROL_ERROR (RFC 9000 §4.1).
+        // Final size above the flow-control window ⇒ FLOW_CONTROL_ERROR (RFC 9000 §4.1).
         var recv3 = new StreamReceiveBuffer { MaxData = 4 };
         Assert.That(recv3.Reset(0x0c, finalSize: 5), Is.EqualTo(StreamReceiveResult.FlowControlError));
 
-        // Gültiger Reset: gepufferte Daten verworfen, Fehlercode gemerkt, NIE „vollständig".
+        // Valid reset: buffered data discarded, error code remembered, NEVER "complete".
         var recv4 = new StreamReceiveBuffer();
         Assert.That(recv4.Receive(0, new byte[10], fin: false), Is.EqualTo(StreamReceiveResult.Ok));
         Assert.That(recv4.Reset(0x0c, finalSize: 20), Is.EqualTo(StreamReceiveResult.Ok));
@@ -84,11 +84,11 @@ public class StreamCancellationTests
         Assert.That(recv4.ResetErrorCode, Is.EqualTo(0x0cUL));
         Assert.That(recv4.ReadAvailable(), Is.Empty);
         Assert.That(recv4.IsComplete, Is.False);
-        Assert.That(recv4.BytesConsumed, Is.EqualTo(20UL)); // §4.5: Final Size zählt als verbrauchter Kredit
+        Assert.That(recv4.BytesConsumed, Is.EqualTo(20UL)); // §4.5: the final size counts as consumed credit
         Assert.That(recv4.Reset(0x0c, finalSize: 20), Is.EqualTo(StreamReceiveResult.Ok)); // idempotent
     }
 
-    // ---- Integration (QUIC): STOP_SENDING löst RESET_STREAM mit kopiertem Code aus --------
+    // ---- Integration (QUIC): STOP_SENDING solicits RESET_STREAM with a copied code ---------
 
     [Test]
     public void StopSending_SolicitsResetStream_WithCopiedErrorCode()
@@ -98,7 +98,7 @@ public class StreamCancellationTests
         using QuicClientConnection c = client;
         using QuicServerConnection s = server;
 
-        // Client sendet auf einem Bidi-Stream; der Server bricht das Lesen ab (§3.5).
+        // The client sends on a bidi stream; the server aborts reading (§3.5).
         QuicStream clientStream = client.OpenBidirectionalStream();
         clientStream.Write([1, 2, 3]);
         for (int round = 0; round < 5; round++)
@@ -109,8 +109,8 @@ public class StreamCancellationTests
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        // Der Client hat das STOP_SENDING erhalten und MUSS mit RESET_STREAM antworten (§3.5),
-        // den Fehlercode SOLL er kopieren; der Server sieht den Reset.
+        // The client received the STOP_SENDING and MUST answer with RESET_STREAM (§3.5),
+        // SHOULD copy the error code; the server sees the reset.
         Assert.That(clientStream.PeerStopSendingErrorCode, Is.EqualTo(0x77UL));
         Assert.That(clientStream.Send.IsReset, Is.True);
         Assert.That(serverStream.IsResetByPeer, Is.True);
@@ -127,8 +127,8 @@ public class StreamCancellationTests
         using QuicClientConnection c = client;
         using QuicServerConnection s = server;
 
-        // Der Client „missbraucht" die API: STOP_SENDING auf dem EIGENEN Uni-Stream (dort sendet der
-        // Peer nie). Der Server MUSS die Verbindung mit STREAM_STATE_ERROR beenden (RFC 9000 §19.5).
+        // The client "abuses" the API: STOP_SENDING on its OWN uni stream (the peer never sends
+        // there). The server MUST terminate the connection with STREAM_STATE_ERROR (RFC 9000 §19.5).
         QuicStream uni = client.OpenUnidirectionalStream();
         uni.Write([1]);
         for (int round = 0; round < 5; round++)
@@ -137,7 +137,7 @@ public class StreamCancellationTests
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.That(server.IsClosing, Is.True, "Der Server muss wegen STREAM_STATE_ERROR schließen.");
+        Assert.That(server.IsClosing, Is.True, "The server must close due to STREAM_STATE_ERROR.");
         Assert.That(client.PeerCloseFrame, Is.Not.Null);
         Assert.That(client.PeerCloseFrame!.ErrorCode, Is.EqualTo((ulong)TransportError.StreamStateError));
     }
@@ -150,8 +150,8 @@ public class StreamCancellationTests
         using QuicClientConnection c = client;
         using QuicServerConnection s = server;
 
-        // Spiegelbild: der Server „resettet" den client-initiierten Uni-Stream, auf dem er nie sendet.
-        // Der Client MUSS mit STREAM_STATE_ERROR schließen (RFC 9000 §19.4).
+        // Mirror image: the server "resets" the client-initiated uni stream on which it never sends.
+        // The client MUST close with STREAM_STATE_ERROR (RFC 9000 §19.4).
         QuicStream uni = client.OpenUnidirectionalStream();
         uni.Write([1]);
         for (int round = 0; round < 5; round++)
@@ -160,12 +160,12 @@ public class StreamCancellationTests
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        Assert.That(client.IsClosing, Is.True, "Der Client muss wegen STREAM_STATE_ERROR schließen.");
+        Assert.That(client.IsClosing, Is.True, "The client must close due to STREAM_STATE_ERROR.");
         Assert.That(server.PeerCloseFrame, Is.Not.Null);
         Assert.That(server.PeerCloseFrame!.ErrorCode, Is.EqualTo((ulong)TransportError.StreamStateError));
     }
 
-    // ---- Integration (HTTP/3): Request-Cancellation (RFC 9114 §4.1.1) ---------------------
+    // ---- Integration (HTTP/3): request cancellation (RFC 9114 §4.1.1) ---------------------
 
     [Test]
     public void CancelRequest_MidResponse_StopsServer_AndConnectionRemainsUsable()
@@ -176,7 +176,7 @@ public class StreamCancellationTests
         Http3Response Handler(Http3Request request) => new()
         {
             Status = 200,
-            Body = request.Path == "/big" ? bigBody : System.Text.Encoding.UTF8.GetBytes("klein"),
+            Body = request.Path == "/big" ? bigBody : System.Text.Encoding.UTF8.GetBytes("small"),
         };
 
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
@@ -189,27 +189,27 @@ public class StreamCancellationTests
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
 
-        // Große Antwort anfordern, nur kurz laufen lassen (Slow Start ⇒ erst ein Bruchteil da) …
+        // Request a large response, let it run only briefly (slow start ⇒ only a fraction has arrived) …
         ulong streamId = client.SendRequest(Http3Request.Get("localhost", "/big"));
         for (int round = 0; round < 3; round++)
             Pump(client, server);
         Assert.That(client.TryGetResponse(streamId, out _), Is.False);
 
-        // … und abbrechen (§4.1.1: RESET_STREAM + STOP_SENDING mit H3_REQUEST_CANCELLED).
+        // … and cancel (§4.1.1: RESET_STREAM + STOP_SENDING with H3_REQUEST_CANCELLED).
         client.CancelRequest(streamId);
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
         Assert.That(client.IsRequestCancelled(streamId), Is.True);
         Assert.That(client.TryGetResponse(streamId, out _), Is.False);
-        // Der Server hat seine Antwortseite zurückgesetzt und sendet nichts mehr auf dem Stream.
+        // The server reset its response side and sends nothing more on the stream.
         QuicStream serverStream = server.Quic.Streams[streamId];
         Assert.That(serverStream.Send.IsReset, Is.True);
-        Assert.That(serverStream.Send.HasPending, Is.False, "Ungesendete Antwortdaten müssen verworfen sein.");
-        // Der Client sieht den Server-Reset (H3_REQUEST_CANCELLED, via kopiertem STOP_SENDING-Code).
+        Assert.That(serverStream.Send.HasPending, Is.False, "Unsent response data must be discarded.");
+        // The client sees the server reset (H3_REQUEST_CANCELLED, via the copied STOP_SENDING code).
         Assert.That(client.RequestResetErrorCode(streamId), Is.EqualTo(Http3Error.RequestCancelled));
 
-        // Die VERBINDUNG lebt weiter: ein zweiter Request läuft normal durch.
+        // The CONNECTION lives on: a second request runs through normally.
         ulong second = client.SendRequest(Http3Request.Get("localhost", "/small"));
         Http3Response? response = null;
         for (int round = 0; round < 50 && response is null; round++)
@@ -219,7 +219,7 @@ public class StreamCancellationTests
         }
         Assert.That(response, Is.Not.Null);
         Assert.That(response!.Status, Is.EqualTo(200));
-        Assert.That(response.BodyText, Is.EqualTo("klein"));
+        Assert.That(response.BodyText, Is.EqualTo("small"));
     }
 
     [Test]
@@ -246,15 +246,15 @@ public class StreamCancellationTests
 
         client.CancelRequest(streamId);
 
-        // Den ERSTEN Client-Flight nach dem Abbruch (trägt RESET_STREAM + STOP_SENDING) verwerfen —
-        // die Loss Recovery (PTO) muss beide Frames zuverlässig nachliefern (RFC 9000 §19.4/§3.5).
+        // Drop the FIRST client flight after the cancellation (carries RESET_STREAM + STOP_SENDING) —
+        // loss recovery (PTO) must reliably redeliver both frames (RFC 9000 §19.4/§3.5).
         client.CheckTimeouts();
-        foreach (byte[] _ in client.GetDatagramsToSend()) { /* verworfen */ }
+        foreach (byte[] _ in client.GetDatagramsToSend()) { /* dropped */ }
 
         QuicStream serverStream = server.Quic.Streams[streamId];
         for (int round = 0; round < 40 && !serverStream.IsResetByPeer; round++)
         {
-            Thread.Sleep(30); // PTO verstreichen lassen
+            Thread.Sleep(30); // let the PTO elapse
             client.CheckTimeouts();
             foreach (byte[] dg in client.GetDatagramsToSend())
                 server.ProcessDatagram(dg);
@@ -262,11 +262,11 @@ public class StreamCancellationTests
                 client.ProcessDatagram(dg);
         }
 
-        Assert.That(serverStream.IsResetByPeer, Is.True, "Das RESET_STREAM muss per Retransmission ankommen.");
-        Assert.That(serverStream.Send.IsReset, Is.True, "Das STOP_SENDING muss per Retransmission ankommen.");
+        Assert.That(serverStream.IsResetByPeer, Is.True, "The RESET_STREAM must arrive via retransmission.");
+        Assert.That(serverStream.Send.IsReset, Is.True, "The STOP_SENDING must arrive via retransmission.");
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static (QuicClientConnection, QuicServerConnection, ServerCertificate) HandshakeInProcess()
     {

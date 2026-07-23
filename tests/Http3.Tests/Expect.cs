@@ -24,15 +24,15 @@ using NUnit.Framework;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Kleine NUnit-Test-Helfer, die eine Bedingung PRÜFEN und den geprüften Wert ZURÜCKGEBEN — praktisch
-/// beim Parsen (Typ eines Elements bestätigen und gleich weiterverwenden). Intern über
-/// <see cref="Assert.That(object, NUnit.Framework.Constraints.IResolveConstraint)"/>, also NUnit-nativ.
+/// Small NUnit test helpers that CHECK a condition and RETURN the checked value — handy when
+/// parsing (confirm an element's type and use it right away). Internally via
+/// <see cref="Assert.That(object, NUnit.Framework.Constraints.IResolveConstraint)"/>, i.e. NUnit-native.
 /// </summary>
 internal static class Expect
 {
     /// <summary>
-    /// Bestätigt, dass <paramref name="value"/> vom Typ <typeparamref name="T"/> ist, und gibt es
-    /// getypt zurück.
+    /// Confirms that <paramref name="value"/> is of type <typeparamref name="T"/> and returns it
+    /// typed.
     /// </summary>
     public static T Type<T>(object? value)
     {
@@ -41,7 +41,7 @@ internal static class Expect
     }
 
     /// <summary>
-    /// Bestätigt, dass <paramref name="items"/> genau ein Element enthält, und gibt es zurück.
+    /// Confirms that <paramref name="items"/> contains exactly one element and returns it.
     /// </summary>
     public static T Single<T>(IEnumerable<T> items)
     {

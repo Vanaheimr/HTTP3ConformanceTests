@@ -27,23 +27,23 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// WebTransport Application Protocol Negotiation (draft-ietf-webtrans-http3-13 §3.3): der ALPN-artige
-/// Austausch über die Structured-Fields-Header WT-Available-Protocols (List aus Strings) und
-/// WT-Protocol (Item-String).
+/// WebTransport application protocol negotiation (draft-ietf-webtrans-http3-13 §3.3): the ALPN-like
+/// exchange via the structured-fields headers WT-Available-Protocols (list of strings) and
+/// WT-Protocol (item string).
 /// </summary>
 [TestFixture]
 public class WebTransportProtocolNegotiationTests
 {
-    // ---- Unit: Structured-Fields-Kodierung (RFC 9651) --------------------------------------
+    // ---- Unit: structured-fields encoding (RFC 9651) ---------------------------------------
 
     [Test]
     public void SerializeProtocolList_QuotesAndEscapes()
     {
         Assert.That(WebTransportProtocols.SerializeProtocolList(["chat-v2", "chat-v1"]),
                     Is.EqualTo("\"chat-v2\", \"chat-v1\""));
-        // SF-Strings escapen DQUOTE und Backslash (RFC 9651 §4.1.6).
+        // SF strings escape DQUOTE and backslash (RFC 9651 §4.1.6).
         Assert.That(WebTransportProtocols.SerializeProtocol("a\"b\\c"), Is.EqualTo("\"a\\\"b\\\\c\""));
-        // Nicht darstellbare Zeichen (außerhalb %x20-7E) und leere Listen sind Fehler.
+        // Unrepresentable characters (outside %x20-7E) and empty lists are errors.
         Assert.Throws<ArgumentException>(() => WebTransportProtocols.SerializeProtocol("umlaut-ä"));
         Assert.Throws<ArgumentException>(() => WebTransportProtocols.SerializeProtocolList([]));
     }
@@ -54,12 +54,12 @@ public class WebTransportProtocolNegotiationTests
         Assert.That(WebTransportProtocols.TryParseProtocolList("\"a\", \"b\"", out List<string> list1), Is.True);
         Assert.That(list1, Is.EqualTo(new[] { "a", "b" }));
 
-        // Parameter haben keine Semantik und werden überlesen (draft §3.3) — auch String-/Zahl-Werte.
-        // (RFC 9651 §4.2.3.2: Parameter hängen OHNE Leerzeichen vor dem „;" am Mitglied.)
+        // Parameters have no semantics and are skipped over (draft §3.3) — including string/number values.
+        // (RFC 9651 §4.2.3.2: parameters attach to the member WITHOUT whitespace before the ";".)
         Assert.That(WebTransportProtocols.TryParseProtocolList("\"a\";q=0.9;note=\"x,y\", \"b\";flag", out List<string> list2), Is.True);
         Assert.That(list2, Is.EqualTo(new[] { "a", "b" }));
 
-        // Escapes im String-Wert.
+        // Escapes in the string value.
         Assert.That(WebTransportProtocols.TryParseProtocolList("\"a\\\"b\\\\c\"", out List<string> list3), Is.True);
         Assert.That(list3, Is.EqualTo(new[] { "a\"b\\c" }));
     }
@@ -67,13 +67,13 @@ public class WebTransportProtocolNegotiationTests
     [Test]
     public void TryParseProtocolList_NonStringMember_InvalidatesWholeField()
     {
-        // draft §3.3: jeder andere Werttyp als String macht das GESAMTE Feld ungültig.
+        // draft §3.3: any value type other than string invalidates the ENTIRE field.
         Assert.That(WebTransportProtocols.TryParseProtocolList("\"a\", token", out _), Is.False);
         Assert.That(WebTransportProtocols.TryParseProtocolList("42, \"a\"", out _), Is.False);
-        Assert.That(WebTransportProtocols.TryParseProtocolList("(\"a\" \"b\")", out _), Is.False); // Inner List
-        Assert.That(WebTransportProtocols.TryParseProtocolList("\"a\",", out _), Is.False);        // hängendes Komma
-        Assert.That(WebTransportProtocols.TryParseProtocolList("\"a\" \"b\"", out _), Is.False);   // fehlendes Komma
-        Assert.That(WebTransportProtocols.TryParseProtocolList("\"unbeendet", out _), Is.False);
+        Assert.That(WebTransportProtocols.TryParseProtocolList("(\"a\" \"b\")", out _), Is.False); // inner list
+        Assert.That(WebTransportProtocols.TryParseProtocolList("\"a\",", out _), Is.False);        // dangling comma
+        Assert.That(WebTransportProtocols.TryParseProtocolList("\"a\" \"b\"", out _), Is.False);   // missing comma
+        Assert.That(WebTransportProtocols.TryParseProtocolList("\"unterminated", out _), Is.False);
         Assert.That(WebTransportProtocols.TryParseProtocolList("", out _), Is.False);
     }
 
@@ -86,17 +86,17 @@ public class WebTransportProtocolNegotiationTests
         Assert.That(WebTransportProtocols.TryParseProtocol(" \"chat\";v=2 ", out string p2), Is.True);
         Assert.That(p2, Is.EqualTo("chat"));
 
-        Assert.That(WebTransportProtocols.TryParseProtocol("chat", out _), Is.False);         // Token, kein String
-        Assert.That(WebTransportProtocols.TryParseProtocol("\"a\", \"b\"", out _), Is.False); // List, kein Item
-        Assert.That(WebTransportProtocols.TryParseProtocol("?1", out _), Is.False);           // Boolean
+        Assert.That(WebTransportProtocols.TryParseProtocol("chat", out _), Is.False);         // token, not a string
+        Assert.That(WebTransportProtocols.TryParseProtocol("\"a\", \"b\"", out _), Is.False); // list, not an item
+        Assert.That(WebTransportProtocols.TryParseProtocol("?1", out _), Is.False);           // boolean
     }
 
-    // ---- Integration: Ende-zu-Ende über echte CONNECT-Header --------------------------------
+    // ---- Integration: end to end via real CONNECT headers -----------------------------------
 
     [Test]
     public void Negotiation_EndToEnd_ServerPicksFromClientList()
     {
-        // Server unterstützt chat-v2/chat-v1 und nimmt das erste (= vom Client bevorzugte) Angebot.
+        // The server supports chat-v2/chat-v1 and takes the first (= client-preferred) offer.
         (Http3ClientConnection client, Http3ServerConnection server, ServerCertificate cert) = Pair(
             selector: (_, offered) => offered.FirstOrDefault(p => p is "chat-v2" or "chat-v1"));
         using ServerCertificate certGuard = cert;
@@ -109,16 +109,16 @@ public class WebTransportProtocolNegotiationTests
         for (int r = 0; r < 20 && session is null; r++) { Pump(client, server); client.TryGetWebTransportSession(id, out session); }
 
         Assert.That(session, Is.Not.Null);
-        Assert.That(session!.NegotiatedProtocol, Is.EqualTo("chat-v2"));       // Client-Sicht
-        Assert.That(_serverSession!.NegotiatedProtocol, Is.EqualTo("chat-v2")); // Server-Sicht
+        Assert.That(session!.NegotiatedProtocol, Is.EqualTo("chat-v2"));       // client view
+        Assert.That(_serverSession!.NegotiatedProtocol, Is.EqualTo("chat-v2")); // server view
     }
 
     [Test]
     public void Negotiation_SelectorChoiceOutsideOfferedList_IsDropped()
     {
-        // draft §3.3 MUST: die Server-Wahl muss aus der Angebotsliste stammen — sonst kein WT-Protocol.
+        // draft §3.3 MUST: the server's choice must come from the offered list — otherwise no WT-Protocol.
         (Http3ClientConnection client, Http3ServerConnection server, ServerCertificate cert) = Pair(
-            selector: (_, _) => "nicht-angeboten");
+            selector: (_, _) => "not-offered");
         using ServerCertificate certGuard = cert;
         using Http3ClientConnection c = client;
         using Http3ServerConnection s = server;
@@ -135,7 +135,7 @@ public class WebTransportProtocolNegotiationTests
     [Test]
     public void Negotiation_WithoutClientOffer_YieldsNoProtocol()
     {
-        // Ohne WT-Available-Protocols darf der Server nichts wählen (Selector bekommt kein Angebot).
+        // Without WT-Available-Protocols the server may not choose anything (the selector gets no offer).
         bool selectorCalled = false;
         (Http3ClientConnection client, Http3ServerConnection server, ServerCertificate cert) = Pair(
             selector: (_, _) => { selectorCalled = true; return "chat"; });
@@ -148,12 +148,12 @@ public class WebTransportProtocolNegotiationTests
         for (int r = 0; r < 20 && session is null; r++) { Pump(client, server); client.TryGetWebTransportSession(id, out session); }
 
         Assert.That(session, Is.Not.Null);
-        Assert.That(selectorCalled, Is.False, "Ohne Angebotsliste darf der Selector nicht gefragt werden.");
+        Assert.That(selectorCalled, Is.False, "Without an offer list the selector must not be asked.");
         Assert.That(session!.NegotiatedProtocol, Is.Null);
         Assert.That(_serverSession!.NegotiatedProtocol, Is.Null);
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private WebTransportSession? _serverSession;
 
@@ -172,7 +172,7 @@ public class WebTransportProtocolNegotiationTests
         for (int r = 0; r < 20 && !client.HandshakeConfirmed; r++) Pump(client, server);
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
-        for (int r = 0; r < 5; r++) Pump(client, server); // SETTINGS beidseitig
+        for (int r = 0; r < 5; r++) Pump(client, server); // SETTINGS both ways
         return (client, server, cert);
     }
 

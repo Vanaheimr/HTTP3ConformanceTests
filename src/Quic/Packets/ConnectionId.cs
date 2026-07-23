@@ -18,14 +18,14 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Eine QUIC Connection ID (RFC 9000, §5.1): 0–20 Bytes, die eine Verbindung unabhängig von der
-/// IP-Adresse identifizieren. Als <c>readonly struct</c> mit Wertegleichheit ausgelegt, damit sie
-/// direkt als Dictionary-Schlüssel für das Verbindungs-Demultiplexing dienen kann.
+/// A QUIC connection ID (RFC 9000, §5.1): 0–20 bytes identifying a connection independently of the
+/// IP address. Designed as a <c>readonly struct</c> with value equality so it can serve directly as
+/// a dictionary key for connection demultiplexing.
 /// </summary>
 public readonly struct ConnectionId : IEquatable<ConnectionId>
 {
     /// <summary>
-    /// Maximale Länge in QUIC v1.
+    /// Maximum length in QUIC v1.
     /// </summary>
     public const int MaxLength = 20;
 
@@ -34,12 +34,12 @@ public readonly struct ConnectionId : IEquatable<ConnectionId>
     public ConnectionId(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length > MaxLength)
-            throw new ArgumentOutOfRangeException(nameof(bytes), $"Connection ID länger als {MaxLength} Bytes.");
+            throw new ArgumentOutOfRangeException(nameof(bytes), $"Connection ID longer than {MaxLength} bytes.");
         _bytes = bytes.IsEmpty ? [] : bytes.ToArray();
     }
 
     /// <summary>
-    /// Die leere Connection ID (Länge 0) – zulässig und häufig für die Server-DCID genutzt.
+    /// The empty connection ID (length 0) – valid and frequently used for the server DCID.
     /// </summary>
     public static ConnectionId Empty => default;
 

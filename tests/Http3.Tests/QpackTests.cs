@@ -26,10 +26,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 [TestFixture]
 public class QpackTests
 {
-    // --- Huffman (RFC 7541 Anhang B/C) ---------------------------------------------------------
+    // --- Huffman (RFC 7541 Appendix B/C) -------------------------------------------------------
 
         [TestCase("www.example.com", "f1e3c2e5f23a6ba0ab90f4ff")]
-    [TestCase("/index.html", "60d5485f2bce9a68")] // wird vom Encoder nur genutzt, wenn kürzer
+    [TestCase("/index.html", "60d5485f2bce9a68")] // only used by the encoder when shorter
     [TestCase("no-cache", "a8eb10649cbf")]
     public void Huffman_Encode_MatchesKnownVectors(string text, string expectedHex)
     {
@@ -43,7 +43,7 @@ public class QpackTests
     [Test]
     public void Huffman_RejectsInvalidPadding()
     {
-        // Ein Byte 0x00 ist kein gültiger Huffman-String (kein Symbol, ungültiges Padding).
+        // A 0x00 byte is not a valid Huffman string (no symbol, invalid padding).
         Assert.That(Huffman.TryDecode([0x00], out _), Is.False);
     }
 
@@ -63,9 +63,9 @@ public class QpackTests
     [Test]
     public void Encode_LiteralWithNameReference_UsesHuffmanWhenShorter()
     {
-        // RFC 9204 B.1 kodiert :path=/index.html als Name-Referenz (Static Index 1) + Wert.
-        // Das RFC-Beispiel nutzt die Rohform (0b + 11 Byte); unser Encoder bevorzugt Huffman
-        // (8 Byte, 0x88) — beides spec-konform. Interop mit der Rohform prüft der Decode-Test unten.
+        // RFC 9204 B.1 encodes :path=/index.html as a name reference (static index 1) + value.
+        // The RFC example uses the raw form (0b + 11 bytes); our encoder prefers Huffman
+        // (8 bytes, 0x88) — both spec-compliant. Interop with the raw form is checked by the decode test below.
         byte[] encoded = QpackEncoder.Encode([new HeaderField(":path", "/index.html")]);
         Assert.That(Hex.ToHex(encoded), Is.EqualTo("0000518860d5485f2bce9a68"));
     }
@@ -73,7 +73,7 @@ public class QpackTests
     [Test]
     public void Encode_ExactPair_ProducesIndexedFieldLine()
     {
-        // :method=GET ist Static-Table-Index 17 -> Indexed: 0b1100_0000 | 17 = 0xd1.
+        // :method=GET is static-table index 17 -> indexed: 0b1100_0000 | 17 = 0xd1.
         byte[] encoded = QpackEncoder.Encode([new HeaderField(":method", "GET")]);
         Assert.That(Hex.ToHex(encoded), Is.EqualTo("0000d1"));
     }
@@ -107,7 +107,7 @@ public class QpackTests
     [Test]
     public void RoundTrip_LiteralNameAndValue_WithHuffman()
     {
-        // Ein Header, dessen Name nicht in der Static Table steht -> Literal Name + Literal Value.
+        // A header whose name is not in the static table -> literal name + literal value.
         var headers = new List<HeaderField> { new("x-custom-header", "some-longer-value-that-huffman-compresses") };
 
         byte[] encoded = QpackEncoder.Encode(headers);
@@ -118,7 +118,7 @@ public class QpackTests
     [Test]
     public void Decode_DynamicTableReference_IsRejected()
     {
-        // Required Insert Count != 0 signalisiert eine dynamische Tabelle, die wir nicht führen.
+        // Required Insert Count != 0 signals a dynamic table that we do not maintain.
         QpackResult result = QpackDecoder.Decode(Hex.Parse("0200d1"), out _);
         Assert.That(result, Is.EqualTo(QpackResult.DynamicTableReference));
     }
@@ -126,7 +126,7 @@ public class QpackTests
     [Test]
     public void StaticTable_HasExpectedAnchors()
     {
-        // Stichproben gegen RFC 9204 Anhang A.
+        // Spot checks against RFC 9204 Appendix A.
         Assert.That(GetStatic(0), Is.EqualTo((":authority", "")));
         Assert.That(GetStatic(1), Is.EqualTo((":path", "/")));
         Assert.That(GetStatic(17), Is.EqualTo((":method", "GET")));
@@ -135,7 +135,7 @@ public class QpackTests
 
     private static (string, string) GetStatic(int index)
     {
-        // Zugriff über einen Round-Trip einer Indexed Field Line.
+        // Access via a round trip of an indexed field line.
         var w = new Quic.Core.Buffers.BufferWriter(8);
         try
         {
@@ -146,7 +146,7 @@ public class QpackTests
 
         static byte[] Encode(int idx)
         {
-            // 0000 (Prefix) + Indexed Field Line static (1 T=1 index 6+).
+            // 0000 (prefix) + indexed field line static (1 T=1 index 6+).
             var w = new Quic.Core.Buffers.BufferWriter(8);
             try
             {

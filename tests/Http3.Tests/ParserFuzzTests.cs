@@ -26,10 +26,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Parser-Fuzzer der Transport-Error-Matrix: die Parser für Frames, Transport-Parameter und
-/// Paket-Header dürfen auf BELIEBIGEN Bytes niemals eine Exception werfen — Fehler müssen als
-/// sauberes <c>false</c>/<c>EncodingError</c> zurückkommen (der Endpoint macht daraus dann den
-/// passenden Verbindungsfehler). Deterministisch über feste Seeds — jeder Fund ist reproduzierbar.
+/// Parser fuzzer of the transport-error matrix: the parsers for frames, transport parameters and
+/// packet headers must never throw an exception on ARBITRARY bytes — errors must come back as a
+/// clean <c>false</c>/<c>EncodingError</c> (the endpoint then turns that into the matching
+/// connection error). Deterministic via fixed seeds — every find is reproducible.
 /// </summary>
 [TestFixture]
 public class ParserFuzzTests
@@ -46,15 +46,15 @@ public class ParserFuzzTests
         {
             int length = rng.Next(0, buffer.Length + 1);
             rng.NextBytes(buffer.AsSpan(0, length));
-            FrameParser.TryParseAll(buffer.AsSpan(0, length), out _); // Ergebnis egal — nur: kein Wurf
+            FrameParser.TryParseAll(buffer.AsSpan(0, length), out _); // result irrelevant — just: no throw
         }
-        Assert.Pass($"{RandomIterations} zufällige Frame-Payloads ohne Exception geparst.");
+        Assert.Pass($"{RandomIterations} random frame payloads parsed without an exception.");
     }
 
     [Test]
     public void FrameParser_NeverThrows_OnMutatedValidFrames()
     {
-        // Eine gültige Frame-Folge quer durch alle Typen — dann gezielt Bytes kippen/kürzen.
+        // A valid frame sequence across all types — then deliberately flip/truncate bytes.
         byte[] valid = FrameParser.Serialize(
         [
             PingFrame.Instance,
@@ -76,10 +76,10 @@ public class ParserFuzzTests
             int flips = rng.Next(1, 4);
             for (int f = 0; f < flips; f++)
                 mutated[rng.Next(mutated.Length)] ^= (byte)(1 << rng.Next(8));
-            int length = rng.Next(4) == 0 ? rng.Next(mutated.Length + 1) : mutated.Length; // gelegentlich kürzen
+            int length = rng.Next(4) == 0 ? rng.Next(mutated.Length + 1) : mutated.Length; // occasionally truncate
             FrameParser.TryParseAll(mutated.AsSpan(0, length), out _);
         }
-        Assert.Pass($"{MutationIterations} mutierte Frame-Folgen ohne Exception geparst.");
+        Assert.Pass($"{MutationIterations} mutated frame sequences parsed without an exception.");
     }
 
     [Test]
@@ -94,7 +94,7 @@ public class ParserFuzzTests
             TransportParameters.TryDecode(buffer.AsSpan(0, length), out _);
         }
 
-        // Mutierte GÜLTIGE Kodierung — vor dem Längen-Guard konnte eine >20-Byte-CID hier werfen.
+        // Mutated VALID encoding — before the length guard a >20-byte CID could throw here.
         byte[] valid = new TransportParameters
         {
             StatelessResetTokenValue = new byte[16],
@@ -107,7 +107,7 @@ public class ParserFuzzTests
                 mutated[rng.Next(mutated.Length)] ^= (byte)(1 << rng.Next(8));
             TransportParameters.TryDecode(mutated, out _);
         }
-        Assert.Pass("Zufällige + mutierte Transport-Parameter ohne Exception geparst.");
+        Assert.Pass("Random + mutated transport parameters parsed without an exception.");
     }
 
     [Test]
@@ -125,6 +125,6 @@ public class ParserFuzzTests
                 LongHeader.TryParseInvariant(datagram, out _, out _, out _);
             VersionNegotiationPacket.TryParse(datagram, out _, out _, out _);
         }
-        Assert.Pass($"{RandomIterations} zufällige Datagramm-Header ohne Exception geparst.");
+        Assert.Pass($"{RandomIterations} random datagram headers parsed without an exception.");
     }
 }

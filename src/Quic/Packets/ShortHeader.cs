@@ -25,22 +25,22 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Parsen von Short-Header-Paketen (1-RTT, RFC 9000, §17.3).
+/// Parsing of short-header packets (1-RTT, RFC 9000, §17.3).
 /// <para>
-/// Anders als der Long Header enthält der Short Header <em>kein</em> Längenfeld für die Destination
-/// Connection ID. Der Empfänger muss deren Länge aus dem Verbindungszustand kennen (er hat die CID
-/// ja selbst vergeben). Ein Short-Header-Datagramm füllt außerdem stets den Rest des UDP-Pakets –
-/// es gibt kein Length-Feld, daher kein Coalescing danach.
+/// Unlike the long header, the short header contains <em>no</em> length field for the destination
+/// connection ID. The receiver must know its length from connection state (it issued the CID
+/// itself, after all). A short-header datagram also always fills the rest of the UDP packet –
+/// there is no length field, hence no coalescing after it.
 /// </para>
 /// </summary>
 public static class ShortHeader
 {
     /// <summary>
-    /// Ermittelt den Offset des Paketnummernfelds anhand der bekannten lokalen DCID-Länge.
-    /// Der Aufrufer übergibt das Ergebnis an <see cref="PacketProtection.UnprotectPacket"/>
-    /// (mit <c>longHeader: false</c>).
+    /// Determines the offset of the packet-number field from the known local DCID length.
+    /// The caller passes the result to <see cref="PacketProtection.UnprotectPacket"/>
+    /// (with <c>longHeader: false</c>).
     /// </summary>
-    /// <returns><c>true</c>, wenn das Paket ein gültiger Short Header ist und groß genug für DCID + Sample.</returns>
+    /// <returns><c>true</c> when the packet is a valid short header and large enough for DCID + sample.</returns>
     public static bool TryLocatePacketNumber(
         ReadOnlySpan<byte> datagram,
         int localConnectionIdLength,
@@ -66,8 +66,8 @@ public static class ShortHeader
     }
 
     /// <summary>
-    /// Baut ein geschütztes 1-RTT-Paket (Short Header). Das erste Byte trägt Header Form 0, Fixed Bit 1,
-    /// Spin 0, Reserved 0, Key Phase <paramref name="keyPhase"/> und die Paketnummernlänge.
+    /// Builds a protected 1-RTT packet (short header). The first byte carries header form 0, fixed
+    /// bit 1, spin 0, reserved 0, key phase <paramref name="keyPhase"/> and the packet-number length.
     /// </summary>
     public static byte[] Build(
         PacketProtection protection,
@@ -89,7 +89,7 @@ public static class ShortHeader
         PacketNumber.Encode(pn, packetNumber, packetNumberLength);
         header.WriteBytes(pn[..packetNumberLength]);
 
-        // Sehr kleine Nutzlast mit PADDING auffüllen, damit das Header-Protection-Sample passt (RFC 9001 §5.4.2).
+        // Pad a very small payload so the header-protection sample fits (RFC 9001 §5.4.2).
         byte[] padded = PacketPadding.ForSampling(payload, packetNumberLength);
         return protection.ProtectPacket(header.WrittenSpan, packetNumberLength, packetNumber, padded, longHeader: false);
     }

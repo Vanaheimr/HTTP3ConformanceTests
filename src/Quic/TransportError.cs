@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic;
 
 /// <summary>
-/// QUIC-Transport-Fehlercodes (RFC 9000, §20.1) für CONNECTION_CLOSE (Typ 0x1c).
+/// QUIC transport error codes (RFC 9000, §20.1) for CONNECTION_CLOSE (type 0x1c).
 /// </summary>
 public enum TransportError : ulong
 {
@@ -41,7 +41,7 @@ public enum TransportError : ulong
     NoViablePath = 0x10,
 
     /// <summary>
-    /// Basiswert für Crypto-Fehler (0x0100–0x01ff): 0x0100 + TLS-Alert.
+    /// Base value for crypto errors (0x0100–0x01ff): 0x0100 + TLS alert.
     /// </summary>
     CryptoErrorBase = 0x0100,
 }

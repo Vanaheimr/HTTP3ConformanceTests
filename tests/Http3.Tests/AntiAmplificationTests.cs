@@ -26,8 +26,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Tests des Anti-Amplification-Limits (RFC 9000 §8.1): Vor der Adressvalidierung darf der Server nicht
-/// mehr als das Dreifache der empfangenen Bytes senden; der Client ist per Konstruktion nicht limitiert.
+/// Tests of the anti-amplification limit (RFC 9000 §8.1): before address validation the server must not
+/// send more than three times the received bytes; the client is unlimited by construction.
 /// </summary>
 [TestFixture]
 public class AntiAmplificationTests
@@ -54,8 +54,8 @@ public class AntiAmplificationTests
         using var _ = client;
         using var __ = server;
 
-        Assert.That(client.AddressValidated, Is.True);   // der Client limitiert sich nicht
-        Assert.That(server.AddressValidated, Is.False);   // der Server erst nach Adressvalidierung
+        Assert.That(client.AddressValidated, Is.True);   // the client does not limit itself
+        Assert.That(server.AddressValidated, Is.False);   // the server only after address validation
     }
 
     [Test]
@@ -67,7 +67,7 @@ public class AntiAmplificationTests
         using var __ = server;
         client.Start();
 
-        // Genau EIN Client-Initial an den Server geben; danach NICHTS mehr empfangen.
+        // Give the server exactly ONE client Initial; after that receive NOTHING more.
         long received = 0;
         foreach (byte[] dg in client.GetDatagramsToSend())
         {
@@ -75,15 +75,15 @@ public class AntiAmplificationTests
             server.ProcessDatagram(dg);
         }
 
-        // Über mehrere Sende-Gelegenheiten (ohne weiteren Empfang) darf der Server das 3×-Limit nie überschreiten.
+        // Across several send opportunities (without further reception) the server must never exceed the 3× limit.
         long sent = 0;
         for (int i = 0; i < 10; i++)
             foreach (byte[] dg in server.GetDatagramsToSend())
                 sent += dg.Length;
 
-        Assert.That(server.AddressValidated, Is.False); // ohne Handshake-Paket des Clients weiterhin unvalidiert
-        Assert.That(sent > 0, Is.True, "Der Server sendet seinen (begrenzten) Flight.");
-        Assert.That(sent <= 3 * received, Is.True, $"Anti-Amplification verletzt: {sent} > 3×{received}.");
+        Assert.That(server.AddressValidated, Is.False); // still unvalidated without a Handshake packet from the client
+        Assert.That(sent > 0, Is.True, "The server sends its (limited) flight.");
+        Assert.That(sent <= 3 * received, Is.True, $"Anti-amplification violated: {sent} > 3×{received}.");
     }
 
     [Test]
@@ -99,7 +99,7 @@ public class AntiAmplificationTests
             Pump(client, server);
 
         Assert.That(client.HandshakeConfirmed, Is.True);
-        Assert.That(server.AddressValidated, Is.True, "Ein empfangenes Handshake-Paket validiert die Client-Adresse.");
+        Assert.That(server.AddressValidated, Is.True, "A received Handshake packet validates the client address.");
     }
 
     [Test]
@@ -111,7 +111,7 @@ public class AntiAmplificationTests
         using var server = new QuicServerConnection(cert, requireRetry: true);
         client.Start();
 
-        // Bis der Handshake steht: das gültige Retry-Token hebt das Limit früh auf.
+        // Until the handshake completes: the valid Retry token lifts the limit early.
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);
 

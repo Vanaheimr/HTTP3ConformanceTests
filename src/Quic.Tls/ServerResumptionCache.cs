@@ -24,10 +24,10 @@ using System.Security.Cryptography;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 
 /// <summary>
-/// Ein einfacher, prozesslokaler Ticket-Store für die Server-Seite der Session Resumption (RFC 8446 §4.6.1).
-/// Statt eines selbstverschlüsselnden Tickets (self-encrypted) hält der Server hier die ausgegebenen PSKs
-/// zustandsbehaftet unter einer zufälligen Identity vor. Ausreichend für eigenen Server + Tests; ein echter
-/// Deployment-Server würde die Daten stattdessen AEAD-verschlüsselt ins Ticket kodieren.
+/// A simple, process-local ticket store for the server side of session resumption (RFC 8446 §4.6.1).
+/// Instead of a self-encrypted ticket, the server here keeps the issued PSKs statefully under a
+/// random identity. Sufficient for our own server + tests; a real deployment server would instead
+/// encode the data AEAD-encrypted into the ticket.
 /// </summary>
 public sealed class ServerResumptionCache
 {
@@ -37,7 +37,7 @@ public sealed class ServerResumptionCache
     private readonly object _lock = new();
 
     /// <summary>
-    /// Legt eine neue Ticket-Identity für eine PSK an und gibt die opaken Ticket-Bytes zurück.
+    /// Creates a new ticket identity for a PSK and returns the opaque ticket bytes.
     /// </summary>
     public byte[] Issue(byte[] psk, CipherSuite cipherSuite, uint maxEarlyDataSize, byte[] transportParameters)
     {
@@ -48,7 +48,7 @@ public sealed class ServerResumptionCache
     }
 
     /// <summary>
-    /// Löst eine vom Client zurückgespielte Ticket-Identity in die gespeicherte PSK auf.
+    /// Resolves a ticket identity replayed by the client to the stored PSK.
     /// </summary>
     public bool TryResolve(byte[] identity, out byte[] psk, out CipherSuite cipherSuite)
     {

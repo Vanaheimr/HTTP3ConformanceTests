@@ -24,23 +24,23 @@ using System.Security.Cryptography;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Leitet Stateless-Reset-Tokens deterministisch aus einer Connection ID ab (RFC 9000 §10.3.1):
-/// <c>token = HMAC-SHA256(geheim, connection_id)[0..16]</c>. Damit kann ein Endpoint, der den Zustand einer
-/// Verbindung verloren hat (Neustart), das zur DCID gehörende Token neu berechnen und einen Stateless Reset
-/// senden — ohne je Zustand gehalten zu haben. Das Geheimnis lebt prozessweit; alle Instanzen teilen es.
+/// Derives stateless-reset tokens deterministically from a connection ID (RFC 9000 §10.3.1):
+/// <c>token = HMAC-SHA256(secret, connection_id)[0..16]</c>. This lets an endpoint that has lost a
+/// connection's state (restart) recompute the token belonging to the DCID and send a stateless
+/// reset — without ever having held state. The secret lives process-wide; all instances share it.
 /// </summary>
 public sealed class StatelessResetTokenGenerator
 {
     private readonly byte[] _secret;
 
     /// <summary>
-    /// <paramref name="secret"/> = das (persistente) Server-Geheimnis; ohne Angabe wird eines erzeugt.
+    /// <paramref name="secret"/> = the (persistent) server secret; one is generated when omitted.
     /// </summary>
     public StatelessResetTokenGenerator(byte[]? secret = null)
         => _secret = secret is { Length: > 0 } ? secret : RandomNumberGenerator.GetBytes(32);
 
     /// <summary>
-    /// Das zur <paramref name="connectionId"/> gehörende 16-Byte-Stateless-Reset-Token.
+    /// The 16-byte stateless-reset token belonging to <paramref name="connectionId"/>.
     /// </summary>
     public byte[] ComputeToken(ReadOnlySpan<byte> connectionId)
     {

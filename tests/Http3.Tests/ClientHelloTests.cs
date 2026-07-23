@@ -60,11 +60,11 @@ public class ClientHelloTests
         Assert.That(reader.ReadByte(), Is.EqualTo((byte)HandshakeType.ClientHello));
 
         int length = (reader.ReadByte() << 16) | (reader.ReadByte() << 8) | reader.ReadByte();
-        Assert.That(reader.Remaining, Is.EqualTo(length)); // 3-Byte-Handshake-Länge deckt exakt den Rest
+        Assert.That(reader.Remaining, Is.EqualTo(length)); // the 3-byte handshake length covers exactly the rest
 
         Assert.That(reader.ReadUInt16(), Is.EqualTo(TlsVersions.Tls12)); // legacy_version
-        reader.ReadBytes(32);                                 // Random
-        Assert.That(reader.ReadByte(), Is.EqualTo(0));                   // leere legacy_session_id
+        reader.ReadBytes(32);                                 // random
+        Assert.That(reader.ReadByte(), Is.EqualTo(0));                   // empty legacy_session_id
 
         ushort csLen = reader.ReadUInt16();
         List<ushort> suites = ReadUInt16List(ref reader, csLen);
@@ -77,28 +77,28 @@ public class ClientHelloTests
         Assert.That(reader.Remaining, Is.EqualTo(extsLen));
         Dictionary<ushort, byte[]> exts = ReadExtensions(ref reader);
 
-        // supported_versions enthält TLS 1.3
+        // supported_versions contains TLS 1.3
         Assert.That(exts.ContainsKey((ushort)ExtensionType.SupportedVersions), Is.True);
         byte[] sv = exts[(ushort)ExtensionType.SupportedVersions];
         Assert.That((sv[1] << 8) | sv[2], Is.EqualTo(0x0304)); // [listLen(1)][0x03,0x04]
 
-        // ALPN enthält "h3"
+        // ALPN contains "h3"
         byte[] alpn = exts[(ushort)ExtensionType.Alpn];
         Assert.That(DecodeAlpn(alpn), Does.Contain("h3"));
 
-        // key_share: secp256r1 mit 65-Byte-Punkt
+        // key_share: secp256r1 with a 65-byte point
         byte[] ks = exts[(ushort)ExtensionType.KeyShare];
         int group = (ks[2] << 8) | ks[3];
         int keyLen = (ks[4] << 8) | ks[5];
         Assert.That(group, Is.EqualTo((int)NamedGroup.Secp256r1));
         Assert.That(keyLen, Is.EqualTo(65));
-        Assert.That(ks[6], Is.EqualTo(0x04)); // unkomprimierter Punkt
+        Assert.That(ks[6], Is.EqualTo(0x04)); // uncompressed point
 
-        // SNI enthält den Hostnamen
+        // SNI contains the hostname
         byte[] sni = exts[(ushort)ExtensionType.ServerName];
         Assert.That(System.Text.Encoding.ASCII.GetString(sni), Does.Contain("cloudflare-quic.com"));
 
-        // quic_transport_parameters vorhanden und nicht leer
+        // quic_transport_parameters present and non-empty
         Assert.That(exts.TryGetValue((ushort)ExtensionType.QuicTransportParameters, out byte[]? qtp), Is.True);
         Assert.That(qtp!, Is.Not.Empty);
     }
@@ -113,7 +113,7 @@ public class ClientHelloTests
         byte[] serverView = server.DeriveSharedSecret(client.PublicKey);
 
         Assert.That(serverView, Is.EqualTo(clientView));
-        Assert.That(clientView.Length, Is.EqualTo(32)); // P-256: X-Koordinate = 32 Byte
+        Assert.That(clientView.Length, Is.EqualTo(32)); // P-256: X coordinate = 32 bytes
     }
 
     [Test]
@@ -137,14 +137,14 @@ public class ClientHelloTests
     [Test]
     public void TransportParameters_Decode_IgnoresUnknownParameters()
     {
-        // Bekannter Parameter (max_idle_timeout id=01, len=01, wert=05)
-        // + unbekannte ID 16383 (2-Byte-VarInt 7fff), len=02, Wert aabb -> muss ignoriert werden.
+        // Known parameter (max_idle_timeout id=01, len=01, value=05)
+        // + unknown ID 16383 (2-byte VarInt 7fff), len=02, value aabb -> must be ignored.
         byte[] wire = Hex.Parse("010105" + "7fff02aabb");
         Assert.That(TransportParameters.TryDecode(wire, out TransportParameters? tp), Is.True);
         Assert.That(tp!.MaxIdleTimeoutMs, Is.EqualTo(5UL));
     }
 
-    // --- Hilfsfunktionen ----------------------------------------------------------------------
+    // --- Helper functions ---------------------------------------------------------------------
 
     private static List<ushort> ReadUInt16List(ref BufferReader reader, int byteLength)
     {
@@ -170,7 +170,7 @@ public class ClientHelloTests
     {
         var protocols = new List<string>();
         var reader = new BufferReader(alpn);
-        reader.ReadUInt16(); // ProtocolNameList-Länge
+        reader.ReadUInt16(); // ProtocolNameList length
         while (!reader.IsEmpty)
         {
             byte len = reader.ReadByte();

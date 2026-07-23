@@ -30,13 +30,13 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset): das RESET_STREAM mit garantierter
-/// Teilzustellung bis zu einer Reliable Size, plus der zugehörige reset_stream_at-Transportparameter.
+/// RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset): the RESET_STREAM with guaranteed
+/// partial delivery up to a reliable size, plus the associated reset_stream_at transport parameter.
 /// </summary>
 [TestFixture]
 public class ResetStreamAtTests
 {
-    // ---- Unit: Frame-Kodierung ------------------------------------------------------------
+    // ---- Unit: frame encoding --------------------------------------------------------------
 
     [Test]
     public void ResetStreamAtFrame_RoundTrips()
@@ -55,7 +55,7 @@ public class ResetStreamAtTests
     [Test]
     public void ResetStreamAtFrame_TruncatedBody_IsEncodingError()
     {
-        // Typ 0x24 gefolgt von nur drei der vier Pflicht-VarInts ⇒ FRAME_ENCODING_ERROR.
+        // Type 0x24 followed by only three of the four mandatory VarInts ⇒ FRAME_ENCODING_ERROR.
         var writer = new BufferWriter();
         try
         {
@@ -68,18 +68,18 @@ public class ResetStreamAtTests
         finally { writer.Dispose(); }
     }
 
-    // ---- Unit: Transportparameter ---------------------------------------------------------
+    // ---- Unit: transport parameter --------------------------------------------------------
 
     [Test]
     public void TransportParameter_ResetStreamAt_IsAdvertisedAndParsed()
     {
         var tp = new TransportParameters();
-        Assert.That(tp.ResetStreamAtSupported, Is.True); // Standard: aktiv
+        Assert.That(tp.ResetStreamAtSupported, Is.True); // default: active
 
         Assert.That(TransportParameters.TryDecode(tp.Encode(), out var decoded), Is.True);
         Assert.That(decoded!.PeerSupportsResetStreamAt, Is.True);
 
-        // Abgeschaltet ⇒ Parameter fehlt ⇒ Peer sieht keine Unterstützung.
+        // Turned off ⇒ parameter absent ⇒ the peer sees no support.
         var off = new TransportParameters { ResetStreamAtSupported = false };
         Assert.That(TransportParameters.TryDecode(off.Encode(), out var decodedOff), Is.True);
         Assert.That(decodedOff!.PeerSupportsResetStreamAt, Is.False);
@@ -88,19 +88,19 @@ public class ResetStreamAtTests
     [Test]
     public void TransportParameter_ResetStreamAt_NonEmptyValue_IsRejected()
     {
-        // draft §3: ein nicht-leerer Wert ist ein TRANSPORT_PARAMETER_ERROR ⇒ Decode schlägt fehl.
+        // draft §3: a non-empty value is a TRANSPORT_PARAMETER_ERROR ⇒ decode fails.
         var writer = new BufferWriter();
         try
         {
             writer.WriteVarInt(0x1d);          // reset_stream_at
-            writer.WriteVarInt(1);             // Länge 1 (unzulässig)
+            writer.WriteVarInt(1);             // length 1 (not permitted)
             writer.WriteBytes(new byte[] { 0 });
             Assert.That(TransportParameters.TryDecode(writer.WrittenSpan.ToArray(), out _), Is.False);
         }
         finally { writer.Dispose(); }
     }
 
-    // ---- Unit: Empfangspuffer (zuverlässige Teilzustellung) -------------------------------
+    // ---- Unit: receive buffer (reliable partial delivery) ---------------------------------
 
     [Test]
     public void ReceiveBuffer_ResetAt_DeliversReliablePrefix_ThenSurfacesReset()
@@ -108,14 +108,14 @@ public class ResetStreamAtTests
         var recv = new StreamReceiveBuffer { MaxData = 1000 };
         Assert.That(recv.Receive(0, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 }, fin: false), Is.EqualTo(StreamReceiveResult.Ok));
 
-        // RESET_STREAM_AT: Final Size 100, aber die ersten 4 Bytes bleiben zustellbar.
+        // RESET_STREAM_AT: final size 100, but the first 4 bytes remain deliverable.
         Assert.That(recv.ResetAt(0x0c, finalSize: 100, reliableSize: 4), Is.EqualTo(StreamReceiveResult.Ok));
         Assert.That(recv.ResetReceived, Is.True);
         Assert.That(recv.ReliableSize, Is.EqualTo(4UL));
 
-        // Nur die zuverlässigen 4 Bytes werden geliefert, der Rest verworfen.
+        // Only the reliable 4 bytes are delivered, the rest is discarded.
         Assert.That(recv.ReadAvailable(), Is.EqualTo(new byte[] { 1, 2, 3, 4 }));
-        // §4.5: die volle Final Size zählt als verbrauchter Flow-Control-Kredit.
+        // §4.5: the full final size counts as consumed flow-control credit.
         Assert.That(recv.BytesConsumed, Is.EqualTo(100UL));
         Assert.That(recv.IsComplete, Is.False);
     }
@@ -134,11 +134,11 @@ public class ResetStreamAtTests
         Assert.That(recv.Receive(0, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }, fin: false), Is.EqualTo(StreamReceiveResult.Ok));
         Assert.That(recv.ResetAt(0x0c, finalSize: 100, reliableSize: 6), Is.EqualTo(StreamReceiveResult.Ok));
 
-        // §5.2: eine Erhöhung (Reordering) wird ignoriert …
+        // §5.2: an increase (reordering) is ignored …
         Assert.That(recv.ResetAt(0x0c, finalSize: 100, reliableSize: 8), Is.EqualTo(StreamReceiveResult.Ok));
         Assert.That(recv.ReliableSize, Is.EqualTo(6UL));
 
-        // … eine Senkung wird übernommen und kürzt bereits Gepuffertes.
+        // … a decrease is adopted and trims what is already buffered.
         Assert.That(recv.ResetAt(0x0c, finalSize: 100, reliableSize: 3), Is.EqualTo(StreamReceiveResult.Ok));
         Assert.That(recv.ReliableSize, Is.EqualTo(3UL));
         Assert.That(recv.ReadAvailable(), Is.EqualTo(new byte[] { 1, 2, 3 }));
@@ -158,19 +158,19 @@ public class ResetStreamAtTests
         var recv = new StreamReceiveBuffer { MaxData = 1000 };
         Assert.That(recv.ResetAt(0x0c, finalSize: 100, reliableSize: 4), Is.EqualTo(StreamReceiveResult.Ok));
 
-        // Ein danach eintreffendes STREAM-Frame straddled die Reliable-Grenze: nur bis 4 wird geliefert.
+        // A STREAM frame arriving afterwards straddles the reliable boundary: only up to 4 is delivered.
         Assert.That(recv.Receive(0, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }, fin: false), Is.EqualTo(StreamReceiveResult.Ok));
         Assert.That(recv.ReadAvailable(), Is.EqualTo(new byte[] { 1, 2, 3, 4 }));
     }
 
-    // ---- Unit: Sendepuffer ----------------------------------------------------------------
+    // ---- Unit: send buffer ----------------------------------------------------------------
 
     [Test]
     public void SendBuffer_ResetAt_EmitsResetStreamAt_WhenPeerSupports()
     {
         var send = new StreamSendBuffer(8) { MaxData = 1000 };
         send.Write(new byte[50]);
-        Assert.That(send.NextFrame(50), Is.Not.Null); // 50 Bytes gesendet ⇒ Final Size = 50
+        Assert.That(send.NextFrame(50), Is.Not.Null); // 50 bytes sent ⇒ final size = 50
 
         send.ResetAt(0x0c, reliableSize: 20);
         Assert.That(send.IsResetAt, Is.True);
@@ -189,7 +189,7 @@ public class ResetStreamAtTests
         Assert.That(send.NextFrame(50), Is.Not.Null);
 
         send.ResetAt(0x0c, reliableSize: 20);
-        // Ohne Peer-Unterstützung ⇒ gewöhnliches RESET_STREAM (ohne Zustellgarantie).
+        // Without peer support ⇒ an ordinary RESET_STREAM (without a delivery guarantee).
         var frame = Expect.Type<ResetStreamFrame>(send.TakeResetFrame(peerSupportsResetAt: false));
         Assert.That(frame.FinalSize, Is.EqualTo(50UL));
     }
@@ -199,14 +199,14 @@ public class ResetStreamAtTests
     {
         var send = new StreamSendBuffer(8) { MaxData = 1000 };
         send.Write(new byte[10]);
-        Assert.That(send.NextFrame(10), Is.Not.Null); // nur 10 Bytes gesendet
+        Assert.That(send.NextFrame(10), Is.Not.Null); // only 10 bytes sent
 
-        // Es lassen sich nur bereits gesendete Bytes garantieren ⇒ Reliable Size auf 10 begrenzt.
+        // Only already-sent bytes can be guaranteed ⇒ reliable size clamped to 10.
         send.ResetAt(0x0c, reliableSize: 999);
         Assert.That(send.ReliableSize, Is.EqualTo(10UL));
     }
 
-    // ---- Integration (QUIC): Ende-zu-Ende über echte Frame-Verarbeitung -------------------
+    // ---- Integration (QUIC): end to end via real frame processing -------------------------
 
     [Test]
     public void ResetStreamAt_EndToEnd_PeerReceivesReliablePrefix()
@@ -216,10 +216,10 @@ public class ResetStreamAtTests
         using QuicClientConnection c = client;
         using QuicServerConnection s = server;
 
-        // Der Peer (Server) hat reset_stream_at angekündigt.
+        // The peer (server) has announced reset_stream_at.
         Assert.That(client.PeerTransportParameters!.PeerSupportsResetStreamAt, Is.True);
 
-        // Client sendet 12 Bytes auf einem Bidi-Stream und bricht dann mit Reliable Size 4 ab.
+        // The client sends 12 bytes on a bidi stream and then aborts with reliable size 4.
         QuicStream clientStream = client.OpenBidirectionalStream();
         byte[] payload = { 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21 };
         clientStream.Write(payload);
@@ -237,11 +237,11 @@ public class ResetStreamAtTests
         Assert.That(serverStream.IsResetByPeer, Is.True);
         Assert.That(serverStream.PeerResetErrorCode, Is.EqualTo(0x0cUL));
         Assert.That(serverStream.PeerReliableSize, Is.EqualTo(4UL));
-        // Die zuverlässig zugesagten ersten 4 Bytes sind trotz Reset lesbar.
+        // The reliably promised first 4 bytes are readable despite the reset.
         Assert.That(serverStream.Read(), Is.EqualTo(new byte[] { 10, 11, 12, 13 }));
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static (QuicClientConnection, QuicServerConnection, ServerCertificate) HandshakeInProcess()
     {

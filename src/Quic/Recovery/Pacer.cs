@@ -18,32 +18,32 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Recovery;
 
 /// <summary>
-/// Token-Bucket-Pacer nach RFC 9002 §7.7. Verteilt die gesendeten Bytes zeitlich, damit nicht das
-/// gesamte Congestion Window als Burst rausgeht (was Warteschlangen und Verluste provoziert). Die Rate
-/// ist <c>N · congestion_window / smoothed_rtt</c> (N = 1.25); das Budget wird auf einen kleinen Burst
-/// gedeckelt, sodass nach Leerlauf nicht beliebig viel „nachgeholt" werden kann.
-/// <para>Zeitpunkte sind <see cref="TimeSpan.Ticks"/> (100 ns) einer monotonen Uhr.</para>
+/// Token-bucket pacer per RFC 9002 §7.7. Spreads the sent bytes over time so the whole congestion
+/// window does not go out as one burst (which provokes queues and losses). The rate is
+/// <c>N · congestion_window / smoothed_rtt</c> (N = 1.25); the budget is capped at a small burst so
+/// that after idle time not arbitrarily much can be "caught up".
+/// <para>Timestamps are <see cref="TimeSpan.Ticks"/> (100 ns) of a monotonic clock.</para>
 /// </summary>
 public sealed class Pacer
 {
     /// <summary>
-    /// Pacing-Gain N (RFC 9002 §7.7): erlaubt 25 % über der reinen cwnd/RTT-Rate.
+    /// Pacing gain N (RFC 9002 §7.7): allows 25 % above the pure cwnd/RTT rate.
     /// </summary>
     private const double PacingGain = 1.25;
 
     private const int MaxDatagramSize = 1200;
 
-    private double _budget;              // verfügbares Sendebudget in Bytes (darf transient negativ sein)
+    private double _budget;              // available send budget in bytes (may be transiently negative)
     private long _lastRefillTicks = -1;
 
     /// <summary>
-    /// Aktuelles Sendebudget in Bytes (auf 0 geklemmt für den Aufrufer).
+    /// Current send budget in bytes (clamped to 0 for the caller).
     /// </summary>
     public long AvailableBytes => (long)Math.Max(0, _budget);
 
     /// <summary>
-    /// Füllt das Budget anhand der seit dem letzten Aufruf verstrichenen Zeit und der aktuellen Rate
-    /// nach. Beim ersten Aufruf wird ein voller Burst gutgeschrieben.
+    /// Refills the budget based on the time elapsed since the last call and the current rate.
+    /// On the first call, a full burst is credited.
     /// </summary>
     public void Refill(long nowTicks, long congestionWindow, TimeSpan smoothedRtt)
     {
@@ -51,7 +51,7 @@ public sealed class Pacer
         if (_lastRefillTicks < 0)
         {
             _lastRefillTicks = nowTicks;
-            _budget = burstCap; // anfangs darf ein voller Burst raus (Initial Window)
+            _budget = burstCap; // initially a full burst may go out (initial window)
             return;
         }
 
@@ -64,12 +64,12 @@ public sealed class Pacer
     }
 
     /// <summary>
-    /// Bucht <paramref name="bytes"/> gesendete Bytes ab (Budget darf dabei negativ werden).
+    /// Debits <paramref name="bytes"/> sent bytes (the budget may go negative in the process).
     /// </summary>
     public void OnBytesSent(int bytes) => _budget -= bytes;
 
     /// <summary>
-    /// Bytes pro Tick bei aktueller Rate; ohne gültige RTT wird nicht gepact (unbegrenzt).
+    /// Bytes per tick at the current rate; without a valid RTT there is no pacing (unlimited).
     /// </summary>
     private static double BytesPerTick(long congestionWindow, TimeSpan smoothedRtt)
     {
@@ -80,8 +80,8 @@ public sealed class Pacer
     }
 
     /// <summary>
-    /// Burst-Kappung: erlaubt kurze Bursts (mind. 2 Datagramme), aber höchstens ein Initial-Window
-    /// (≈ 10 Datagramme) bzw. das aktuelle Fenster, je nachdem, was kleiner ist.
+    /// Burst cap: allows short bursts (at least 2 datagrams), but at most one initial window
+    /// (≈ 10 datagrams) or the current window, whichever is smaller.
     /// </summary>
     private static long BurstCap(long congestionWindow)
         => Math.Max(2 * MaxDatagramSize, Math.Min(congestionWindow, 10 * MaxDatagramSize));

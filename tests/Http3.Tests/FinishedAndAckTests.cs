@@ -32,7 +32,7 @@ public class FinishedAndAckTests
     [Test]
     public void FinishedKey_FromServerHsSecret_MatchesRfc8448()
     {
-        // RFC 8448 §3: finished_key aus dem server handshake traffic secret.
+        // RFC 8448 §3: finished_key from the server handshake traffic secret.
         byte[] sHsSecret = Hex.Parse("b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38");
         byte[] finishedKey = new KeySchedule(CipherSuite.Aes128GcmSha256).FinishedKey(sHsSecret);
 
@@ -48,14 +48,14 @@ public class FinishedAndAckTests
         byte[] msg = Finished.BuildMessage(verifyData);
 
         Assert.That(msg[0], Is.EqualTo((byte)HandshakeType.Finished));
-        Assert.That(msg[1..4], Is.EqualTo(new byte[] { 0x00, 0x00, 0x20 })); // 3-Byte-Länge = 32
+        Assert.That(msg[1..4], Is.EqualTo(new byte[] { 0x00, 0x00, 0x20 })); // 3-byte length = 32
         Assert.That(msg[4..], Is.EqualTo(verifyData));
     }
 
     [Test]
     public void AckFrame_FromPacketNumbers_CoalescesConsecutive()
     {
-        // {0,1,2, 5, 7,8} -> Bereiche [8..7], [5..5], [2..0]
+        // {0,1,2, 5, 7,8} -> ranges [8..7], [5..5], [2..0]
         var ack = AckFrame.FromPacketNumbers([2, 0, 1, 8, 5, 7]);
 
         Assert.That(ack.LargestAcknowledged, Is.EqualTo(8UL));

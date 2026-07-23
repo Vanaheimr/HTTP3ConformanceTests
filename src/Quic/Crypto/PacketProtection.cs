@@ -25,7 +25,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 
 /// <summary>
-/// AEAD-Verfahren einer Cipher Suite: AES-GCM (AES-128/256) oder ChaCha20-Poly1305.
+/// AEAD algorithm of a cipher suite: AES-GCM (AES-128/256) or ChaCha20-Poly1305.
 /// </summary>
 public enum AeadAlgorithm
 {
@@ -34,23 +34,23 @@ public enum AeadAlgorithm
 }
 
 /// <summary>
-/// Packet Protection (AEAD, RFC 9001 §5.3) und Header Protection (§5.4) für eine Richtung auf einem
-/// Encryption-Level. Kapselt Key, IV und HP-Key als einsatzbereite Krypto-Objekte. Unterstützt AES-GCM
-/// (HP via AES-ECB) und ChaCha20-Poly1305 (HP via ChaCha20-Keystream, RFC 9001 §5.4.4).
+/// Packet protection (AEAD, RFC 9001 §5.3) and header protection (§5.4) for one direction on one
+/// encryption level. Encapsulates key, IV and HP key as ready-to-use crypto objects. Supports
+/// AES-GCM (HP via AES-ECB) and ChaCha20-Poly1305 (HP via ChaCha20 keystream, RFC 9001 §5.4.4).
 /// </summary>
 public sealed class PacketProtection : IDisposable
 {
     private readonly AesGcm? _aesGcm;
     private readonly ChaCha20Poly1305? _chacha;
     private readonly byte[] _iv;
-    private readonly Aes? _headerProtectionAes;   // AES-ECB (AES-GCM-Suiten)
-    private readonly byte[]? _headerProtectionKey; // ChaCha20-HP-Schlüssel (ChaCha20-Suite)
+    private readonly Aes? _headerProtectionAes;   // AES-ECB (AES-GCM suites)
+    private readonly byte[]? _headerProtectionKey; // ChaCha20 HP key (ChaCha20 suite)
 
     private const int TagLength = 16;
     private const int SampleLength = 16;
 
     /// <summary>
-    /// Erzeugt eine Protection für das angegebene AEAD-Verfahren (Standard: AES-GCM, u. a. Initial).
+    /// Creates a protection for the given AEAD algorithm (default: AES-GCM, incl. Initial).
     /// </summary>
     public PacketProtection(TrafficKeys keys, AeadAlgorithm algorithm = AeadAlgorithm.AesGcm)
     {
@@ -69,11 +69,11 @@ public sealed class PacketProtection : IDisposable
         }
     }
 
-    // ---- AEAD-Nonce (RFC 9001 §5.3) --------------------------------------------------------
+    // ---- AEAD nonce (RFC 9001 §5.3) --------------------------------------------------------
 
     /// <summary>
-    /// Nonce = IV XOR (Paketnummer, linksbündig mit Nullen auf IV-Länge aufgefüllt, Big-Endian).
-    /// Es zählt die volle rekonstruierte Paketnummer, nicht die verkürzte Wire-Kodierung.
+    /// Nonce = IV XOR (packet number, left-padded with zeros to IV length, big-endian).
+    /// The full reconstructed packet number counts, not the truncated wire encoding.
     /// </summary>
     private void ComputeNonce(ulong packetNumber, Span<byte> nonce)
     {
@@ -85,8 +85,8 @@ public sealed class PacketProtection : IDisposable
     // ---- AEAD encrypt/decrypt --------------------------------------------------------------
 
     /// <summary>
-    /// Verschlüsselt <paramref name="plaintext"/> mit dem Header als Associated Data.
-    /// <paramref name="output"/> muss <c>plaintext.Length + 16</c> Bytes fassen; Rückgabe ist die geschriebene Länge.
+    /// Encrypts <paramref name="plaintext"/> with the header as associated data.
+    /// <paramref name="output"/> must hold <c>plaintext.Length + 16</c> bytes; the return value is the written length.
     /// </summary>
     public int Encrypt(ulong packetNumber, ReadOnlySpan<byte> header, ReadOnlySpan<byte> plaintext, Span<byte> output)
     {
@@ -103,8 +103,8 @@ public sealed class PacketProtection : IDisposable
     }
 
     /// <summary>
-    /// Entschlüsselt <paramref name="ciphertextWithTag"/> (Ciphertext gefolgt vom 16-Byte-Tag).
-    /// Gibt <c>false</c> zurück, wenn der Tag nicht passt (Authentifizierungsfehler), statt zu werfen.
+    /// Decrypts <paramref name="ciphertextWithTag"/> (ciphertext followed by the 16-byte tag).
+    /// Returns <c>false</c> when the tag does not match (authentication failure) instead of throwing.
     /// </summary>
     public bool Decrypt(ulong packetNumber, ReadOnlySpan<byte> header, ReadOnlySpan<byte> ciphertextWithTag, Span<byte> plaintext, out int written)
     {
@@ -132,11 +132,11 @@ public sealed class PacketProtection : IDisposable
         }
     }
 
-    // ---- Header Protection (RFC 9001 §5.4) -------------------------------------------------
+    // ---- Header protection (RFC 9001 §5.4) -------------------------------------------------
 
     /// <summary>
-    /// Berechnet die 5-Byte-Maske aus einem 16-Byte-Sample des Ciphertexts: <c>AES-ECB(hp_key, sample)[0..5]</c>
-    /// bzw. für ChaCha20 der ChaCha20-Keystream über den HP-Schlüssel (RFC 9001 §5.4.4).
+    /// Computes the 5-byte mask from a 16-byte sample of the ciphertext: <c>AES-ECB(hp_key, sample)[0..5]</c>,
+    /// or for ChaCha20 the ChaCha20 keystream over the HP key (RFC 9001 §5.4.4).
     /// </summary>
     public void HeaderProtectionMask(ReadOnlySpan<byte> sample, Span<byte> mask)
     {
@@ -150,15 +150,15 @@ public sealed class PacketProtection : IDisposable
         block[..5].CopyTo(mask);
     }
 
-    // ---- High-Level: ganzes Paket schützen / entschützen ----------------------------------
+    // ---- High level: protect / unprotect a whole packet -------------------------------------
 
     /// <summary>
-    /// Schützt ein komplettes Paket: verschlüsselt die Nutzlast und wendet anschließend die
-    /// Header Protection an. <paramref name="unprotectedHeader"/> endet mit den (unmaskierten)
-    /// Paketnummern-Bytes; <paramref name="packetNumberLength"/> ist deren Anzahl (1..4).
+    /// Protects a complete packet: encrypts the payload and then applies header protection.
+    /// <paramref name="unprotectedHeader"/> ends with the (unmasked) packet-number bytes;
+    /// <paramref name="packetNumberLength"/> is their count (1..4).
     /// </summary>
-    /// <param name="longHeader"><c>true</c> für Long-Header-Pakete (Initial/Handshake/0-RTT), sonst Short Header.</param>
-    /// <returns>Das fertige, geschützte Paket (Header + Ciphertext + Tag).</returns>
+    /// <param name="longHeader"><c>true</c> for long-header packets (Initial/Handshake/0-RTT), otherwise short header.</param>
+    /// <returns>The finished, protected packet (header + ciphertext + tag).</returns>
     public byte[] ProtectPacket(
         ReadOnlySpan<byte> unprotectedHeader,
         int packetNumberLength,
@@ -173,10 +173,10 @@ public sealed class PacketProtection : IDisposable
         byte[] packet = new byte[unprotectedHeader.Length + payload.Length + TagLength];
         unprotectedHeader.CopyTo(packet);
 
-        // 1) Nutzlast verschlüsseln (AAD = unmaskierter Header).
+        // 1) Encrypt the payload (AAD = unmasked header).
         Encrypt(packetNumber, unprotectedHeader, payload, packet.AsSpan(unprotectedHeader.Length));
 
-        // 2) Header Protection: Sample beginnt 4 Bytes nach Beginn des Paketnummernfelds.
+        // 2) Header protection: the sample starts 4 bytes after the start of the packet-number field.
         int sampleOffset = pnOffset + 4;
         Span<byte> mask = stackalloc byte[5];
         HeaderProtectionMask(packet.AsSpan(sampleOffset, SampleLength), mask);
@@ -186,10 +186,10 @@ public sealed class PacketProtection : IDisposable
     }
 
     /// <summary>
-    /// Entschützt ein komplettes empfangenes Paket. <paramref name="packetNumberOffset"/> ist der
-    /// Offset des Paketnummernfelds (nach Version/CIDs/Token/Length beim Long Header bzw. nach der
-    /// DCID beim Short Header). Bei Erfolg werden die entschlüsselten Frames nach
-    /// <paramref name="plaintext"/> geschrieben.
+    /// Unprotects a complete received packet. <paramref name="packetNumberOffset"/> is the offset of
+    /// the packet-number field (after version/CIDs/token/length for the long header, or after the
+    /// DCID for the short header). On success, the decrypted frames are written into
+    /// <paramref name="plaintext"/>.
     /// </summary>
     public bool UnprotectPacket(
         Span<byte> packet,
@@ -211,10 +211,11 @@ public sealed class PacketProtection : IDisposable
     }
 
     /// <summary>
-    /// Entfernt nur die Header Protection (RFC 9001 §5.4) und rekonstruiert die Paketnummer, <em>ohne</em>
-    /// AEAD-Entschlüsselung. Der HP-Key ist über Key Updates konstant (§6.1), sodass das erste Byte danach
-    /// gelesen werden kann (u. a. das Key-Phase-Bit), um die passenden AEAD-Schlüssel zu wählen.
-    /// <paramref name="headerLength"/> ist die Länge des Headers bis inkl. Paketnummer (= Beginn des Ciphertexts).
+    /// Removes only the header protection (RFC 9001 §5.4) and reconstructs the packet number,
+    /// <em>without</em> AEAD decryption. The HP key is constant across key updates (§6.1), so the
+    /// first byte can be read afterwards (incl. the key-phase bit) to choose the right AEAD keys.
+    /// <paramref name="headerLength"/> is the length of the header up to and incl. the packet number
+    /// (= start of the ciphertext).
     /// </summary>
     public bool RemoveHeaderProtection(
         Span<byte> packet,
@@ -234,12 +235,12 @@ public sealed class PacketProtection : IDisposable
         Span<byte> mask = stackalloc byte[5];
         HeaderProtectionMask(packet.Slice(sampleOffset, SampleLength), mask);
 
-        // 1) Erstes Byte entmaskieren -> Paketnummernlänge (und Key-Phase-Bit) gewinnen.
+        // 1) Unmask the first byte -> obtain the packet-number length (and the key-phase bit).
         byte firstByteMask = longHeader ? (byte)0x0f : (byte)0x1f;
         packet[0] ^= (byte)(mask[0] & firstByteMask);
         int packetNumberLength = (packet[0] & 0x03) + 1;
 
-        // 2) Paketnummern-Bytes entmaskieren und rekonstruieren.
+        // 2) Unmask and reconstruct the packet-number bytes.
         uint truncatedPn = 0;
         for (int i = 0; i < packetNumberLength; i++)
         {

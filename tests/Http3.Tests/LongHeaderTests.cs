@@ -25,8 +25,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Verifiziert das Serialisieren/Parsen der Long-Header-Pakete – gekoppelt an die RFC-9001-Vektoren:
-/// Aus strukturierten Feldern gebaute Pakete müssen byte-genau den Appendix-A-Paketen entsprechen.
+/// Verifies serializing/parsing of long-header packets — coupled to the RFC 9001 vectors:
+/// packets built from structured fields must match the Appendix A packets byte for byte.
 /// </summary>
 [TestFixture]
 public class LongHeaderTests
@@ -62,7 +62,7 @@ public class LongHeaderTests
             packetNumber: 2, packetNumberLength: 4,
             payload);
 
-        // Nur die ersten 22 Bytes sind der (geschützte) Header; genügt, um die Feldkodierung zu prüfen.
+        // Only the first 22 bytes are the (protected) header; enough to check the field encoding.
         Assert.That(Hex.ToHex(packet.AsSpan(0, 22)), Is.EqualTo("c000000001088394c8f03e5157080000449e7b9aec34"));
         Assert.That(packet.Length, Is.EqualTo(1200));
     }
@@ -111,7 +111,7 @@ public class LongHeaderTests
         Assert.That(prefix.DestinationConnectionId, Is.EqualTo(Dcid));
         Assert.That(prefix.SourceConnectionId, Is.EqualTo(ConnectionId.Empty));
         Assert.That(prefix.Token, Is.Empty);
-        Assert.That(prefix.PacketEndOffset, Is.EqualTo(1200)); // Initial füllt das Datagramm exakt
+        Assert.That(prefix.PacketEndOffset, Is.EqualTo(1200)); // the Initial fills the datagram exactly
     }
 
     [Test]
@@ -125,7 +125,7 @@ public class LongHeaderTests
         byte[] packet = LongHeader.Build(
             prot, LongPacketType.Initial, Version1, Dcid, ConnectionId.Empty, default, 2, 4, payload);
 
-        // Empfängerpfad: parsen -> pnOffset -> entschützen.
+        // Receiver path: parse -> pnOffset -> unprotect.
         Assert.That(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix), Is.True);
         byte[] plaintext = new byte[packet.Length];
         bool ok = prot.UnprotectPacket(
@@ -140,7 +140,7 @@ public class LongHeaderTests
     [Test]
     public void Build_Handshake_HasNoToken_AndParsesBack()
     {
-        // Handshake nutzt hier zu Testzwecken dieselben Initial-Schlüssel (echte HS-Keys kommen aus TLS).
+        // For test purposes Handshake uses the same Initial keys here (real HS keys come from TLS).
         var s = InitialSecrets.DeriveV1(Dcid.Span);
         using var prot = new PacketProtection(s.Client);
 
@@ -154,7 +154,7 @@ public class LongHeaderTests
 
         Assert.That(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix), Is.True);
         Assert.That(prefix!.Type, Is.EqualTo(LongPacketType.Handshake));
-        Assert.That(prefix.Token, Is.Empty); // Handshake-Pakete tragen kein Token-Feld
+        Assert.That(prefix.Token, Is.Empty); // Handshake packets carry no token field
         Assert.That(prefix.DestinationConnectionId, Is.EqualTo(ConnectionId.Parse("0102030405")));
         Assert.That(prefix.SourceConnectionId, Is.EqualTo(ConnectionId.Parse("aabb")));
     }
@@ -162,7 +162,7 @@ public class LongHeaderTests
     [Test]
     public void TryParse_RejectsOversizedConnectionId()
     {
-        // DCID-Länge 21 (> 20) muss verworfen werden.
+        // A DCID length of 21 (> 20) must be rejected.
         byte[] bad = Hex.Parse("c000000001" + "15" + new string('a', 42) + "00");
         Assert.That(LongHeader.TryParse(bad, out _), Is.False);
     }
@@ -177,7 +177,7 @@ public class LongHeaderTests
     [Test]
     public void ShortHeader_LocatesPacketNumber_WithKnownCidLength()
     {
-        // Short Header: erstes Byte 0x40 (Form=0, Fixed=1), dann 4-Byte-DCID, dann PN.
+        // Short header: first byte 0x40 (form=0, fixed=1), then a 4-byte DCID, then the PN.
         byte[] packet = Hex.Parse("41" + "deadbeef" + "aabbccdd");
         bool ok = ShortHeader.TryLocatePacketNumber(packet, localConnectionIdLength: 4, out ConnectionId dcid, out int pnOffset);
 

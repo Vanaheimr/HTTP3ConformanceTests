@@ -18,32 +18,32 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 
 /// <summary>
-/// Idle-Timeout nach RFC 9000 §10.1. Der ausgehandelte Wert ist das Minimum der beiderseits
-/// angekündigten <c>max_idle_timeout</c>-Werte (0 = bei diesem Peer deaktiviert). Effektiv wird er auf
-/// mindestens <c>3·PTO</c> angehoben, damit der Timeout nicht kürzer als eine plausible Zustellzeit wird.
-/// Der Timer startet neu, wenn ein Paket erfolgreich empfangen wurde – und beim Senden eines
-/// ack-eliciting Pakets, sofern seit dem letzten Empfang noch keines gesendet wurde.
-/// <para>Zeitpunkte sind <see cref="TimeSpan.Ticks"/> (100 ns) einer monotonen Uhr.</para>
+/// Idle timeout per RFC 9000 §10.1. The negotiated value is the minimum of the mutually announced
+/// <c>max_idle_timeout</c> values (0 = disabled at that peer). Effectively it is raised to at least
+/// <c>3·PTO</c> so the timeout never falls below a plausible delivery time. The timer restarts when
+/// a packet is received successfully – and on sending an ack-eliciting packet, provided none has
+/// been sent since the last receive.
+/// <para>Timestamps are <see cref="TimeSpan.Ticks"/> (100 ns) of a monotonic clock.</para>
 /// </summary>
 public sealed class IdleTimeout
 {
-    private TimeSpan _negotiated;               // 0 = deaktiviert
+    private TimeSpan _negotiated;               // 0 = disabled
     private long _lastActivityTicks;
     private bool _ackElicitingSinceReceive;
 
     /// <summary>
-    /// <c>true</c>, sobald mindestens eine Seite einen Idle-Timeout angekündigt hat.
+    /// <c>true</c> once at least one side has announced an idle timeout.
     /// </summary>
     public bool Enabled => _negotiated > TimeSpan.Zero;
 
     /// <summary>
-    /// Der ausgehandelte (noch nicht mit 3·PTO verrechnete) Idle-Timeout.
+    /// The negotiated idle timeout (not yet combined with 3·PTO).
     /// </summary>
     public TimeSpan Negotiated => _negotiated;
 
     /// <summary>
-    /// Handelt den Idle-Timeout aus den lokalen und Peer-Werten (in ms) aus: Minimum der
-    /// von null verschiedenen Werte; sind beide 0, bleibt der Timeout deaktiviert.
+    /// Negotiates the idle timeout from the local and peer values (in ms): the minimum of the
+    /// non-zero values; if both are 0, the timeout stays disabled.
     /// </summary>
     public void Negotiate(ulong localMs, ulong peerMs)
     {
@@ -58,7 +58,7 @@ public sealed class IdleTimeout
     }
 
     /// <summary>
-    /// Startet den Timer (Verbindungsbeginn).
+    /// Starts the timer (connection start).
     /// </summary>
     public void Start(long nowTicks)
     {
@@ -67,7 +67,7 @@ public sealed class IdleTimeout
     }
 
     /// <summary>
-    /// Ein Paket wurde erfolgreich empfangen und verarbeitet: Timer neu starten (RFC 9000 §10.1).
+    /// A packet was received and processed successfully: restart the timer (RFC 9000 §10.1).
     /// </summary>
     public void OnPacketReceived(long nowTicks)
     {
@@ -76,8 +76,8 @@ public sealed class IdleTimeout
     }
 
     /// <summary>
-    /// Ein ack-eliciting Paket wurde gesendet: Timer neu starten, sofern seit dem letzten Empfang noch
-    /// keines gesendet wurde (RFC 9000 §10.1) – so verlängern reine Sendebursts den Timeout nicht endlos.
+    /// An ack-eliciting packet was sent: restart the timer provided none has been sent since the
+    /// last receive (RFC 9000 §10.1) – so pure send bursts do not extend the timeout endlessly.
     /// </summary>
     public void OnAckElicitingPacketSent(long nowTicks)
     {
@@ -88,16 +88,16 @@ public sealed class IdleTimeout
     }
 
     /// <summary>
-    /// Ob (Keep-Alive, RFC 9000 §10.1.2) ein ack-eliciting Paket fällig ist, weil seit der letzten
-    /// Aktivität mehr als <paramref name="interval"/> verstrichen ist. Nur relevant, solange ein
-    /// Idle-Timeout ausgehandelt ist; <paramref name="interval"/> sollte kleiner als dieser sein.
+    /// Whether (keep-alive, RFC 9000 §10.1.2) an ack-eliciting packet is due because more than
+    /// <paramref name="interval"/> has passed since the last activity. Only relevant while an idle
+    /// timeout is negotiated; <paramref name="interval"/> should be smaller than it.
     /// </summary>
     public bool ShouldSendKeepAlive(long nowTicks, TimeSpan interval)
         => Enabled && nowTicks - _lastActivityTicks >= interval.Ticks;
 
     /// <summary>
-    /// Ob der Timeout abgelaufen ist. Die effektive Grenze ist <c>max(negotiated, 3·pto)</c>
-    /// (RFC 9000 §10.1: „at least three times the current Probe Timeout").
+    /// Whether the timeout has expired. The effective bound is <c>max(negotiated, 3·pto)</c>
+    /// (RFC 9000 §10.1: "at least three times the current Probe Timeout").
     /// </summary>
     public bool IsExpired(long nowTicks, TimeSpan pto)
     {

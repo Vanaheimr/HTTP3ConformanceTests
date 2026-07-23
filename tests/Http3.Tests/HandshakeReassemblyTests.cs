@@ -32,8 +32,8 @@ public class HandshakeReassemblyTests
     public void CryptoAssembler_OutOfOrder_ProducesContiguousPrefix()
     {
         var a = new CryptoStreamAssembler();
-        a.Add(4, [0x44, 0x55]);      // kommt zuerst, aber Offset 4
-        a.Add(0, [0x00, 0x11, 0x22, 0x33]); // schließt die Lücke ab 0
+        a.Add(4, [0x44, 0x55]);      // arrives first, but at offset 4
+        a.Add(0, [0x00, 0x11, 0x22, 0x33]); // closes the gap from 0
 
         Assert.That(a.Contiguous(), Is.EqualTo(new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 }));
     }
@@ -43,7 +43,7 @@ public class HandshakeReassemblyTests
     {
         var a = new CryptoStreamAssembler();
         a.Add(0, [1, 2]);
-        a.Add(5, [9, 9]); // Lücke bei 2..5 -> Präfix endet nach 2 Bytes
+        a.Add(5, [9, 9]); // gap at 2..5 -> prefix ends after 2 bytes
 
         Assert.That(a.Contiguous(), Is.EqualTo(new byte[] { 1, 2 }));
     }
@@ -53,7 +53,7 @@ public class HandshakeReassemblyTests
     {
         var a = new CryptoStreamAssembler();
         a.Add(0, [1, 2, 3]);
-        a.Add(0, [1, 2, 3]); // Retransmit desselben Fragments
+        a.Add(0, [1, 2, 3]); // retransmit of the same fragment
 
         Assert.That(a.Contiguous(), Is.EqualTo(new byte[] { 1, 2, 3 }));
     }
@@ -63,7 +63,7 @@ public class HandshakeReassemblyTests
     {
         var a = new CryptoStreamAssembler();
         a.Add(0, [1, 2, 3]);
-        a.Add(2, [3, 4, 5]); // überlappt bei Offset 2
+        a.Add(2, [3, 4, 5]); // overlaps at offset 2
 
         Assert.That(a.Contiguous(), Is.EqualTo(new byte[] { 1, 2, 3, 4, 5 }));
     }
@@ -71,8 +71,8 @@ public class HandshakeReassemblyTests
     [Test]
     public void HandshakeMessages_ParsesMultiple_AndReportsPartialTail()
     {
-        // EncryptedExtensions (Typ 08, Länge 2, Rumpf aabb) + Finished (Typ 14, Länge 1, Rumpf cc)
-        // + angefangene dritte Nachricht (Typ 0b, Länge 10, aber nur 1 Byte da).
+        // EncryptedExtensions (type 08, length 2, body aabb) + Finished (type 14, length 1, body cc)
+        // + a started third message (type 0b, length 10, but only 1 byte present).
         byte[] buffer = Hex.Parse("08000002aabb" + "14000001cc" + "0b0000 0a ff".Replace(" ", ""));
 
         Assert.That(HandshakeMessages.TryReadAll(buffer, out var messages, out int consumed), Is.True);
@@ -80,6 +80,6 @@ public class HandshakeReassemblyTests
         Assert.That(messages[0].Type, Is.EqualTo(HandshakeType.EncryptedExtensions));
         Assert.That(messages[1].Type, Is.EqualTo(HandshakeType.Finished));
         Assert.That(messages[0].Body.ToArray(), Is.EqualTo(new byte[] { 0xaa, 0xbb }));
-        Assert.That(consumed, Is.EqualTo(6 + 5)); // die dritte, unvollständige Nachricht bleibt ungelesen
+        Assert.That(consumed, Is.EqualTo(6 + 5)); // the third, incomplete message remains unread
     }
 }

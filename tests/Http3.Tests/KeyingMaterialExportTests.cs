@@ -29,19 +29,19 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// TLS-Keying-Material-Exporter (RFC 8446 §7.5) über <c>exporter_master_secret</c> (§7.1) und der
-/// darauf aufbauende session-gebundene WebTransport-Exporter (draft-ietf-webtrans-http3-13 §4.7).
+/// TLS keying-material exporter (RFC 8446 §7.5) via <c>exporter_master_secret</c> (§7.1) and the
+/// session-bound WebTransport exporter built on top of it (draft-ietf-webtrans-http3-13 §4.7).
 /// </summary>
 [TestFixture]
 public class KeyingMaterialExportTests
 {
-    // ---- Unit: exporter_master_secret gegen RFC 8448 §3 ------------------------------------
+    // ---- Unit: exporter_master_secret against RFC 8448 §3 ----------------------------------
 
     [Test]
     public void ExporterMasterSecret_MatchesRfc8448()
     {
-        // RFC 8448 §3 („Simple 1-RTT Handshake"): derive secret "tls13 exp master" —
-        // PRK = Master Secret, Hash = Transcript über CH…server Finished.
+        // RFC 8448 §3 ("Simple 1-RTT Handshake"): derive secret "tls13 exp master" —
+        // PRK = master secret, hash = transcript over CH…server Finished.
         var ks = new KeySchedule(CipherSuite.Aes128GcmSha256);
         byte[] master = Hex.Parse("18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919");
         byte[] transcript = Hex.Parse("9608102a0f1ccc6db6250b7b7e417b1a000eaada3daae4777a7686c9ff83df13");
@@ -58,18 +58,18 @@ public class KeyingMaterialExportTests
 
         byte[] a1 = ks.ExportKeyingMaterial(secret, "EXPORTER-Test", [1, 2, 3], 32);
         byte[] a2 = ks.ExportKeyingMaterial(secret, "EXPORTER-Test", [1, 2, 3], 32);
-        Assert.That(a1, Is.EqualTo(a2));                 // deterministisch
+        Assert.That(a1, Is.EqualTo(a2));                 // deterministic
         Assert.That(a1, Has.Length.EqualTo(32));
 
-        byte[] otherLabel = ks.ExportKeyingMaterial(secret, "EXPORTER-Anders", [1, 2, 3], 32);
+        byte[] otherLabel = ks.ExportKeyingMaterial(secret, "EXPORTER-Other", [1, 2, 3], 32);
         byte[] otherContext = ks.ExportKeyingMaterial(secret, "EXPORTER-Test", [9, 9, 9], 32);
         byte[] emptyContext = ks.ExportKeyingMaterial(secret, "EXPORTER-Test", [], 32);
-        Assert.That(otherLabel, Is.Not.EqualTo(a1));     // Label trennt
-        Assert.That(otherContext, Is.Not.EqualTo(a1));   // Kontext trennt
+        Assert.That(otherLabel, Is.Not.EqualTo(a1));     // the label separates
+        Assert.That(otherContext, Is.Not.EqualTo(a1));   // the context separates
         Assert.That(emptyContext, Is.Not.EqualTo(a1));
     }
 
-    // ---- Integration (QUIC): beide Enden exportieren identisches Material -------------------
+    // ---- Integration (QUIC): both ends export identical material ---------------------------
 
     [Test]
     public void QuicConnection_BothEndsExportIdenticalMaterial()
@@ -81,10 +81,10 @@ public class KeyingMaterialExportTests
 
         byte[] clientSide = client.ExportKeyingMaterial("EXPORTER-Test", [0xAA, 0xBB], 32);
         byte[] serverSide = server.ExportKeyingMaterial("EXPORTER-Test", [0xAA, 0xBB], 32);
-        Assert.That(clientSide, Is.EqualTo(serverSide)); // der Kern von §7.5: beide Seiten stimmen überein
+        Assert.That(clientSide, Is.EqualTo(serverSide)); // the core of §7.5: both sides agree
 
         Assert.That(client.ExportKeyingMaterial("EXPORTER-Test", [0xAA, 0xBB], 48), Has.Length.EqualTo(48));
-        Assert.That(client.ExportKeyingMaterial("EXPORTER-Zwei", [0xAA, 0xBB], 32), Is.Not.EqualTo(clientSide));
+        Assert.That(client.ExportKeyingMaterial("EXPORTER-Two", [0xAA, 0xBB], 32), Is.Not.EqualTo(clientSide));
     }
 
     [Test]
@@ -96,7 +96,7 @@ public class KeyingMaterialExportTests
         Assert.Throws<InvalidOperationException>(() => server.ExportKeyingMaterial("EXPORTER-Test", [], 32));
     }
 
-    // ---- Integration (WebTransport §4.7): session-gebundene Exporte -------------------------
+    // ---- Integration (WebTransport §4.7): session-bound exports ----------------------------
 
     [Test]
     public void WebTransportSessions_ExportMatchingMaterial_ButSeparatePerSession()
@@ -117,21 +117,21 @@ public class KeyingMaterialExportTests
         byte[] c2 = client2.ExportKeyingMaterial("app-label", context, 32);
         byte[] s2 = serverSessions[1].ExportKeyingMaterial("app-label", context, 32);
 
-        Assert.That(c1, Is.EqualTo(s1)); // beide Enden derselben Session stimmen überein …
+        Assert.That(c1, Is.EqualTo(s1)); // both ends of the same session agree …
         Assert.That(c2, Is.EqualTo(s2));
-        Assert.That(c1, Is.Not.EqualTo(c2)); // … verschiedene Sessions derselben Verbindung nicht (§4.7)
+        Assert.That(c1, Is.Not.EqualTo(c2)); // … different sessions of the same connection do not (§4.7)
 
-        // Label-/Kontext-Trennung auch auf Session-Ebene.
-        Assert.That(client1.ExportKeyingMaterial("anderes-label", context, 32), Is.Not.EqualTo(c1));
+        // Label/context separation at the session level too.
+        Assert.That(client1.ExportKeyingMaterial("other-label", context, 32), Is.Not.EqualTo(c1));
         Assert.That(client1.ExportKeyingMaterial("app-label", [9], 32), Is.Not.EqualTo(c1));
 
-        // draft §4.7: Label 1–255 Bytes, Kontext 0–255 Bytes.
+        // draft §4.7: label 1–255 bytes, context 0–255 bytes.
         Assert.Throws<ArgumentException>(() => client1.ExportKeyingMaterial("", [], 32));
         Assert.Throws<ArgumentException>(() => client1.ExportKeyingMaterial(new string('x', 256), [], 32));
         Assert.Throws<ArgumentException>(() => client1.ExportKeyingMaterial("ok", new byte[256], 32));
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static (QuicClientConnection, QuicServerConnection, ServerCertificate) HandshakeInProcess()
     {
@@ -156,7 +156,7 @@ public class KeyingMaterialExportTests
         for (int r = 0; r < 20 && !client.HandshakeConfirmed; r++) Pump(client, server);
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
-        for (int r = 0; r < 5; r++) Pump(client, server); // SETTINGS beidseitig
+        for (int r = 0; r < 5; r++) Pump(client, server); // SETTINGS both ways
         return (client, server, cert);
     }
 

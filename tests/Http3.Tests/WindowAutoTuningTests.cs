@@ -29,15 +29,15 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Auto-Tuning des empfangsseitigen Flow-Control-Fensters (Phase 9): der <see cref="ReceiveWindowTuner"/>
-/// vergrößert das Fenster, wenn der Sender es schneller als ~2×RTT leert, und deckelt beim Limit.
+/// Auto-tuning of the receive-side flow-control window (phase 9): the <see cref="ReceiveWindowTuner"/>
+/// grows the window when the sender drains it faster than ~2×RTT, and caps at the limit.
 /// </summary>
 [TestFixture]
 public class WindowAutoTuningTests
 {
     private const long Ms = TimeSpan.TicksPerMillisecond;
 
-    // ---- Unit: Tuner-Heuristik -------------------------------------------------------------
+    // ---- Unit: tuner heuristic -------------------------------------------------------------
 
     [Test]
     public void Tuner_DoublesWindow_WhenUpdatesArriveFasterThanTwoRtt()
@@ -45,15 +45,15 @@ public class WindowAutoTuningTests
         var tuner = new ReceiveWindowTuner(initialSize: 64 * 1024, limit: 1024 * 1024);
         long rtt = 100 * Ms;
 
-        // Erstes Update etabliert nur den Zeitstempel (kein Wachstum ohne Vergleichspunkt).
+        // The first update only establishes the timestamp (no growth without a reference point).
         Assert.That(tuner.NoteWindowUpdate(nowTicks: 0, smoothedRttTicks: rtt), Is.False);
         Assert.That(tuner.Size, Is.EqualTo(64UL * 1024));
 
-        // Nächstes Update nach 50 ms (< 2×RTT = 200 ms) ⇒ Fenster verdoppeln.
+        // Next update after 50 ms (< 2×RTT = 200 ms) ⇒ double the window.
         Assert.That(tuner.NoteWindowUpdate(nowTicks: 50 * Ms, smoothedRttTicks: rtt), Is.True);
         Assert.That(tuner.Size, Is.EqualTo(128UL * 1024));
 
-        // Wieder schnell ⇒ erneut verdoppeln.
+        // Fast again ⇒ double again.
         Assert.That(tuner.NoteWindowUpdate(nowTicks: 90 * Ms, smoothedRttTicks: rtt), Is.True);
         Assert.That(tuner.Size, Is.EqualTo(256UL * 1024));
     }
@@ -65,7 +65,7 @@ public class WindowAutoTuningTests
         long rtt = 100 * Ms;
 
         tuner.NoteWindowUpdate(0, rtt);
-        // 500 ms später (> 2×RTT) ⇒ das Fenster ist NICHT der Engpass, kein Wachstum.
+        // 500 ms later (> 2×RTT) ⇒ the window is NOT the bottleneck, no growth.
         Assert.That(tuner.NoteWindowUpdate(500 * Ms, rtt), Is.False);
         Assert.That(tuner.Size, Is.EqualTo(64UL * 1024));
     }
@@ -78,24 +78,24 @@ public class WindowAutoTuningTests
         long t = 0;
         tuner.NoteWindowUpdate(t, rtt);
         for (int i = 0; i < 10; i++)
-            tuner.NoteWindowUpdate(t += 10 * Ms, rtt); // stets schnell ⇒ wachsen bis zum Deckel
-        Assert.That(tuner.Size, Is.EqualTo(1024UL * 1024)); // exakt am Limit, nicht darüber
+            tuner.NoteWindowUpdate(t += 10 * Ms, rtt); // always fast ⇒ grow up to the cap
+        Assert.That(tuner.Size, Is.EqualTo(1024UL * 1024)); // exactly at the limit, not above
     }
 
     [Test]
     public void Tuner_LimitNeverBelowInitialSize()
     {
-        // Ein absurd kleines Limit wird auf den Startwert angehoben (das Fenster darf nie schrumpfen).
+        // An absurdly small limit is raised to the initial size (the window must never shrink).
         var tuner = new ReceiveWindowTuner(initialSize: 256 * 1024, limit: 1024);
         Assert.That(tuner.Limit, Is.EqualTo(256UL * 1024));
     }
 
-    // ---- Integration (QUIC): das Verbindungsfenster wächst unter Last -----------------------
+    // ---- Integration (QUIC): the connection window grows under load ------------------------
 
     [Test]
     public void ConnectionReceiveWindow_GrowsUnderSustainedTransfer()
     {
-        // Kleiner Startwert (64 KiB) — ein anhaltender Transfer muss das Fenster hochtunen.
+        // Small initial value (64 KiB) — a sustained transfer must tune the window up.
         (QuicClientConnection client, QuicServerConnection server, ServerCertificate cert) =
             HandshakeInProcess(serverInitialMaxData: 64 * 1024);
         using ServerCertificate _ = cert;
@@ -105,8 +105,8 @@ public class WindowAutoTuningTests
         ulong windowBefore = server.ConnectionReceiveWindowSize;
         Assert.That(windowBefore, Is.EqualTo(64UL * 1024));
 
-        // Der Client schiebt viele Daten; der Server liest sie (⇒ konsumierter Kredit ⇒ Fenster-Updates),
-        // und weil In-Process jeder Pump „sofort" ist (RTT ≪ 2×SmoothedRtt), tunt das Fenster hoch.
+        // The client pushes lots of data; the server reads it (⇒ consumed credit ⇒ window updates),
+        // and because in-process every pump is "immediate" (RTT ≪ 2×SmoothedRtt), the window tunes up.
         QuicStream stream = client.OpenBidirectionalStream();
         QuicStream? serverStream = null;
         for (int round = 0; round < 400 && server.ConnectionReceiveWindowSize <= windowBefore; round++)
@@ -114,16 +114,16 @@ public class WindowAutoTuningTests
             stream.Write(new byte[16 * 1024]);
             Pump(client, server);
             serverStream ??= server.Streams.TryGetValue(stream.Id.Value, out QuicStream? ss) ? ss : null;
-            serverStream?.Read(); // konsumieren, damit neuer Kredit gewährt wird
+            serverStream?.Read(); // consume so that new credit is granted
         }
 
         Assert.That(server.ConnectionReceiveWindowSize, Is.GreaterThan(windowBefore),
-            "Das Verbindungs-Empfangsfenster muss unter anhaltender Last auto-tunen.");
+            "The connection receive window must auto-tune under sustained load.");
         Assert.That(server.IsClosing, Is.False);
         Assert.That(client.IsClosing, Is.False);
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static (QuicClientConnection, QuicServerConnection, ServerCertificate) HandshakeInProcess(ulong serverInitialMaxData)
     {

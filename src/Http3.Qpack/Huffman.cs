@@ -24,13 +24,13 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// Huffman-Kodierung/-Dekodierung nach der statischen HPACK/QPACK-Tabelle (RFC 7541, Anhang B).
-/// Codes sind präfixfrei; die Kodierung füllt am Ende mit 1-Bits (dem EOS-Präfix) bis zur Bytegrenze auf.
+/// Huffman encoding/decoding per the static HPACK/QPACK table (RFC 7541, appendix B).
+/// Codes are prefix-free; the encoding pads at the end with 1 bits (the EOS prefix) to the byte boundary.
 /// </summary>
 internal static partial class Huffman
 {
-    // (Bitlänge << 32) | Code  ->  Symbol. Präfixfreiheit garantiert höchstens einen Treffer je Schritt.
-    // Lazy, da die Feld-Initialisierungsreihenfolge über Partial-Class-Dateien (Table) nicht garantiert ist.
+    // (bit length << 32) | code  ->  symbol. Prefix-freeness guarantees at most one match per step.
+    // Lazy, since the field initialisation order across partial-class files (Table) is not guaranteed.
     private static Dictionary<long, int>? _decodeMap;
     private static Dictionary<long, int> DecodeMap => _decodeMap ??= BuildDecodeMap();
 
@@ -45,7 +45,7 @@ internal static partial class Huffman
     private static long Key(int bits, uint code) => ((long)bits << 32) | code;
 
     /// <summary>
-    /// Länge der Huffman-kodierten Form von <paramref name="data"/> in Bytes.
+    /// Length of the Huffman-encoded form of <paramref name="data"/> in bytes.
     /// </summary>
     public static int EncodedLength(ReadOnlySpan<byte> data)
     {
@@ -56,7 +56,7 @@ internal static partial class Huffman
     }
 
     /// <summary>
-    /// Kodiert <paramref name="data"/> Huffman und schreibt das Ergebnis in <paramref name="writer"/>.
+    /// Huffman-encodes <paramref name="data"/> and writes the result into <paramref name="writer"/>.
     /// </summary>
     public static void Encode(ref BufferWriter writer, ReadOnlySpan<byte> data)
     {
@@ -75,7 +75,7 @@ internal static partial class Huffman
         }
         if (bitCount > 0)
         {
-            // Mit 1-Bits (EOS-Präfix) auffüllen.
+            // Pad with 1 bits (the EOS prefix).
             int pad = 8 - bitCount;
             byte last = (byte)((buffer << pad) | ((1u << pad) - 1));
             writer.WriteByte(last);
@@ -83,7 +83,7 @@ internal static partial class Huffman
     }
 
     /// <summary>
-    /// Dekodiert eine Huffman-kodierte Bytefolge. Gibt <c>false</c> bei ungültiger Kodierung zurück.
+    /// Decodes a Huffman-encoded byte sequence. Returns <c>false</c> for an invalid encoding.
     /// </summary>
     public static bool TryDecode(ReadOnlySpan<byte> data, out byte[] result)
     {
@@ -99,11 +99,11 @@ internal static partial class Huffman
                 code = (code << 1) | (uint)((b >> i) & 1);
                 len++;
                 if (len > 30)
-                    return false; // kein Code länger als 30 Bit
+                    return false; // no code longer than 30 bits
                 if (DecodeMap.TryGetValue(Key(len, code), out int sym))
                 {
                     if (sym == 256)
-                        return false; // EOS darf in einem String nicht vorkommen
+                        return false; // EOS must not occur inside a string
                     output.Add((byte)sym);
                     code = 0;
                     len = 0;
@@ -111,7 +111,7 @@ internal static partial class Huffman
             }
         }
 
-        // Rest muss gültiges Padding sein: weniger als 8 Bit, alle 1 (Präfix von EOS).
+        // The remainder must be valid padding: fewer than 8 bits, all 1 (a prefix of EOS).
         if (len >= 8)
             return false;
         if (len > 0 && code != (1u << len) - 1)

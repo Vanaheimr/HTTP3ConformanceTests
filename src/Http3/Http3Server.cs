@@ -28,13 +28,13 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Task-basierte Server-Fassade: besitzt den UDP-Socket, demultiplext eingehende Datagramme auf
-/// <see cref="Http3ServerConnection"/>s (vorrangig über die Connection ID — so trifft eine Connection
-/// Migration nach RFC 9000 §9 dieselbe Verbindung) und betreibt Timer/Versand in einer Hintergrund-
-/// Schleife. Nur echte Initial-Pakete eröffnen neue Verbindungen (RFC 9000 §5.2); Short-Header-Pakete
-/// zu unbekannter Connection ID beantwortet der Server — sofern ein Token-Generator gesetzt ist —
-/// mit einem Stateless Reset (RFC 9000 §10.3). Der deterministische Kern bleibt unangetastet;
-/// alle Verbindungs-Zugriffe laufen auf der einen Schleifen-Task (kein Locking nötig).
+/// Task-based server facade: owns the UDP socket, demultiplexes incoming datagrams onto
+/// <see cref="Http3ServerConnection"/>s (primarily via the connection ID — so a connection
+/// migration per RFC 9000 §9 hits the same connection) and runs timers/sending in a background
+/// loop. Only genuine Initial packets open new connections (RFC 9000 §5.2); short-header packets
+/// for an unknown connection ID are answered by the server — when a token generator is set —
+/// with a stateless reset (RFC 9000 §10.3). The deterministic core remains untouched;
+/// all connection accesses run on the single loop task (no locking needed).
 /// </summary>
 public sealed class Http3Server : IAsyncDisposable
 {
@@ -49,6 +49,7 @@ public sealed class Http3Server : IAsyncDisposable
 
     private readonly Func<Http3ServerConnection> _connectionFactory;
     private readonly StatelessResetTokenGenerator? _statelessResetTokens;
+    private readonly TimeProvider _timeProvider;
     private readonly int _requestedPort;
     private readonly List<ServerConn> _connections = [];
     private readonly CancellationTokenSource _cts = new();
@@ -59,43 +60,47 @@ public sealed class Http3Server : IAsyncDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Einfachster Einstieg: Zertifikat + Request-Handler; jede neue Verbindung erhält eine
-    /// Standard-<see cref="Http3ServerConnection"/>.
+    /// Simplest entry point: certificate + request handler; every new connection receives a
+    /// default <see cref="Http3ServerConnection"/>.
     /// </summary>
-    public Http3Server(ServerCertificate certificate, Func<Http3Request, Http3Response> handler, int port = 443)
-        : this(port, () => new Http3ServerConnection(certificate, handler))
+    public Http3Server(ServerCertificate certificate, Func<Http3Request, Http3Response> handler, int port = 443,
+                       TimeProvider? timeProvider = null)
+        : this(port, () => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider),
+               timeProvider: timeProvider)
     { }
 
     /// <summary>
-    /// Voll konfigurierbar: <paramref name="connectionFactory"/> erzeugt die (beliebig konfigurierte)
-    /// Verbindung je Client — Extended CONNECT, Datagramme, WebTransport, Resumption usw. inklusive.
+    /// Fully configurable: <paramref name="connectionFactory"/> creates the (arbitrarily configured)
+    /// connection per client — Extended CONNECT, datagrams, WebTransport, resumption etc. included.
     /// </summary>
     public Http3Server(int port, Func<Http3ServerConnection> connectionFactory,
-                       StatelessResetTokenGenerator? statelessResetTokens = null)
+                       StatelessResetTokenGenerator? statelessResetTokens = null,
+                       TimeProvider? timeProvider = null)
     {
         _requestedPort = port;
         _connectionFactory = connectionFactory;
         _statelessResetTokens = statelessResetTokens;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
-    /// Der tatsächlich gebundene UDP-Port (bei 0 im Konstruktor: der vom OS vergebene).
+    /// The actually bound UDP port (with 0 in the constructor: the one assigned by the OS).
     /// </summary>
     public int Port { get; private set; }
 
     /// <summary>
-    /// Anzahl aktuell geführter Verbindungen (informativ).
+    /// Number of currently held connections (informational).
     /// </summary>
     public int ConnectionCount => _connections.Count;
 
     /// <summary>
-    /// Bindet den Socket und startet die Empfangs-/Timer-Schleife.
+    /// Binds the socket and starts the receive/timer loop.
     /// </summary>
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_loopTask is not null)
-            throw new InvalidOperationException("Start wurde bereits aufgerufen.");
+            throw new InvalidOperationException("Start has already been called.");
         _udp = new UdpClient(new IPEndPoint(IPAddress.Any, _requestedPort));
         Port = ((IPEndPoint)_udp.Client.LocalEndPoint!).Port;
         _loopTask = Task.Run(LoopAsync, CancellationToken.None);
@@ -109,7 +114,7 @@ public sealed class Http3Server : IAsyncDisposable
             try
             {
                 receive ??= _udp!.ReceiveAsync(_cts.Token).AsTask();
-                Task finished = await Task.WhenAny(receive, Task.Delay(TickInterval, _cts.Token)).ConfigureAwait(false);
+                Task finished = await Task.WhenAny(receive, Task.Delay(TickInterval, _timeProvider, _cts.Token)).ConfigureAwait(false);
 
                 if (finished == receive)
                 {
@@ -122,24 +127,24 @@ public sealed class Http3Server : IAsyncDisposable
             }
             catch (OperationCanceledException) { break; }
             catch (ObjectDisposedException) { break; }
-            catch (SocketException) { receive = null; } // z. B. ICMP „Port Unreachable" eines Clients
+            catch (SocketException) { receive = null; } // e.g. a client's ICMP "port unreachable"
         }
     }
 
     private void HandleDatagram(byte[] datagram, IPEndPoint from)
     {
-        // 1) Über die Ziel-Connection-ID (nach dem Handshake stabil, auch bei Adresswechsel) …
+        // 1) Via the destination connection ID (stable after the handshake, even on an address change) …
         ServerConn? conn = ExtractDcid(datagram) is { } dcid
             ? _connections.FirstOrDefault(c => c.Connection.OwnsConnectionId(dcid))
             : null;
-        // 2) … sonst über die Absenderadresse (Handshake / neue Verbindung).
+        // 2) … otherwise via the sender address (handshake / new connection).
         conn ??= _connections.FirstOrDefault(c => c.Endpoint.Equals(from));
 
         if (conn is null)
         {
             byte first = datagram.Length > 0 ? datagram[0] : (byte)0;
 
-            // Short-Header zu unbekannter DCID = verlorene Verbindung ⇒ Stateless Reset (RFC 9000 §10.3).
+            // Short header for an unknown DCID = lost connection ⇒ stateless reset (RFC 9000 §10.3).
             if (datagram.Length > 0 && PacketFormat.IsShortHeader(first))
             {
                 if (_statelessResetTokens is { } tokens &&
@@ -148,7 +153,7 @@ public sealed class Http3Server : IAsyncDisposable
                 return;
             }
 
-            // Nur echte Initial-Pakete eröffnen neue Verbindungen (RFC 9000 §5.2).
+            // Only genuine Initial packets open new connections (RFC 9000 §5.2).
             if (!PacketFormat.IsLongHeader(first) || PacketFormat.GetLongPacketType(first) != LongPacketType.Initial)
                 return;
 
@@ -157,7 +162,7 @@ public sealed class Http3Server : IAsyncDisposable
         }
         else if (!conn.Endpoint.Equals(from))
         {
-            // Connection Migration (RFC 9000 §9): neuen Pfad validieren.
+            // Connection migration (RFC 9000 §9): validate the new path.
             conn.Endpoint = from;
             conn.Connection.InitiatePathValidation();
         }
@@ -187,8 +192,8 @@ public sealed class Http3Server : IAsyncDisposable
         => _sender.Send(_udp!.Client, conn.Connection.GetDatagramsToSend(), conn.Endpoint);
 
     /// <summary>
-    /// Liest die Ziel-Connection-ID: bei Long Headern aus dem Header selbst, bei Short Headern die
-    /// ersten <see cref="LocalCidLength"/> Bytes nach dem First Byte (unsere CIDs sind 8 Bytes lang).
+    /// Reads the destination connection ID: for long headers from the header itself, for short
+    /// headers the first <see cref="LocalCidLength"/> bytes after the first byte (our CIDs are 8 bytes long).
     /// </summary>
     private static ConnectionId? ExtractDcid(ReadOnlySpan<byte> datagram)
     {
@@ -206,7 +211,7 @@ public sealed class Http3Server : IAsyncDisposable
         _disposed = true;
         _cts.Cancel();
         if (_loopTask is { } loop)
-            try { await loop.ConfigureAwait(false); } catch { /* Schleifen-Ende */ }
+            try { await loop.ConfigureAwait(false); } catch { /* loop shutdown */ }
         foreach (ServerConn conn in _connections)
             conn.Connection.Dispose();
         _connections.Clear();

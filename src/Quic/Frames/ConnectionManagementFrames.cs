@@ -24,7 +24,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// NEW_TOKEN-Frame (Typ 0x07, RFC 9000 §19.7): Server liefert ein Token für künftige Initials.
+/// NEW_TOKEN frame (type 0x07, RFC 9000 §19.7): the server delivers a token for future Initials.
 /// </summary>
 public sealed record NewTokenFrame(ReadOnlyMemory<byte> Token) : Frame
 {
@@ -47,8 +47,8 @@ public sealed record NewTokenFrame(ReadOnlyMemory<byte> Token) : Frame
 }
 
 /// <summary>
-/// NEW_CONNECTION_ID-Frame (Typ 0x18, RFC 9000 §19.15): Server bietet eine weitere Connection ID
-/// samt Stateless-Reset-Token an.
+/// NEW_CONNECTION_ID frame (type 0x18, RFC 9000 §19.15): the server offers another connection ID
+/// along with a stateless-reset token.
 /// </summary>
 public sealed record NewConnectionIdFrame(
     ulong SequenceNumber,
@@ -81,7 +81,7 @@ public sealed record NewConnectionIdFrame(
 }
 
 /// <summary>
-/// RETIRE_CONNECTION_ID-Frame (Typ 0x19, RFC 9000 §19.16).
+/// RETIRE_CONNECTION_ID frame (type 0x19, RFC 9000 §19.16).
 /// </summary>
 public sealed record RetireConnectionIdFrame(ulong SequenceNumber) : Frame
 {
@@ -102,8 +102,8 @@ public sealed record RetireConnectionIdFrame(ulong SequenceNumber) : Frame
 }
 
 /// <summary>
-/// PATH_CHALLENGE-Frame (Typ 0x1a, RFC 9000 §19.17): 8 zufällige Bytes zur Pfadvalidierung. Der Empfänger
-/// spiegelt sie unverändert in einem PATH_RESPONSE zurück.
+/// PATH_CHALLENGE frame (type 0x1a, RFC 9000 §19.17): 8 random bytes for path validation. The
+/// receiver mirrors them unchanged in a PATH_RESPONSE.
 /// </summary>
 public sealed record PathChallengeFrame(ulong Data) : Frame
 {
@@ -124,7 +124,7 @@ public sealed record PathChallengeFrame(ulong Data) : Frame
 }
 
 /// <summary>
-/// PATH_RESPONSE-Frame (Typ 0x1b, RFC 9000 §19.18): spiegelt die 8 Bytes eines PATH_CHALLENGE zurück.
+/// PATH_RESPONSE frame (type 0x1b, RFC 9000 §19.18): mirrors the 8 bytes of a PATH_CHALLENGE.
 /// </summary>
 public sealed record PathResponseFrame(ulong Data) : Frame
 {

@@ -29,8 +29,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Tests der ChaCha20-Poly1305-Suite: der ChaCha20-Block (RFC 8439 §2.3.2), die Header-Protection-Maske
-/// (RFC 9001 §5.4.4/§A.5) und ein Paket-Round-Trip über <see cref="PacketProtection"/>.
+/// Tests of the ChaCha20-Poly1305 suite: the ChaCha20 block (RFC 8439 §2.3.2), the header-protection
+/// mask (RFC 9001 §5.4.4/§A.5) and a packet round trip via <see cref="PacketProtection"/>.
 /// </summary>
 [TestFixture]
 public class ChaCha20Tests
@@ -44,7 +44,7 @@ public class ChaCha20Tests
 
         ChaCha20.Block(key, counter: 1, nonce, keystream);
 
-        // RFC 8439 §2.3.2: serialisierter Keystream-Block.
+        // RFC 8439 §2.3.2: serialized keystream block.
         Assert.That(Convert.ToHexString(keystream).ToLowerInvariant(), Is.EqualTo("10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4e" +
             "d2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e"));
     }
@@ -52,7 +52,7 @@ public class ChaCha20Tests
     [Test]
     public void HeaderProtectionMask_MatchesRfc9001AppendixA5()
     {
-        // RFC 9001 §A.5 (ChaCha20-Poly1305 Short Header): hp-Schlüssel + Sample ⇒ Maske aefefe7d03.
+        // RFC 9001 §A.5 (ChaCha20-Poly1305 short header): hp key + sample ⇒ mask aefefe7d03.
         byte[] hp = Convert.FromHexString("25a282b9e82f06f21f488917a4fc8f1b73573685608597d0efcb076b0ab7a7a4");
         byte[] sample = Convert.FromHexString("5e5cd55c41f69080575d7999c25a5bfb");
         Span<byte> mask = stackalloc byte[5];
@@ -88,7 +88,7 @@ public class ChaCha20Tests
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
 
-        // Client bietet NUR ChaCha20-Poly1305 an ⇒ der Server muss es wählen.
+        // The client offers ONLY ChaCha20-Poly1305 ⇒ the server must pick it.
         using var client = new QuicClientConnection("localhost", certificateValidation: validation,
             cipherSuites: [CipherSuite.ChaCha20Poly1305Sha256]);
         using var server = new QuicServerConnection(cert);
@@ -102,7 +102,7 @@ public class ChaCha20Tests
                 client.ProcessDatagram(dg);
         }
 
-        // Der Handshake schließt ab ⇒ die Handshake-/1-RTT-Pakete sind mit ChaCha20-Poly1305 geschützt.
+        // The handshake completes ⇒ the Handshake/1-RTT packets are protected with ChaCha20-Poly1305.
         Assert.That(client.HandshakeConfirmed, Is.True);
         Assert.That(client.NegotiatedCipherSuite, Is.EqualTo(CipherSuite.ChaCha20Poly1305Sha256));
     }

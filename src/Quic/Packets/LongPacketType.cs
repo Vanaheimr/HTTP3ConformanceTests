@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Long-Header-Pakettypen in QUIC v1 (RFC 9000, Tabelle 5).
+/// Long-header packet types in QUIC v1 (RFC 9000, table 5).
 /// </summary>
 public enum LongPacketType : byte
 {
@@ -29,44 +29,44 @@ public enum LongPacketType : byte
 }
 
 /// <summary>
-/// Hilfsfunktionen für das erste Byte eines Pakets (RFC 9000, §17.2/§17.3).
+/// Helper functions for the first byte of a packet (RFC 9000, §17.2/§17.3).
 /// </summary>
 public static class PacketFormat
 {
     /// <summary>
-    /// Header Form (0x80): gesetzt = Long Header.
+    /// Header form (0x80): set = long header.
     /// </summary>
     public const byte HeaderFormBit = 0x80;
 
     /// <summary>
-    /// Fixed Bit (0x40): bei gültigen Paketen gesetzt (außer Version Negotiation).
+    /// Fixed bit (0x40): set in valid packets (except version negotiation).
     /// </summary>
     public const byte FixedBit = 0x40;
 
     /// <summary>
-    /// <c>true</c>, wenn das erste Byte einen Long Header ankündigt.
+    /// <c>true</c> when the first byte announces a long header.
     /// </summary>
     public static bool IsLongHeader(byte firstByte) => (firstByte & HeaderFormBit) != 0;
 
     /// <summary>
-    /// <c>true</c>, wenn das erste Byte einen Short Header (1-RTT) ankündigt.
+    /// <c>true</c> when the first byte announces a short header (1-RTT).
     /// </summary>
     public static bool IsShortHeader(byte firstByte) => (firstByte & HeaderFormBit) == 0;
 
     /// <summary>
-    /// Long Packet Type aus Bits 0x30 des ersten Bytes (nur gültig bei Long Headers).
+    /// Long packet type from bits 0x30 of the first byte (only valid for long headers).
     /// </summary>
     public static LongPacketType GetLongPacketType(byte firstByte) => (LongPacketType)((firstByte & 0x30) >> 4);
 
     /// <summary>
-    /// Version Negotiation wird am Versionsfeld 0 erkannt – nicht am ersten Byte
-    /// (dessen untere Bits sind bei VN unbestimmt). Diese Prüfung setzt einen Long Header voraus.
+    /// Version negotiation is recognised by the version field being 0 – not by the first byte
+    /// (its lower bits are unspecified for VN). This check assumes a long header.
     /// </summary>
     public static bool IsVersionNegotiation(uint version) => version == 0;
 
     /// <summary>
-    /// Baut das erste Byte eines Long-Header-Pakets mit Paketnummer (Initial/Handshake/0-RTT):
-    /// Header Form + Fixed Bit + Typ, Reserved = 0, Packet Number Length = <paramref name="pnLength"/> − 1.
+    /// Builds the first byte of a long-header packet with a packet number (Initial/Handshake/0-RTT):
+    /// header form + fixed bit + type, reserved = 0, packet number length = <paramref name="pnLength"/> − 1.
     /// </summary>
     public static byte BuildLongHeaderFirstByte(LongPacketType type, int pnLength)
     {

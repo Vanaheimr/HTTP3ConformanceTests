@@ -25,9 +25,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 
 /// <summary>
-/// Retry Integrity Tag (RFC 9001, §5.8): ein 128-Bit-AEAD-Tag über das Retry Pseudo-Packet.
-/// Belegt, dass der Absender das ursprüngliche Initial-Paket gesehen hat, und schützt gegen
-/// zufällige Verfälschung. Schlüssel und Nonce sind für QUIC v1 fest vorgegeben.
+/// Retry integrity tag (RFC 9001, §5.8): a 128-bit AEAD tag over the Retry pseudo-packet.
+/// Proves that the sender saw the original Initial packet and protects against accidental
+/// corruption. Key and nonce are fixed for QUIC v1.
 /// </summary>
 public static class RetryIntegrity
 {
@@ -45,11 +45,11 @@ public static class RetryIntegrity
     ];
 
     /// <summary>
-    /// Berechnet den 16-Byte-Integritäts-Tag über das Retry Pseudo-Packet:
-    /// <c>ODCID-Länge (1 Byte) || Original DCID || Retry-Paket ohne Tag</c>.
+    /// Computes the 16-byte integrity tag over the Retry pseudo-packet:
+    /// <c>ODCID length (1 byte) || original DCID || Retry packet without the tag</c>.
     /// </summary>
-    /// <param name="originalDestinationConnectionId">Die DCID aus dem Client-Initial, das den Retry auslöste.</param>
-    /// <param name="retryWithoutTag">Das Retry-Paket vom ersten Byte bis einschließlich Retry Token, ohne den Tag.</param>
+    /// <param name="originalDestinationConnectionId">The DCID from the client Initial that triggered the Retry.</param>
+    /// <param name="retryWithoutTag">The Retry packet from the first byte up to and including the Retry token, without the tag.</param>
     public static byte[] ComputeTag(ReadOnlySpan<byte> originalDestinationConnectionId, ReadOnlySpan<byte> retryWithoutTag)
     {
         using var writer = new BufferWriter(1 + originalDestinationConnectionId.Length + retryWithoutTag.Length);
@@ -64,7 +64,7 @@ public static class RetryIntegrity
     }
 
     /// <summary>
-    /// Prüft den Tag eines empfangenen Retry-Pakets (konstantzeitiger Vergleich).
+    /// Verifies the tag of a received Retry packet (constant-time comparison).
     /// </summary>
     public static bool Verify(ReadOnlySpan<byte> originalDestinationConnectionId, ReadOnlySpan<byte> retryWithoutTag, ReadOnlySpan<byte> tag)
     {

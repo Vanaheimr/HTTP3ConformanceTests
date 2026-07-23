@@ -25,17 +25,17 @@ using System.Numerics;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 
 /// <summary>
-/// Die ChaCha20-Blockfunktion (RFC 8439 §2.3). Wird für die Header Protection der ChaCha20-Poly1305-Suite
-/// gebraucht (RFC 9001 §5.4.4); die BCL stellt keinen rohen ChaCha20-Keystream bereit. ChaCha20 besteht nur
-/// aus Additionen, XOR und Rotationen – ohne datenabhängige Verzweigungen oder Tabellenzugriffe und damit
-/// von Natur aus konstantzeitig (anders als AES mit S-Box-Tabellen).
+/// The ChaCha20 block function (RFC 8439 §2.3). Needed for the header protection of the
+/// ChaCha20-Poly1305 suite (RFC 9001 §5.4.4); the BCL provides no raw ChaCha20 keystream. ChaCha20
+/// consists only of additions, XOR and rotations – no data-dependent branches or table accesses and
+/// thus constant-time by nature (unlike AES with its S-box tables).
 /// </summary>
 public static class ChaCha20
 {
     /// <summary>
-    /// Berechnet die 5-Byte-Header-Protection-Maske (RFC 9001 §5.4.4): der Zähler ist die ersten 4 Bytes des
-    /// Samples (Little-Endian), die Nonce die folgenden 12 Bytes; die Maske sind die ersten 5 Bytes des
-    /// ChaCha20-Keystream-Blocks über den HP-Schlüssel.
+    /// Computes the 5-byte header-protection mask (RFC 9001 §5.4.4): the counter is the first 4 bytes
+    /// of the sample (little-endian), the nonce the following 12 bytes; the mask is the first 5 bytes
+    /// of the ChaCha20 keystream block over the HP key.
     /// </summary>
     public static void HeaderProtectionMask(ReadOnlySpan<byte> headerProtectionKey, ReadOnlySpan<byte> sample, Span<byte> mask)
     {
@@ -46,7 +46,7 @@ public static class ChaCha20
     }
 
     /// <summary>
-    /// Erzeugt einen 64-Byte-Keystream-Block (RFC 8439 §2.3): <paramref name="output"/> muss 64 Bytes fassen.
+    /// Produces a 64-byte keystream block (RFC 8439 §2.3): <paramref name="output"/> must hold 64 bytes.
     /// </summary>
     public static void Block(ReadOnlySpan<byte> key, uint counter, ReadOnlySpan<byte> nonce, Span<byte> output)
     {
@@ -62,7 +62,7 @@ public static class ChaCha20
         Span<uint> working = stackalloc uint[16];
         state.CopyTo(working);
 
-        for (int i = 0; i < 10; i++) // 20 Runden = 10 Doppelrunden
+        for (int i = 0; i < 10; i++) // 20 rounds = 10 double rounds
         {
             QuarterRound(working, 0, 4, 8, 12);
             QuarterRound(working, 1, 5, 9, 13);

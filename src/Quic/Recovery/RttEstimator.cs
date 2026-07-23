@@ -18,18 +18,18 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Recovery;
 
 /// <summary>
-/// RTT-Schätzung nach RFC 9002 §5: min_rtt, smoothed_rtt und rttvar aus RTT-Stichproben, plus die
-/// Berechnung des Probe Timeout (PTO, §6.2.1). Werte als <see cref="TimeSpan"/>.
+/// RTT estimation per RFC 9002 §5: min_rtt, smoothed_rtt and rttvar from RTT samples, plus the
+/// computation of the probe timeout (PTO, §6.2.1). Values as <see cref="TimeSpan"/>.
 /// </summary>
 public sealed class RttEstimator
 {
     /// <summary>
-    /// Timer-Granularität (RFC 9002: kGranularity = 1 ms).
+    /// Timer granularity (RFC 9002: kGranularity = 1 ms).
     /// </summary>
     public static readonly TimeSpan Granularity = TimeSpan.FromMilliseconds(1);
 
     /// <summary>
-    /// Anfangs-RTT vor der ersten Stichprobe (RFC 9002: kInitialRtt = 333 ms).
+    /// Initial RTT before the first sample (RFC 9002: kInitialRtt = 333 ms).
     /// </summary>
     public static readonly TimeSpan InitialRtt = TimeSpan.FromMilliseconds(333);
 
@@ -41,8 +41,8 @@ public sealed class RttEstimator
     public TimeSpan RttVar { get; private set; } = InitialRtt / 2;
 
     /// <summary>
-    /// Verarbeitet eine RTT-Stichprobe (RFC 9002 §5.3). <paramref name="ackDelay"/> ist die vom Peer
-    /// gemeldete ACK-Verzögerung, begrenzt durch <paramref name="maxAckDelay"/> (nach dem Handshake).
+    /// Processes an RTT sample (RFC 9002 §5.3). <paramref name="ackDelay"/> is the ACK delay reported
+    /// by the peer, capped by <paramref name="maxAckDelay"/> (after the handshake).
     /// </summary>
     public void AddSample(TimeSpan rttSample, TimeSpan ackDelay, TimeSpan maxAckDelay)
     {
@@ -59,7 +59,7 @@ public sealed class RttEstimator
 
         MinRtt = rttSample < MinRtt ? rttSample : MinRtt;
 
-        // ack_delay begrenzen und nur abziehen, wenn die Stichprobe dadurch nicht unter min_rtt fällt.
+        // Cap ack_delay and only subtract it when the sample does not fall below min_rtt as a result.
         TimeSpan adjustedAckDelay = ackDelay < maxAckDelay ? ackDelay : maxAckDelay;
         TimeSpan adjustedRtt = rttSample;
         if (rttSample >= MinRtt + adjustedAckDelay)
@@ -71,12 +71,12 @@ public sealed class RttEstimator
     }
 
     /// <summary>
-    /// Probe Timeout (RFC 9002 §6.2.1): smoothed_rtt + max(4·rttvar, kGranularity) + max_ack_delay.
+    /// Probe timeout (RFC 9002 §6.2.1): smoothed_rtt + max(4·rttvar, kGranularity) + max_ack_delay.
     /// </summary>
     public TimeSpan GetProbeTimeout(TimeSpan maxAckDelay)
     {
         if (!_hasSample)
-            return 2 * InitialRtt; // vor der ersten Stichprobe
+            return 2 * InitialRtt; // before the first sample
 
         TimeSpan variation = 4 * RttVar;
         if (variation < Granularity)
@@ -85,11 +85,11 @@ public sealed class RttEstimator
     }
 
     /// <summary>
-    /// Verzögerung, ab der ein Paket als per Zeitschwelle verloren gilt (RFC 9002 §6.1.2).
+    /// Delay after which a packet counts as lost via the time threshold (RFC 9002 §6.1.2).
     /// </summary>
     public TimeSpan LossDelay()
     {
-        // kTimeThreshold = 9/8 · max(latest_rtt, smoothed_rtt), mindestens kGranularity.
+        // kTimeThreshold = 9/8 · max(latest_rtt, smoothed_rtt), at least kGranularity.
         TimeSpan baseRtt = LatestRtt > SmoothedRtt ? LatestRtt : SmoothedRtt;
         TimeSpan delay = 9 * baseRtt / 8;
         return delay > Granularity ? delay : Granularity;

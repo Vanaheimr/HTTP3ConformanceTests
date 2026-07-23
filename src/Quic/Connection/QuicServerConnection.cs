@@ -29,11 +29,11 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 
 /// <summary>
-/// Eine Server-QUIC-Verbindung (RFC 9000/9001). Leitet die Initial-Schlüssel aus der vom Client
-/// gewählten DCID ab, treibt den <see cref="TlsServerHandshake"/> und sendet nach abgeschlossenem
-/// Handshake HANDSHAKE_DONE. Optional erzwingt sie eine Adressvalidierung per Retry (RFC 9000 §8.1)
-/// und beantwortet nicht unterstützte Versionen mit einem Version-Negotiation-Paket (§6). Die
-/// gemeinsame Transport-Logik liegt in <see cref="QuicEndpoint"/>.
+/// A server QUIC connection (RFC 9000/9001). Derives the Initial keys from the DCID chosen by the
+/// client, drives the <see cref="TlsServerHandshake"/> and sends HANDSHAKE_DONE after the completed
+/// handshake. Optionally it enforces address validation via Retry (RFC 9000 §8.1) and answers
+/// unsupported versions with a version-negotiation packet (§6). The shared transport logic lives in
+/// <see cref="QuicEndpoint"/>.
 /// </summary>
 public sealed class QuicServerConnection : QuicEndpoint
 {
@@ -52,7 +52,7 @@ public sealed class QuicServerConnection : QuicEndpoint
 
     protected override bool IsServer => true;
 
-    // Der Server bestätigt den Handshake mit dessen Abschluss ⇒ Handshake-Keys verwerfbar (RFC 9001 §4.9.2).
+    // The server confirms the handshake at its completion ⇒ Handshake keys discardable (RFC 9001 §4.9.2).
     protected override bool HandshakeIsConfirmed => HandshakeComplete;
 
     public QuicServerConnection(
@@ -64,51 +64,52 @@ public sealed class QuicServerConnection : QuicEndpoint
         IReadOnlyList<NamedGroup>? preferredGroups = null,
         ServerResumptionCache? resumptionCache = null,
         uint maxEarlyDataSize = 0,
-        StatelessResetTokenGenerator? statelessResetTokens = null)
-        : base(transportParameters, version)
+        StatelessResetTokenGenerator? statelessResetTokens = null,
+        TimeProvider? timeProvider = null)
+        : base(transportParameters, version, timeProvider)
     {
         _certificate = certificate;
         _requireRetry = requireRetry;
         _preferredCipherSuites = preferredCipherSuites;
         _preferredGroups = preferredGroups;
-        StatelessResetTokens = statelessResetTokens; // aus der CID ableitbare Tokens ⇒ Stateless Reset sendbar
+        StatelessResetTokens = statelessResetTokens; // tokens derivable from the CID ⇒ stateless reset sendable
         _resumptionCache = resumptionCache;
         _maxEarlyDataSize = maxEarlyDataSize;
     }
 
     /// <summary>
-    /// <c>true</c>, wenn der Handshake per Session Resumption (PSK) geführt wurde.
+    /// <c>true</c> when the handshake ran via session resumption (PSK).
     /// </summary>
     public bool ResumptionAccepted => _serverTls?.ResumptionAccepted ?? false;
 
     /// <summary>
-    /// <c>true</c>, wenn 0-RTT (early_data) akzeptiert wurde.
+    /// <c>true</c> when 0-RTT (early_data) was accepted.
     /// </summary>
     public bool EarlyDataAccepted => _serverTls?.EarlyDataAccepted ?? false;
 
     /// <summary>
-    /// <c>true</c>, sobald der Server ein Retry zur Adressvalidierung gesendet hat.
+    /// <c>true</c> once the server has sent a Retry for address validation.
     /// </summary>
     public bool SentRetry => _retrySent;
 
     /// <summary>
-    /// <c>true</c>, sobald der Client-Finished geprüft wurde und der Handshake steht.
+    /// <c>true</c> once the client Finished was verified and the handshake is in place.
     /// </summary>
     public bool HandshakeComplete => _serverTls is { IsComplete: true, ClientFinishedValid: true };
 
     /// <summary>
-    /// Öffnet einen server-initiierten unidirektionalen Stream (HTTP/3-Control/QPACK).
+    /// Opens a server-initiated unidirectional stream (HTTP/3 control/QPACK).
     /// </summary>
     public QuicStream OpenUnidirectionalStream() => OpenLocalStream(bidirectional: false);
 
     /// <summary>
-    /// Öffnet einen server-initiierten bidirektionalen Stream (z. B. eine server-seitige
-    /// WebTransport-Bidi-Stream, RFC-Draft webtrans-http3 §4.2).
+    /// Opens a server-initiated bidirectional stream (e.g. a server-side WebTransport bidi stream,
+    /// RFC draft webtrans-http3 §4.2).
     /// </summary>
     public QuicStream OpenBidirectionalStream() => OpenLocalStream(bidirectional: true);
 
     /// <summary>
-    /// Seit dem letzten Aufruf neu vom Client geöffnete bidirektionale (Request-)Streams.
+    /// Bidirectional (request) streams newly opened by the client since the last call.
     /// </summary>
     public IReadOnlyList<ulong> TakeNewRequestStreams()
     {
@@ -122,35 +123,35 @@ public sealed class QuicServerConnection : QuicEndpoint
         if (TlsHandshake is not null || type != LongPacketType.Initial)
             return;
 
-        Dcid = prefix.SourceConnectionId; // Client-SCID wird unsere DCID (Ziel für Retry/Antwort)
+        Dcid = prefix.SourceConnectionId; // the client SCID becomes our DCID (target for Retry/answer)
 
-        // Adressvalidierung (RFC 9000 §8.1): auf das erste tokenlose Initial mit einem Retry antworten.
+        // Address validation (RFC 9000 §8.1): answer the first tokenless Initial with a Retry.
         if (_requireRetry && !_retrySent)
         {
-            _originalDcid = prefix.DestinationConnectionId; // D0 – geht in den Integrity Tag und die ODCID-TP ein
+            _originalDcid = prefix.DestinationConnectionId; // D0 – goes into the integrity tag and the ODCID TP
             _retryToken = RandomNumberGenerator.GetBytes(16);
-            // Retry: DCID = Client-SCID, SCID = eigene Scid (bleibt fortan die DCID des Clients), Tag über D0.
+            // Retry: DCID = client SCID, SCID = our own Scid (remains the client's DCID from now on), tag over D0.
             EnqueueDatagram(RetryPacket.Build(Version, prefix.SourceConnectionId, Scid, _retryToken, _originalDcid));
             _retrySent = true;
-            return; // noch keine Schlüssel/kein TLS – erst das erneute, token-tragende Initial zählt
+            return; // no keys/TLS yet – only the renewed, token-carrying Initial counts
         }
 
-        // Nach Retry: nur ein Initial mit exakt unserem Token akzeptieren.
+        // After a Retry: accept only an Initial with exactly our token.
         if (_requireRetry && !prefix.Token.AsSpan().SequenceEqual(_retryToken))
             return;
         if (_requireRetry)
-            MarkAddressValidated(); // gültiges Retry-Token beweist die Client-Adresse (RFC 9000 §8.1)
+            MarkAddressValidated(); // a valid Retry token proves the client address (RFC 9000 §8.1)
 
-        // Nach Retry leiten beide Seiten die Initial-Schlüssel aus DER DCID DIESES Initials ab (= unsere Scid).
+        // After a Retry both sides derive the Initial keys from THE DCID OF THIS Initial (= our Scid).
         ConnectionId initialKeyDcid = prefix.DestinationConnectionId;
 
         LocalParams.InitialSourceConnectionIdValue = Scid;
         LocalParams.OriginalDestinationConnectionIdValue = _requireRetry ? _originalDcid : initialKeyDcid;
         if (_requireRetry)
             LocalParams.RetrySourceConnectionIdValue = Scid;
-        // Stateless-Reset-Token für die Handshake-CID ankündigen (RFC 9000 §10.3/§18.2).
-        // Token der Handshake-CID: aus ihr ableiten (falls Generator gesetzt), damit es nach Zustandsverlust
-        // für einen Stateless Reset neu berechenbar ist; sonst zufällig.
+        // Announce the stateless-reset token for the handshake CID (RFC 9000 §10.3/§18.2).
+        // Token of the handshake CID: derive it from the CID (when a generator is set), so it stays
+        // recomputable for a stateless reset after state loss; otherwise random.
         LocalParams.StatelessResetTokenValue = StatelessResetTokens?.ComputeToken(Scid.Span) ?? RandomNumberGenerator.GetBytes(16);
 
         _serverTls = new TlsServerHandshake(_certificate, LocalParams.Encode(),
@@ -162,9 +163,9 @@ public sealed class QuicServerConnection : QuicEndpoint
     }
 
     /// <summary>
-    /// Server-Seite der Parameter-Prüfung (RFC 9000 §18.2): ein Client DARF die server-only-Parameter
-    /// (original_destination_connection_id, preferred_address, retry_source_connection_id,
-    /// stateless_reset_token) NICHT senden — ihr Empfang ist ein TRANSPORT_PARAMETER_ERROR.
+    /// Server side of the parameter check (RFC 9000 §18.2): a client MUST NOT send the server-only
+    /// parameters (original_destination_connection_id, preferred_address, retry_source_connection_id,
+    /// stateless_reset_token) — receiving them is a TRANSPORT_PARAMETER_ERROR.
     /// </summary>
     internal override string? ValidatePeerTransportParameters(TransportParameters p)
     {
@@ -183,25 +184,25 @@ public sealed class QuicServerConnection : QuicEndpoint
 
     protected override void HandleUnsupportedVersion(ReadOnlySpan<byte> datagram)
     {
-        // Anti-Amplification (RFC 9000 §6.1/§14.1): kein VN auf ein Datagramm, das kleiner ist als das
-        // kleinste zulässige Initial (1200 B) – sonst wäre das VN-Paket ein Verstärker für gefälschte Absender.
+        // Anti-amplification (RFC 9000 §6.1/§14.1): no VN for a datagram smaller than the smallest
+        // permissible Initial (1200 B) – otherwise the VN packet would be an amplifier for spoofed senders.
         if (datagram.Length < InitialPacketFactory.MinimumClientInitialSize)
             return;
 
-        // RFC 9000 §6.1: mit einem Version-Negotiation-Paket antworten, das die unterstützte(n) Version(en) listet.
+        // RFC 9000 §6.1: answer with a version-negotiation packet listing the supported version(s).
         if (!LongHeader.TryParseInvariant(datagram, out _, out ConnectionId dcid, out ConnectionId scid))
             return;
 
-        // Eine reservierte GREASE-Version (Muster 0x?a?a?a?a, RFC 9000 §6.3) beilegen: prüft, ob der Client
-        // unbekannte Versionen korrekt ignoriert, und beugt der Ossifizierung von Version Negotiation vor.
+        // Include a reserved GREASE version (pattern 0x?a?a?a?a, RFC 9000 §6.3): probes whether the
+        // client correctly ignores unknown versions and prevents ossification of version negotiation.
         uint grease = (BitConverter.ToUInt32(RandomNumberGenerator.GetBytes(4)) & 0xF0F0F0F0u) | 0x0A0A0A0Au;
 
-        // DCID/SCID vertauschen: die SCID des Clients wird zur DCID des VN-Pakets.
+        // Swap DCID/SCID: the client's SCID becomes the DCID of the VN packet.
         EnqueueDatagram(VersionNegotiationPacket.Build(scid, dcid, [Version, grease]));
     }
 
     /// <summary>
-    /// Testhilfe: unterdrückt das Senden von HANDSHAKE_DONE (um die 1-RTT-ACK-Bestätigung des Clients zu prüfen).
+    /// Test helper: suppresses sending HANDSHAKE_DONE (to check the client's 1-RTT ACK confirmation).
     /// </summary>
     internal bool SuppressHandshakeDoneForTest { get; set; }
 

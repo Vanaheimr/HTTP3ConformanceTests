@@ -29,9 +29,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// WebTransport über HTTP/3 (draft-ietf-webtrans-http3-13): Session-Aufbau über Extended CONNECT
-/// (:protocol=webtransport), uni-/bidirektionale WebTransport-Streams, Datagramme, Flow-Control-
-/// Capsules und Session-Ende via WT_CLOSE_SESSION.
+/// WebTransport over HTTP/3 (draft-ietf-webtrans-http3-13): session establishment via Extended
+/// CONNECT (:protocol=webtransport), uni/bidirectional WebTransport streams, datagrams, flow-control
+/// capsules and session termination via WT_CLOSE_SESSION.
 /// </summary>
 [TestFixture]
 public class Http3WebTransportTests
@@ -39,12 +39,12 @@ public class Http3WebTransportTests
     [Test]
     public void ErrorCodeMapping_RoundTripsThroughApplicationErrorRange()
     {
-        // §4.3: 32-Bit-App-Codes ⇄ WT_APPLICATION_ERROR-Bereich, reservierte 0x1f·N+0x21 übersprungen.
+        // §4.3: 32-bit app codes ⇄ WT_APPLICATION_ERROR range, reserved 0x1f·N+0x21 skipped.
         foreach (uint code in new uint[] { 0, 1, 29, 30, 31, 1000, uint.MaxValue })
         {
             ulong http = WebTransportConstants.ApplicationErrorToHttp(code);
             Assert.That(http, Is.InRange(WebTransportConstants.ApplicationErrorFirst, WebTransportConstants.ApplicationErrorLast));
-            Assert.That((http - 0x21) % 0x1f, Is.Not.EqualTo(0UL)); // nie ein reservierter Greasing-Codepoint
+            Assert.That((http - 0x21) % 0x1f, Is.Not.EqualTo(0UL)); // never a reserved greasing codepoint
             Assert.That(WebTransportConstants.HttpToApplicationError(http), Is.EqualTo(code));
         }
     }
@@ -53,14 +53,14 @@ public class Http3WebTransportTests
     public void CapsuleReader_ParsesCompleteCapsulesAndReportsRemainder()
     {
         byte[] a = WebTransportCapsule.BuildVarIntCapsule(WebTransportConstants.CapsuleMaxData, 4096);
-        byte[] close = WebTransportCapsule.BuildCloseSession(42, "tschüss");
-        byte[] combined = [.. a, .. close, 0xFF]; // ein angefangenes drittes Capsule (nur Typ-Byte)
+        byte[] close = WebTransportCapsule.BuildCloseSession(42, "goodbye");
+        byte[] combined = [.. a, .. close, 0xFF]; // a started third capsule (only the type byte)
 
         List<WebTransportCapsule> capsules = WebTransportCapsule.ReadAll(combined, out int consumed);
         Assert.That(capsules.Count, Is.EqualTo(2));
         Assert.That(capsules[0].Type, Is.EqualTo(WebTransportConstants.CapsuleMaxData));
         Assert.That(capsules[1].Type, Is.EqualTo(WebTransportConstants.CapsuleCloseSession));
-        Assert.That(consumed, Is.EqualTo(a.Length + close.Length)); // das unvollständige dritte bleibt liegen
+        Assert.That(consumed, Is.EqualTo(a.Length + close.Length)); // the incomplete third one stays put
     }
 
     [Test]
@@ -86,13 +86,13 @@ public class Http3WebTransportTests
 
         Assert.That(client.ServerSupportsWebTransport, Is.True);
 
-        // Unbekannte Ressource ⇒ 404 (draft §3.2).
-        ulong badId = client.ConnectWebTransport("localhost", "/unbekannt");
+        // Unknown resource ⇒ 404 (draft §3.2).
+        ulong badId = client.ConnectWebTransport("localhost", "/unknown");
         for (int r = 0; r < 20 && client.WebTransportConnectStatus(badId) is null; r++) Pump(client, server);
         Assert.That(client.WebTransportConnectStatus(badId), Is.EqualTo(404));
         Assert.That(client.TryGetWebTransportSession(badId, out _), Is.False);
 
-        // Gültige Ressource ⇒ Session.
+        // Valid resource ⇒ session.
         ulong okId = client.ConnectWebTransport("localhost", "/wt");
         WebTransportSession? session = null;
         for (int r = 0; r < 20 && session is null; r++) { Pump(client, server); client.TryGetWebTransportSession(okId, out session); }
@@ -111,28 +111,28 @@ public class Http3WebTransportTests
         using Http3ServerConnection s = server;
         WebTransportSession clientSession = GetClientSession(client, server);
 
-        // --- Datagramm Client → Server → Echo (§4.4) ---
-        Assert.That(clientSession.SendDatagram(Encoding.UTF8.GetBytes("WT-Datagramm")), Is.True);
+        // --- Datagram client → server → echo (§4.4) ---
+        Assert.That(clientSession.SendDatagram(Encoding.UTF8.GetBytes("WT-datagram")), Is.True);
         byte[]? dg = null;
         for (int r = 0; r < 15 && dg is null; r++) { Pump(client, server); serverSession.TryReceiveDatagram(out dg); }
-        Assert.That(Encoding.UTF8.GetString(dg!), Is.EqualTo("WT-Datagramm"));
+        Assert.That(Encoding.UTF8.GetString(dg!), Is.EqualTo("WT-datagram"));
         serverSession.SendDatagram(dg!);
         byte[]? dgEcho = null;
         for (int r = 0; r < 15 && dgEcho is null; r++) { Pump(client, server); clientSession.TryReceiveDatagram(out dgEcho); }
-        Assert.That(Encoding.UTF8.GetString(dgEcho!), Is.EqualTo("WT-Datagramm"));
+        Assert.That(Encoding.UTF8.GetString(dgEcho!), Is.EqualTo("WT-datagram"));
 
-        // --- Unidirektionaler WebTransport-Stream Client → Server (§4.1) ---
+        // --- Unidirectional WebTransport stream client → server (§4.1) ---
         WebTransportStream? cUni = clientSession.OpenUnidirectionalStream();
         Assert.That(cUni, Is.Not.Null);
-        cUni!.Write(Encoding.UTF8.GetBytes("uni-hallo"));
+        cUni!.Write(Encoding.UTF8.GetBytes("uni-hello"));
         cUni.Finish();
         WebTransportStream? sUni = null;
         for (int r = 0; r < 20 && sUni is null; r++) { Pump(client, server); sUni = serverSession.AcceptUnidirectionalStream(); }
         Assert.That(sUni, Is.Not.Null);
         Assert.That(sUni!.IsBidirectional, Is.False);
-        Assert.That(ReadAll(sUni, client, server), Is.EqualTo("uni-hallo"));
+        Assert.That(ReadAll(sUni, client, server), Is.EqualTo("uni-hello"));
 
-        // --- Bidirektionaler WebTransport-Stream Client → Server, Server antwortet (§4.2) ---
+        // --- Bidirectional WebTransport stream client → server, server responds (§4.2) ---
         WebTransportStream? cBidi = clientSession.OpenBidirectionalStream();
         Assert.That(cBidi, Is.Not.Null);
         cBidi!.Write(Encoding.UTF8.GetBytes("ping"));
@@ -157,25 +157,25 @@ public class Http3WebTransportTests
         using Http3ServerConnection s = server;
         WebTransportSession clientSession = GetClientSession(client, server);
 
-        // Ein offener Stream soll beim Session-Ende abgebrochen werden (§6, WT_SESSION_GONE).
+        // An open stream shall be aborted when the session ends (§6, WT_SESSION_GONE).
         WebTransportStream? uni = clientSession.OpenUnidirectionalStream();
         for (int r = 0; r < 5; r++) Pump(client, server);
 
-        clientSession.Close(0x1234, "vorbei");
+        clientSession.Close(0x1234, "over");
         for (int r = 0; r < 15 && !serverSession.IsClosed; r++) Pump(client, server);
 
         Assert.That(serverSession.IsClosed, Is.True);
         Assert.That(serverSession.CloseErrorCode, Is.EqualTo(0x1234u));
-        Assert.That(serverSession.CloseReason, Is.EqualTo("vorbei"));
+        Assert.That(serverSession.CloseReason, Is.EqualTo("over"));
         Assert.That(clientSession.IsClosed, Is.True);
-        Assert.That(client.IsClosing, Is.False); // Session-Ende ≠ Verbindungsende
+        Assert.That(client.IsClosing, Is.False); // session end ≠ connection end
         Assert.That(uni, Is.Not.Null);
     }
 
     [Test]
     public void ExcessSessions_BeyondMaxSessions_AreRejectedWithRequestRejected()
     {
-        // Server erlaubt nur EINE Session; die zweite muss mit H3_REQUEST_REJECTED zurückgesetzt werden (§5.2).
+        // The server allows only ONE session; the second must be reset with H3_REQUEST_REJECTED (§5.2).
         (Http3ClientConnection client, Http3ServerConnection server, ServerCertificate cert) =
             Pair(serverMaxSessions: 1, accept: _ => _ => { });
         using ServerCertificate certGuard = cert;
@@ -194,7 +194,7 @@ public class Http3WebTransportTests
         Assert.That(client.IsClosing, Is.False);
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static (Http3ClientConnection, Http3ServerConnection, ServerCertificate) Pair(
         ulong serverMaxSessions, Func<Http3Request, Action<WebTransportSession>?>? accept = null)
@@ -208,7 +208,7 @@ public class Http3WebTransportTests
         for (int r = 0; r < 20 && !client.HandshakeConfirmed; r++) Pump(client, server);
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
-        for (int r = 0; r < 5; r++) Pump(client, server); // SETTINGS beidseitig
+        for (int r = 0; r < 5; r++) Pump(client, server); // SETTINGS both ways
         return (client, server, cert);
     }
 
@@ -228,14 +228,14 @@ public class Http3WebTransportTests
 
     private static WebTransportSession GetClientSession(Http3ClientConnection client, Http3ServerConnection server)
     {
-        // Die (einzige) Client-Session gehört zum ersten CONNECT-Stream (ID 0).
+        // The (only) client session belongs to the first CONNECT stream (ID 0).
         for (int r = 0; r < 20; r++)
         {
             if (client.TryGetWebTransportSession(0, out WebTransportSession? s) && s is not null)
                 return s;
             Pump(client, server);
         }
-        throw new AssertionException("keine Client-WebTransport-Session");
+        throw new AssertionException("no client WebTransport session");
     }
 
     private static string ReadAll(WebTransportStream stream, Http3ClientConnection client, Http3ServerConnection server)

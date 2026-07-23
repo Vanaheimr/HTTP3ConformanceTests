@@ -29,9 +29,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// ECN (RFC 9000 §13.4 / RFC 9002 §7.3): der Empfänger zählt die ECN-Codepoints je Packet-Number-Space und
-/// meldet sie im ACK-Frame (Typ 0x03); der Sender behandelt einen gestiegenen CE-Zähler wie einen Verlust und
-/// verkleinert das Congestion Window. Unit-Tests für Zählung/Meldung und CE-Reaktion plus ein End-to-End-Test.
+/// ECN (RFC 9000 §13.4 / RFC 9002 §7.3): the receiver counts the ECN codepoints per packet-number space
+/// and reports them in the ACK frame (type 0x03); the sender treats an increased CE counter like a loss
+/// and shrinks the congestion window. Unit tests for counting/reporting and the CE reaction plus an
+/// end-to-end test.
 /// </summary>
 [TestFixture]
 public class EcnTests
@@ -61,7 +62,7 @@ public class EcnTests
 
         AckFrame? ack = space.BuildAck();
         Assert.That(ack, Is.Not.Null);
-        Assert.That(ack!.Ecn, Is.Null); // Typ 0x02, keine ECN-Zähler
+        Assert.That(ack!.Ecn, Is.Null); // type 0x02, no ECN counters
     }
 
     [Test]
@@ -74,11 +75,11 @@ public class EcnTests
         });
         long before = recovery.Congestion.CongestionWindow;
 
-        // ACK bestätigt Paket 0 UND meldet einen CE-Zähler von 1 ⇒ Congestion-Signal.
+        // The ACK confirms packet 0 AND reports a CE counter of 1 ⇒ congestion signal.
         var ack = new AckFrame([new PacketNumberRange(0, 0)], 0, new EcnCounts(0, 0, 1));
         recovery.OnAckReceived(space: 0, ack, System.TimeSpan.Zero, nowTicks: 1000);
 
-        Assert.That(recovery.Congestion.CongestionWindow < before, Is.True, $"Ein gestiegener CE-Zähler muss das Fenster verkleinern (war {before}, ist {recovery.Congestion.CongestionWindow}).");
+        Assert.That(recovery.Congestion.CongestionWindow < before, Is.True, $"An increased CE counter must shrink the window (was {before}, is {recovery.Congestion.CongestionWindow}).");
     }
 
     [Test]
@@ -90,10 +91,10 @@ public class EcnTests
 
         recovery.OnAckReceived(0, new AckFrame([new PacketNumberRange(0, 0)], 0, new EcnCounts(0, 0, 1)), System.TimeSpan.Zero, 1000);
         long afterFirst = recovery.Congestion.CongestionWindow;
-        // Zweites ACK mit UNVERÄNDERTEM CE-Zähler ⇒ kein erneutes Verkleinern.
+        // A second ACK with an UNCHANGED CE counter ⇒ no renewed shrinking.
         recovery.OnAckReceived(0, new AckFrame([new PacketNumberRange(1, 1)], 0, new EcnCounts(0, 0, 1)), System.TimeSpan.Zero, 2000);
 
-        Assert.That(recovery.Congestion.CongestionWindow >= afterFirst, Is.True, "Gleicher CE-Zähler darf nicht erneut verkleinern.");
+        Assert.That(recovery.Congestion.CongestionWindow >= afterFirst, Is.True, "The same CE counter must not shrink again.");
     }
 
     [Test]
@@ -108,9 +109,9 @@ public class EcnTests
         long prevCwnd = client.CongestionWindow;
         bool cwndDropped = false;
 
-        // Alle Client→Server-Datagramme als CE markieren ⇒ der Server meldet CE in seinen ACKs zurück,
-        // woraufhin der Client (RFC 9002 §7.3) das Fenster verkleinert. Da in-process kein echter Verlust
-        // auftritt, kann ein Fenster-Rückgang nur von der CE-Reaktion stammen.
+        // Mark all client→server datagrams as CE ⇒ the server reports CE back in its ACKs,
+        // whereupon the client (RFC 9002 §7.3) shrinks the window. Since no real loss occurs
+        // in-process, a window decrease can only come from the CE reaction.
         for (int round = 0; round < 30; round++)
         {
             foreach (byte[] dg in client.GetDatagramsToSend()) server.ProcessDatagram(dg, EcnCodepoint.Ce);
@@ -120,8 +121,8 @@ public class EcnTests
             prevCwnd = client.CongestionWindow;
         }
 
-        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
-        Assert.That(server.ApplicationReceivedCeCount > 0, Is.True, "Der Server muss CE-markierte 1-RTT-Pakete gezählt haben.");
-        Assert.That(cwndDropped, Is.True, "Die CE-Meldung des Servers muss das Congestion Window des Clients verkleinern.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake must come about.");
+        Assert.That(server.ApplicationReceivedCeCount > 0, Is.True, "The server must have counted CE-marked 1-RTT packets.");
+        Assert.That(cwndDropped, Is.True, "The server's CE report must shrink the client's congestion window.");
     }
 }

@@ -25,14 +25,14 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 
 /// <summary>
-/// Ableitung der Initial-Schlüssel aus der Destination Connection ID des ersten Client-Pakets
-/// (RFC 9001, §5.2). Beide Seiten kennen die DCID und können damit dieselben Schlüssel bilden –
-/// der Initial-Level ist daher nur gegen Off-Path-Angreifer geschützt, nicht vertraulich.
+/// Derivation of the Initial keys from the destination connection ID of the first client packet
+/// (RFC 9001, §5.2). Both sides know the DCID and can thus form the same keys – the Initial level
+/// is therefore only protected against off-path attackers, not confidential.
 /// </summary>
 public sealed class InitialSecrets
 {
     /// <summary>
-    /// Versionsspezifischer Salt für QUIC v1 (RFC 9001, §5.2).
+    /// Version-specific salt for QUIC v1 (RFC 9001, §5.2).
     /// </summary>
     public static ReadOnlySpan<byte> InitialSaltV1 =>
     [
@@ -41,22 +41,22 @@ public sealed class InitialSecrets
     ];
 
     /// <summary>
-    /// Initial nutzt fest AEAD_AES_128_GCM mit SHA-256 (RFC 9001, §5.2).
+    /// Initial uses fixed AEAD_AES_128_GCM with SHA-256 (RFC 9001, §5.2).
     /// </summary>
     private const int InitialKeyLength = 16;
 
     /// <summary>
-    /// Der gemeinsame <c>initial_secret</c> (HKDF-Extract).
+    /// The shared <c>initial_secret</c> (HKDF-Extract).
     /// </summary>
     public byte[] InitialSecret { get; }
 
     /// <summary>
-    /// Schlüssel zum Schutz der Client-Pakete.
+    /// Keys protecting the client packets.
     /// </summary>
     public TrafficKeys Client { get; }
 
     /// <summary>
-    /// Schlüssel zum Schutz der Server-Pakete.
+    /// Keys protecting the server packets.
     /// </summary>
     public TrafficKeys Server { get; }
 
@@ -68,7 +68,7 @@ public sealed class InitialSecrets
     }
 
     /// <summary>
-    /// Leitet die Initial-Schlüssel für QUIC v1 aus der <paramref name="destinationConnectionId"/> ab.
+    /// Derives the Initial keys for QUIC v1 from the <paramref name="destinationConnectionId"/>.
     /// </summary>
     public static InitialSecrets DeriveV1(ReadOnlySpan<byte> destinationConnectionId)
     {

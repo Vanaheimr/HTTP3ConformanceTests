@@ -25,14 +25,14 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 
 /// <summary>
-/// Hilfsfunktionen für das TLS-Wire-Format über einem <see cref="BufferWriter"/>. TLS nutzt durchgängig
-/// längenpräfigierte Vektoren mit 1-, 2- oder 3-Byte-Längen (RFC 8446, §3.4). Das Muster hier:
-/// Platzhalter für die Länge schreiben, Inhalt schreiben, dann die Länge nachtragen (Back-Patching).
+/// Helper functions for the TLS wire format over a <see cref="BufferWriter"/>. TLS consistently uses
+/// length-prefixed vectors with 1-, 2- or 3-byte lengths (RFC 8446, §3.4). The pattern here:
+/// write a placeholder for the length, write the content, then fill in the length (back-patching).
 /// </summary>
 public static class TlsWriter
 {
     /// <summary>
-    /// Beginnt einen längenpräfigierten Block und gibt den Offset des Längenfelds zurück.
+    /// Begins a length-prefixed block and returns the offset of the length field.
     /// </summary>
     public static int BeginVector(ref BufferWriter writer, int prefixBytes)
     {
@@ -43,7 +43,7 @@ public static class TlsWriter
     }
 
     /// <summary>
-    /// Schließt einen mit <see cref="BeginVector"/> begonnenen Block und trägt seine Länge ein.
+    /// Closes a block begun with <see cref="BeginVector"/> and fills in its length.
     /// </summary>
     public static void EndVector(ref BufferWriter writer, int offset, int prefixBytes)
     {
@@ -68,7 +68,7 @@ public static class TlsWriter
     }
 
     /// <summary>
-    /// Schreibt eine TLS-Extension mit 2-Byte-Typ und 2-Byte-längenpräfigiertem Inhalt.
+    /// Writes a TLS extension with a 2-byte type and 2-byte length-prefixed content.
     /// </summary>
     public static void WriteExtension(ref BufferWriter writer, ExtensionType type, ReadOnlySpan<byte> data)
     {

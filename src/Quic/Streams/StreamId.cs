@@ -18,9 +18,9 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 
 /// <summary>
-/// Eine QUIC Stream ID (RFC 9000 §2.1). Die beiden niederwertigen Bits kodieren Initiator und
-/// Richtung: Bit 0x1 = Initiator (0 = Client, 1 = Server), Bit 0x2 = Richtung (0 = bidirektional,
-/// 1 = unidirektional). Die übrigen Bits sind der fortlaufende Index des Streams je Kategorie.
+/// A QUIC stream ID (RFC 9000 §2.1). The two low-order bits encode initiator and direction:
+/// bit 0x1 = initiator (0 = client, 1 = server), bit 0x2 = direction (0 = bidirectional,
+/// 1 = unidirectional). The remaining bits are the stream's running index per category.
 /// </summary>
 public readonly struct StreamId : IEquatable<StreamId>, IComparable<StreamId>
 {
@@ -34,12 +34,12 @@ public readonly struct StreamId : IEquatable<StreamId>, IComparable<StreamId>
     public bool IsUnidirectional => (Value & 0x2) != 0;
 
     /// <summary>
-    /// Fortlaufender Index dieses Streams innerhalb seiner Kategorie (Value >> 2).
+    /// Running index of this stream within its category (Value >> 2).
     /// </summary>
     public ulong Index => Value >> 2;
 
     /// <summary>
-    /// Baut eine Stream ID aus Initiator, Richtung und Index.
+    /// Builds a stream ID from initiator, direction and index.
     /// </summary>
     public static StreamId Create(bool clientInitiated, bool bidirectional, ulong index)
     {

@@ -24,12 +24,12 @@ using System.Buffers.Binary;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 
 /// <summary>
-/// Vorwärts-Leser über einen <see cref="ReadOnlySpan{Byte}"/> (Big-Endian, wie im QUIC-Wire-Format).
+/// Forward reader over a <see cref="ReadOnlySpan{Byte}"/> (big-endian, as in the QUIC wire format).
 /// <para>
-/// Als <c>ref struct</c> ausgelegt – lebt nur auf dem Stack, keine Allokation, kein Kopieren des
-/// zugrunde liegenden Puffers. Die <c>Try*</c>-Methoden werfen nie; sie geben <c>false</c> zurück,
-/// wenn nicht genug Bytes vorliegen (unvollständiges Paket). Die nicht-<c>Try</c>-Varianten werfen
-/// <see cref="EndOfBufferException"/> und sind für Stellen gedacht, an denen die Länge zuvor geprüft wurde.
+/// Designed as a <c>ref struct</c> – lives only on the stack, no allocation, no copying of the
+/// underlying buffer. The <c>Try*</c> methods never throw; they return <c>false</c> when not
+/// enough bytes are present (incomplete packet). The non-<c>Try</c> variants throw
+/// <see cref="EndOfBufferException"/> and are meant for places where the length was checked beforehand.
 /// </para>
 /// </summary>
 public ref struct BufferReader
@@ -43,22 +43,22 @@ public ref struct BufferReader
     }
 
     /// <summary>
-    /// Aktuelle Leseposition (Bytes ab Beginn).
+    /// Current read position (bytes from the beginning).
     /// </summary>
     public int Position { get; private set; }
 
     /// <summary>
-    /// Anzahl noch nicht gelesener Bytes.
+    /// Number of bytes not yet read.
     /// </summary>
     public readonly int Remaining => _buffer.Length - Position;
 
     /// <summary>
-    /// <c>true</c>, wenn alle Bytes gelesen wurden.
+    /// <c>true</c> when all bytes have been read.
     /// </summary>
     public readonly bool IsEmpty => Remaining == 0;
 
     /// <summary>
-    /// Der noch nicht gelesene Rest, ohne die Position zu verändern.
+    /// The not-yet-read remainder, without changing the position.
     /// </summary>
     public readonly ReadOnlySpan<byte> RemainingSpan => _buffer[Position..];
 
@@ -123,7 +123,7 @@ public ref struct BufferReader
         => TryReadUInt64(out ulong v) ? v : throw EndOfBuffer(8);
 
     /// <summary>
-    /// Liest einen QUIC-VarInt (RFC 9000 §16).
+    /// Reads a QUIC VarInt (RFC 9000 §16).
     /// </summary>
     public bool TryReadVarInt(out ulong value)
     {
@@ -139,8 +139,8 @@ public ref struct BufferReader
         => TryReadVarInt(out ulong v) ? v : throw EndOfBuffer(1);
 
     /// <summary>
-    /// Liest genau <paramref name="length"/> Bytes als Slice des zugrunde liegenden Puffers
-    /// (kein Kopieren).
+    /// Reads exactly <paramref name="length"/> bytes as a slice of the underlying buffer
+    /// (no copying).
     /// </summary>
     public bool TryReadBytes(int length, out ReadOnlySpan<byte> value)
     {
@@ -158,7 +158,7 @@ public ref struct BufferReader
         => TryReadBytes(length, out ReadOnlySpan<byte> v) ? v : throw EndOfBuffer(length);
 
     /// <summary>
-    /// Überspringt <paramref name="length"/> Bytes.
+    /// Skips <paramref name="length"/> bytes.
     /// </summary>
     public bool TrySkip(int length)
     {
@@ -173,10 +173,10 @@ public ref struct BufferReader
 }
 
 /// <summary>
-/// Wird geworfen, wenn ein Lesevorgang über das Pufferende hinausginge.
+/// Thrown when a read operation would go past the end of the buffer.
 /// </summary>
 public sealed class EndOfBufferException(int needed, int available)
-    : Exception($"Pufferende erreicht: benötigt {needed} Byte(s), verfügbar {available}.")
+    : Exception($"End of buffer reached: needed {needed} byte(s), available {available}.")
 {
     public int Needed { get; } = needed;
     public int Available { get; } = available;

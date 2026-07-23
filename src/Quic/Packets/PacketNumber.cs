@@ -18,32 +18,32 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Kodierung und Rekonstruktion von QUIC-Paketnummern (RFC 9000, §17.1 und Anhang A).
+/// Encoding and reconstruction of QUIC packet numbers (RFC 9000, §17.1 and appendix A).
 /// <para>
-/// Auf dem Draht werden nur die niederwertigen 1–4 Bytes der Paketnummer übertragen. Der Empfänger
-/// rekonstruiert die volle 62-Bit-Nummer relativ zur größten bislang bestätigten Paketnummer.
+/// Only the low-order 1–4 bytes of the packet number are transmitted on the wire. The receiver
+/// reconstructs the full 62-bit number relative to the largest packet number acknowledged so far.
 /// </para>
 /// </summary>
 public static class PacketNumber
 {
     /// <summary>
-    /// Obergrenze des Paketnummernraums (2^62).
+    /// Upper bound of the packet-number space (2^62).
     /// </summary>
     private const ulong PacketNumberLimit = 1UL << 62;
 
     /// <summary>
-    /// Bestimmt die minimale Anzahl Bytes (1–4), mit der <paramref name="packetNumber"/> so kodiert
-    /// werden kann, dass der Empfänger sie relativ zu <paramref name="largestAcked"/> eindeutig
-    /// rekonstruiert. Vor der ersten Bestätigung (<paramref name="largestAcked"/> = -1) wird die
-    /// volle benötigte Länge gewählt.
+    /// Determines the minimum number of bytes (1–4) with which <paramref name="packetNumber"/> can be
+    /// encoded such that the receiver reconstructs it unambiguously relative to
+    /// <paramref name="largestAcked"/>. Before the first acknowledgment
+    /// (<paramref name="largestAcked"/> = -1) the full needed length is chosen.
     /// </summary>
     public static int EncodeLength(ulong packetNumber, long largestAcked)
     {
-        // Anzahl noch unbestätigter, fortlaufender Paketnummern inkl. der neuen (num_unacked).
+        // Number of still-unacknowledged consecutive packet numbers incl. the new one (num_unacked).
         ulong range = largestAcked < 0 ? packetNumber + 1 : packetNumber - (ulong)largestAcked;
 
         // RFC 9000 A.2: min_bits = log2(range) + 1, num_bytes = ceil(min_bits / 8).
-        // Das ergibt die Schwellen range <= 2^7, 2^15, 2^23 (Grenzen inklusive).
+        // That yields the thresholds range <= 2^7, 2^15, 2^23 (bounds inclusive).
         if (range <= (1UL << 7)) return 1;
         if (range <= (1UL << 15)) return 2;
         if (range <= (1UL << 23)) return 3;
@@ -51,7 +51,7 @@ public static class PacketNumber
     }
 
     /// <summary>
-    /// Schreibt die niederwertigen <paramref name="length"/> Bytes von <paramref name="packetNumber"/> big-endian.
+    /// Writes the low-order <paramref name="length"/> bytes of <paramref name="packetNumber"/> big-endian.
     /// </summary>
     public static void Encode(Span<byte> destination, ulong packetNumber, int length)
     {
@@ -62,12 +62,12 @@ public static class PacketNumber
     }
 
     /// <summary>
-    /// Rekonstruiert die volle Paketnummer aus der verkürzten Wire-Kodierung
-    /// (RFC 9000, Anhang A.3 – <c>DecodePacketNumber</c>).
+    /// Reconstructs the full packet number from the truncated wire encoding
+    /// (RFC 9000, appendix A.3 – <c>DecodePacketNumber</c>).
     /// </summary>
-    /// <param name="truncated">Die auf <paramref name="length"/> Bytes gekürzt empfangene Nummer.</param>
-    /// <param name="length">Anzahl empfangener Bytes (1–4).</param>
-    /// <param name="largestAcked">Größte bislang erfolgreich verarbeitete Paketnummer (-1 = noch keine).</param>
+    /// <param name="truncated">The number received truncated to <paramref name="length"/> bytes.</param>
+    /// <param name="length">Number of bytes received (1–4).</param>
+    /// <param name="largestAcked">Largest successfully processed packet number so far (-1 = none yet).</param>
     public static ulong Decode(uint truncated, int length, long largestAcked)
     {
         int pnBits = length * 8;
@@ -75,7 +75,7 @@ public static class PacketNumber
         ulong pnHalfWin = pnWin / 2;
         ulong pnMask = pnWin - 1;
 
-        // "expected" ist die nächste erwartete Paketnummer.
+        // "expected" is the next expected packet number.
         ulong expected = (ulong)(largestAcked + 1);
         ulong candidate = (expected & ~pnMask) | truncated;
 

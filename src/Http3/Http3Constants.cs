@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// HTTP/3-Frame-Typen (RFC 9114 §7.2). Unbekannte Typen werden ignoriert (Greasing).
+/// HTTP/3 frame types (RFC 9114 §7.2). Unknown types are ignored (greasing).
 /// </summary>
 public static class Http3FrameType
 {
@@ -31,18 +31,18 @@ public static class Http3FrameType
     public const ulong MaxPushId = 0x0d;
 
     /// <summary>
-    /// PRIORITY_UPDATE für Request-Streams (RFC 9218 §7.2) — nur Client→Server auf dem Control-Stream.
+    /// PRIORITY_UPDATE for request streams (RFC 9218 §7.2) — client→server only, on the control stream.
     /// </summary>
     public const ulong PriorityUpdateRequest = 0xF0700;
 
     /// <summary>
-    /// PRIORITY_UPDATE für Push-Streams (RFC 9218 §7.2).
+    /// PRIORITY_UPDATE for push streams (RFC 9218 §7.2).
     /// </summary>
     public const ulong PriorityUpdatePush = 0xF0701;
 }
 
 /// <summary>
-/// Typ-Präfixe unidirektionaler HTTP/3-Streams (RFC 9114 §6.2, RFC 9204 §4.2).
+/// Type prefixes of unidirectional HTTP/3 streams (RFC 9114 §6.2, RFC 9204 §4.2).
 /// </summary>
 public static class Http3StreamType
 {
@@ -53,7 +53,7 @@ public static class Http3StreamType
 }
 
 /// <summary>
-/// SETTINGS-Parameter-IDs (RFC 9114 §7.2.4.1, RFC 9204 §5).
+/// SETTINGS parameter IDs (RFC 9114 §7.2.4.1, RFC 9204 §5).
 /// </summary>
 public static class Http3Setting
 {
@@ -62,22 +62,22 @@ public static class Http3Setting
     public const ulong QpackBlockedStreams = 0x07;
 
     /// <summary>
-    /// SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 8441 §3 / RFC 9220 §3, Wert 0x08): der Server erlaubt
-    /// Extended CONNECT (:protocol-Pseudo-Header). Wert MUSS 0 oder 1 sein.
+    /// SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 8441 §3 / RFC 9220 §3, value 0x08): the server permits
+    /// Extended CONNECT (the :protocol pseudo-header). The value MUST be 0 or 1.
     /// </summary>
     public const ulong EnableConnectProtocol = 0x08;
 
     /// <summary>
-    /// SETTINGS_H3_DATAGRAM (RFC 9297 §2.1.1, Wert 0x33): der Endpunkt nimmt HTTP/3-Datagramme an.
-    /// Wert MUSS 0 oder 1 sein; QUIC-DATAGRAM-Frames dürfen erst fließen, wenn das Setting mit 1
-    /// GESENDET und EMPFANGEN wurde.
+    /// SETTINGS_H3_DATAGRAM (RFC 9297 §2.1.1, value 0x33): the endpoint accepts HTTP/3 datagrams.
+    /// The value MUST be 0 or 1; QUIC DATAGRAM frames may only flow once the setting has been
+    /// SENT and RECEIVED with 1.
     /// </summary>
     public const ulong H3Datagram = 0x33;
 }
 
 /// <summary>
-/// HTTP/3-Fehlercodes (RFC 9114 §8.1) — als Application Protocol Error Code in RESET_STREAM/
-/// STOP_SENDING (Stream-Fehler) bzw. CONNECTION_CLOSE Typ 0x1d (Verbindungsfehler).
+/// HTTP/3 error codes (RFC 9114 §8.1) — as application protocol error code in RESET_STREAM/
+/// STOP_SENDING (stream errors) or CONNECTION_CLOSE type 0x1d (connection errors).
 /// </summary>
 public static class Http3Error
 {
@@ -100,8 +100,8 @@ public static class Http3Error
     public const ulong VersionFallback = 0x0110;
 
     /// <summary>
-    /// H3_DATAGRAM_ERROR (RFC 9297, Wert 0x33): Verstöße gegen das HTTP-Datagram-Format
-    /// (Verbindungsfehler) bzw. Datagramme zu Requests ohne Datagram-Semantik (Stream-Fehler).
+    /// H3_DATAGRAM_ERROR (RFC 9297, value 0x33): violations of the HTTP datagram format
+    /// (connection error) or datagrams for requests without datagram semantics (stream error).
     /// </summary>
     public const ulong DatagramError = 0x33;
 }

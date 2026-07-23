@@ -24,14 +24,14 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
 
 /// <summary>
-/// Ein Capsule des Capsule-Protokolls (RFC 9297 §3.2): Typ ‖ Länge ‖ Wert. Auf dem CONNECT-Stream
-/// einer WebTransport-Session tragen Capsules Session-Steuerung (WT_CLOSE_SESSION) und Flow Control
-/// (WT_MAX_STREAMS/WT_MAX_DATA/…). Unbekannte Typen MÜSSEN still übersprungen werden (§3.2).
+/// A capsule of the capsule protocol (RFC 9297 §3.2): type ‖ length ‖ value. On a WebTransport
+/// session's CONNECT stream, capsules carry session control (WT_CLOSE_SESSION) and flow control
+/// (WT_MAX_STREAMS/WT_MAX_DATA/…). Unknown types MUST be skipped silently (§3.2).
 /// </summary>
 public readonly record struct WebTransportCapsule(ulong Type, ReadOnlyMemory<byte> Value)
 {
     /// <summary>
-    /// Serialisiert ein Capsule (Typ ‖ VarInt-Länge ‖ Wert).
+    /// Serialises a capsule (type ‖ varint length ‖ value).
     /// </summary>
     public static byte[] Build(ulong type, ReadOnlySpan<byte> value)
     {
@@ -47,7 +47,7 @@ public readonly record struct WebTransportCapsule(ulong Type, ReadOnlyMemory<byt
     }
 
     /// <summary>
-    /// Ein Capsule mit einem einzelnen VarInt-Wert (WT_MAX_STREAMS/WT_MAX_DATA/…).
+    /// A capsule with a single varint value (WT_MAX_STREAMS/WT_MAX_DATA/…).
     /// </summary>
     public static byte[] BuildVarIntCapsule(ulong type, ulong value)
     {
@@ -61,7 +61,7 @@ public readonly record struct WebTransportCapsule(ulong Type, ReadOnlyMemory<byt
     }
 
     /// <summary>
-    /// Das WT_CLOSE_SESSION-Capsule (§6): 32-Bit-Fehlercode (big-endian) ‖ UTF-8-Meldung (≤ 1024 B).
+    /// The WT_CLOSE_SESSION capsule (§6): 32-bit error code (big-endian) ‖ UTF-8 message (≤ 1024 B).
     /// </summary>
     public static byte[] BuildCloseSession(uint errorCode, string reason)
     {
@@ -75,9 +75,9 @@ public readonly record struct WebTransportCapsule(ulong Type, ReadOnlyMemory<byt
     }
 
     /// <summary>
-    /// Liest so viele vollständige Capsules wie möglich aus <paramref name="buffer"/>;
-    /// <paramref name="consumed"/> gibt die verbrauchten Bytes an (der Rest ist ein unvollständiges
-    /// Capsule – auf weitere Stream-Daten warten).
+    /// Reads as many complete capsules as possible from <paramref name="buffer"/>;
+    /// <paramref name="consumed"/> reports the consumed bytes (the rest is an incomplete
+    /// capsule – wait for more stream data).
     /// </summary>
     public static List<WebTransportCapsule> ReadAll(ReadOnlyMemory<byte> buffer, out int consumed)
     {
@@ -87,9 +87,9 @@ public readonly record struct WebTransportCapsule(ulong Type, ReadOnlyMemory<byt
         while (!reader.IsEmpty)
         {
             if (!reader.TryReadVarInt(out ulong type) || !reader.TryReadVarInt(out ulong length))
-                break; // Capsule-Kopf unvollständig
+                break; // capsule header incomplete
             if (length > (ulong)reader.Remaining)
-                break; // Wert noch nicht vollständig
+                break; // value not yet complete
             int valueStart = reader.Position;
             if (!reader.TrySkip((int)length))
                 break;

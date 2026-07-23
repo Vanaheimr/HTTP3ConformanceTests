@@ -28,9 +28,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// End-to-End: die dynamische QPACK-Tabelle (RFC 9204) über den vollständigen HTTP/3-Stack. Client und
-/// Server kündigen je eine Kapazität an, tauschen Encoder-Stream-Instruktionen aus und referenzieren
-/// dynamische Einträge – in-process gegeneinander gefahren.
+/// End to end: the dynamic QPACK table (RFC 9204) over the complete HTTP/3 stack. Client and
+/// server each announce a capacity, exchange encoder-stream instructions and reference
+/// dynamic entries — run against each other in-process.
 /// </summary>
 [TestFixture]
 public class Http3QpackIntegrationTests
@@ -41,7 +41,7 @@ public class Http3QpackIntegrationTests
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
 
-        // "x-served-by" ist kein Static-Table-Name ⇒ erzwingt einen dynamischen Insert in der Antwort.
+        // "x-served-by" is not a static-table name ⇒ forces a dynamic insert in the response.
         Http3Response Handler(Http3Request request) => new()
         {
             Status = 200,
@@ -66,7 +66,7 @@ public class Http3QpackIntegrationTests
         Assert.That(client.HandshakeConfirmed, Is.True);
 
         client.InitializeHttp3();
-        // SETTINGS und Stream-Typ-Präfixe beidseitig fließen lassen (der Client lernt die Server-Kapazität).
+        // Let SETTINGS and stream-type prefixes flow both ways (the client learns the server capacity).
         for (int round = 0; round < 6; round++)
             Pump();
 
@@ -84,18 +84,18 @@ public class Http3QpackIntegrationTests
         Assert.That(response.GetHeader("x-served-by"), Is.EqualTo("http3-from-scratch"));
         Assert.That(response.BodyText, Does.Contain("dynamic ok /hello"));
 
-        // Die dynamische Tabelle wurde tatsächlich genutzt: der Client hat Request-Header eingefügt,
-        // der Server hat dieselben Instruktionen über den Encoder-Stream nachvollzogen.
-        Assert.That(client.QpackEncoderInsertCount > 0, Is.True, "Der Client muss die dynamische Tabelle nutzen.");
+        // The dynamic table was actually used: the client inserted request headers,
+        // the server replayed the same instructions via the encoder stream.
+        Assert.That(client.QpackEncoderInsertCount > 0, Is.True, "The client must use the dynamic table.");
         Assert.That(server.QpackDecoderInsertCount, Is.EqualTo(client.QpackEncoderInsertCount));
 
-        // Ebenso für die Antwort-Header (Server-Encoder ↔ Client-Decoder).
-        Assert.That(server.QpackEncoderInsertCount > 0, Is.True, "Der Server muss die dynamische Tabelle für die Antwort nutzen.");
+        // Likewise for the response headers (server encoder ↔ client decoder).
+        Assert.That(server.QpackEncoderInsertCount > 0, Is.True, "The server must use the dynamic table for the response.");
         Assert.That(client.QpackDecoderInsertCount, Is.EqualTo(server.QpackEncoderInsertCount));
 
-        // Noch etwas pendeln lassen, damit die Section-Acknowledgment des Clients den Server erreicht.
+        // Shuttle a bit more so the client's section acknowledgment reaches the server.
         for (int round = 0; round < 4; round++)
             Pump();
-        Assert.That(server.QpackEncoderKnownReceivedCount > 0, Is.True, "Der Server muss die Section-Acknowledgment des Clients erhalten haben (RFC 9204 §4.4.1).");
+        Assert.That(server.QpackEncoderKnownReceivedCount > 0, Is.True, "The server must have received the client's section acknowledgment (RFC 9204 §4.4.1).");
     }
 }

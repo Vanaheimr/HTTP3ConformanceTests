@@ -24,13 +24,13 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 /// <summary>
-/// Die zerlegten Felder eines NewSessionTicket (RFC 8446 §4.6.1).
+/// The parsed fields of a NewSessionTicket (RFC 8446 §4.6.1).
 /// </summary>
-/// <param name="LifetimeSeconds">Gültigkeitsdauer des Tickets in Sekunden (max. 7 Tage).</param>
-/// <param name="AgeAdd">Zufälliger Wert, mit dem der Client das Ticket-Alter verschleiert (obfuscated_ticket_age).</param>
-/// <param name="Nonce">Ticket-Nonce; unterscheidet mehrere PSKs aus demselben resumption_master_secret.</param>
-/// <param name="Ticket">Das opake Ticket (Identity), das der Client im pre_shared_key zurückspielt.</param>
-/// <param name="MaxEarlyDataSize">Aus der early_data-Extension; <c>0</c> = kein 0-RTT erlaubt. QUIC nutzt 0xFFFFFFFF.</param>
+/// <param name="LifetimeSeconds">Validity period of the ticket in seconds (max. 7 days).</param>
+/// <param name="AgeAdd">Random value with which the client obfuscates the ticket age (obfuscated_ticket_age).</param>
+/// <param name="Nonce">Ticket nonce; distinguishes multiple PSKs from the same resumption_master_secret.</param>
+/// <param name="Ticket">The opaque ticket (identity) the client replays in pre_shared_key.</param>
+/// <param name="MaxEarlyDataSize">From the early_data extension; <c>0</c> = no 0-RTT allowed. QUIC uses 0xFFFFFFFF.</param>
 public sealed record NewSessionTicketInfo(
     uint LifetimeSeconds,
     uint AgeAdd,
@@ -39,12 +39,12 @@ public sealed record NewSessionTicketInfo(
     uint MaxEarlyDataSize);
 
 /// <summary>
-/// Baut und zerlegt NewSessionTicket-Nachrichten (RFC 8446 §4.6.1) – die Grundlage der Session Resumption.
+/// Builds and parses NewSessionTicket messages (RFC 8446 §4.6.1) – the foundation of session resumption.
 /// </summary>
 public static class NewSessionTicket
 {
     /// <summary>
-    /// Zerlegt den Rumpf (ohne den 4-Byte-Handshake-Header) einer NewSessionTicket-Nachricht.
+    /// Parses the body (without the 4-byte handshake header) of a NewSessionTicket message.
     /// </summary>
     public static bool TryParse(ReadOnlySpan<byte> body, out NewSessionTicketInfo? info)
     {
@@ -66,8 +66,8 @@ public static class NewSessionTicket
     }
 
     /// <summary>
-    /// Baut eine vollständige NewSessionTicket-Handshake-Nachricht. <paramref name="maxEarlyDataSize"/> &gt; 0
-    /// fügt die early_data-Extension hinzu (für QUIC 0-RTT ist der Wert 0xFFFFFFFF, RFC 9001 §4.6.1).
+    /// Builds a complete NewSessionTicket handshake message. <paramref name="maxEarlyDataSize"/> &gt; 0
+    /// adds the early_data extension (for QUIC 0-RTT the value is 0xFFFFFFFF, RFC 9001 §4.6.1).
     /// </summary>
     public static byte[] Build(
         uint lifetimeSeconds, uint ageAdd, ReadOnlySpan<byte> nonce, ReadOnlySpan<byte> ticket, uint maxEarlyDataSize = 0)

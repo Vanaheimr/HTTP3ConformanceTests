@@ -25,8 +25,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// CONNECTION_CLOSE-Frame (Typ 0x1c/0x1d, RFC 9000 §19.19). Typ 0x1c meldet einen QUIC-Transport-
-/// fehler (mit dem auslösenden Frame-Typ), Typ 0x1d einen Fehler der Anwendung (ohne Frame-Typ-Feld).
+/// CONNECTION_CLOSE frame (type 0x1c/0x1d, RFC 9000 §19.19). Type 0x1c reports a QUIC transport
+/// error (with the triggering frame type), type 0x1d an application error (without the frame-type field).
 /// </summary>
 public sealed record ConnectionCloseFrame(
     ulong ErrorCode,
@@ -35,7 +35,7 @@ public sealed record ConnectionCloseFrame(
     string ReasonPhrase) : Frame
 {
     /// <summary>
-    /// Erzeugt ein Transport-CONNECTION_CLOSE (Typ 0x1c).
+    /// Creates a transport CONNECTION_CLOSE (type 0x1c).
     /// </summary>
     public static ConnectionCloseFrame Transport(TransportError error, string reason = "", ulong triggeringFrameType = 0)
         => new((ulong)error, IsApplicationError: false, triggeringFrameType, reason);
@@ -53,7 +53,7 @@ public sealed record ConnectionCloseFrame(
     }
 
     /// <summary>
-    /// Parst den Frame-Rumpf. <paramref name="isApplication"/> ergibt sich aus dem Typ (0x1d).
+    /// Parses the frame body. <paramref name="isApplication"/> follows from the type (0x1d).
     /// </summary>
     public static bool TryReadBody(ref BufferReader reader, bool isApplication, out ConnectionCloseFrame? frame)
     {

@@ -30,45 +30,45 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Der Rest der Transport-Error-Matrix (RFC 9000 §11/§20.1): TRANSPORT_PARAMETER_ERROR
-/// (§7.3-Authentifizierung + §7.4/§18.2-Wertebereiche) und das VERBINDUNGS-Flow-Control-Limit
-/// (§4.1, FLOW_CONTROL_ERROR über die Summe aller Streams).
+/// The rest of the transport-error matrix (RFC 9000 §11/§20.1): TRANSPORT_PARAMETER_ERROR
+/// (§7.3 authentication + §7.4/§18.2 value ranges) and the CONNECTION flow-control limit
+/// (§4.1, FLOW_CONTROL_ERROR over the sum of all streams).
 /// </summary>
 [TestFixture]
 public class TransportErrorMatrixTests
 {
-    // ---- Unit: TryDecode-Härtung (§7.4/§18.2) ----------------------------------------------
+    // ---- Unit: TryDecode hardening (§7.4/§18.2) --------------------------------------------
 
     [Test]
     public void TryDecode_RejectsInvalidParameterValues()
     {
-        // Duplikate (§7.4 MUST NOT — gilt auch für unbekannte IDs).
+        // Duplicates (§7.4 MUST NOT — also applies to unknown IDs).
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x01, [0x44, 0x00]), (0x01, [0x44, 0x00])), out _), Is.False);
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x77, []), (0x77, [])), out _), Is.False);
 
-        // max_udp_payload_size < 1200 ist ungültig (§18.2); 1200 selbst ist gültig.
+        // max_udp_payload_size < 1200 is invalid (§18.2); 1200 itself is valid.
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x03, VarIntBytes(1199))), out _), Is.False);
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x03, VarIntBytes(1200))), out _), Is.True);
 
-        // active_connection_id_limit MUSS mindestens 2 sein (§18.2).
+        // active_connection_id_limit MUST be at least 2 (§18.2).
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x0e, VarIntBytes(1))), out _), Is.False);
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x0e, VarIntBytes(2))), out _), Is.True);
 
-        // Stream-Limits über 2^60 sind unzulässig (§4.6).
+        // Stream limits above 2^60 are not permitted (§4.6).
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x08, VarIntBytes((1UL << 60) + 1))), out _), Is.False);
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x09, VarIntBytes((1UL << 60) + 1))), out _), Is.False);
 
-        // stateless_reset_token: genau 16 Bytes (§18.2).
+        // stateless_reset_token: exactly 16 bytes (§18.2).
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x02, new byte[15])), out _), Is.False);
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x02, new byte[16])), out _), Is.True);
 
-        // Connection IDs über 20 Bytes (§17.2) — darf KEINE Exception auslösen, nur false liefern.
+        // Connection IDs above 20 bytes (§17.2) — must NOT throw an exception, only return false.
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x0f, new byte[21])), out _), Is.False);
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x00, new byte[21])), out _), Is.False);
         Assert.That(TransportParameters.TryDecode(EncodeParams((0x0f, new byte[20])), out _), Is.True);
     }
 
-    // ---- Unit: §7.3-Authentifizierung (Validator) ------------------------------------------
+    // ---- Unit: §7.3 authentication (validator) ---------------------------------------------
 
     [Test]
     public void Validator_RequiresMatchingInitialSourceConnectionId()
@@ -77,16 +77,16 @@ public class TransportErrorMatrixTests
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         using var client = new QuicClientConnection("localhost", certificateValidation: validation);
 
-        // Fehlende initial_source_connection_id ⇒ Fehler (§7.3: Abwesenheit ist fatal).
+        // Missing initial_source_connection_id ⇒ error (§7.3: absence is fatal).
         Assert.That(Decode(EncodeParams((0x04, VarIntBytes(1000)))), Is.Not.Null);
         Assert.That(client.ValidatePeerTransportParameters(Decode(EncodeParams((0x04, VarIntBytes(1000))))!),
                     Does.Contain("missing initial_source_connection_id"));
 
-        // Falsche initial_source_connection_id ⇒ Mismatch.
+        // Wrong initial_source_connection_id ⇒ mismatch.
         Assert.That(client.ValidatePeerTransportParameters(Decode(EncodeParams((0x0f, [9, 9, 9])))!),
                     Does.Contain("initial_source_connection_id mismatch"));
 
-        // Passende ISCID + passende ODCID (vor dem Handshake ist Dcid = die ursprüngliche DCID) ⇒ ok.
+        // Matching ISCID + matching ODCID (before the handshake, Dcid = the original DCID) ⇒ ok.
         byte[] good = EncodeParams((0x0f, client.DcidForTest.Span.ToArray()), (0x00, client.DcidForTest.Span.ToArray()));
         Assert.That(client.ValidatePeerTransportParameters(Decode(good)!), Is.Null);
     }
@@ -99,15 +99,15 @@ public class TransportErrorMatrixTests
         using var client = new QuicClientConnection("localhost", certificateValidation: validation);
         byte[] iscid = client.DcidForTest.Span.ToArray();
 
-        // Fehlende original_destination_connection_id vom Server ⇒ Fehler (§7.3).
+        // Missing original_destination_connection_id from the server ⇒ error (§7.3).
         Assert.That(client.ValidatePeerTransportParameters(Decode(EncodeParams((0x0f, iscid)))!),
                     Does.Contain("missing original_destination_connection_id"));
 
-        // Falsche ODCID ⇒ Mismatch (Angreifer könnte sonst das erste Initial fälschen).
+        // Wrong ODCID ⇒ mismatch (otherwise an attacker could forge the first Initial).
         Assert.That(client.ValidatePeerTransportParameters(Decode(EncodeParams((0x0f, iscid), (0x00, [1, 2, 3])))!),
                     Does.Contain("original_destination_connection_id mismatch"));
 
-        // retry_source_connection_id OHNE stattgefundenen Retry ⇒ Fehler (§7.3).
+        // retry_source_connection_id WITHOUT a Retry having happened ⇒ error (§7.3).
         Assert.That(client.ValidatePeerTransportParameters(Decode(EncodeParams((0x0f, iscid), (0x00, iscid), (0x10, [5])))!),
                     Does.Contain("retry_source_connection_id without Retry"));
     }
@@ -117,7 +117,7 @@ public class TransportErrorMatrixTests
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         using var server = new QuicServerConnection(cert);
-        byte[] iscid = server.DcidForTest.Span.ToArray(); // vor dem Handshake: leere DCID
+        byte[] iscid = server.DcidForTest.Span.ToArray(); // before the handshake: empty DCID
 
         Assert.That(server.ValidatePeerTransportParameters(Decode(EncodeParams((0x0f, iscid)))!), Is.Null);
         Assert.That(server.ValidatePeerTransportParameters(Decode(EncodeParams((0x0f, iscid), (0x00, [1])))!),
@@ -138,7 +138,7 @@ public class TransportErrorMatrixTests
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
 
-        // Ein „böser" Client schmuggelt den server-only-Parameter ODCID in seine Transport-Parameter.
+        // An "evil" client smuggles the server-only parameter ODCID into its transport parameters.
         var badParams = new TransportParameters { OriginalDestinationConnectionIdValue = new ConnectionId([1, 2, 3]) };
         using var client = new QuicClientConnection("localhost", badParams, certificateValidation: validation);
         using var server = new QuicServerConnection(cert);
@@ -147,19 +147,19 @@ public class TransportErrorMatrixTests
         for (int round = 0; round < 20 && client.PeerCloseFrame is null; round++)
             Pump(client, server);
 
-        Assert.That(server.IsClosing, Is.True, "Der Server muss wegen TRANSPORT_PARAMETER_ERROR schließen.");
+        Assert.That(server.IsClosing, Is.True, "The server must close due to TRANSPORT_PARAMETER_ERROR.");
         Assert.That(client.PeerCloseFrame, Is.Not.Null,
-            "Der Client muss das CONNECTION_CLOSE lesen können — §10.2.3: vor bestätigtem Handshake auf Initial+Handshake-Level.");
+            "The client must be able to read the CONNECTION_CLOSE — §10.2.3: at Initial+Handshake level before the handshake is confirmed.");
         Assert.That(client.PeerCloseFrame!.ErrorCode, Is.EqualTo((ulong)TransportError.TransportParameterError));
         Assert.That(client.HandshakeConfirmed, Is.False);
     }
 
-    // ---- End-to-End: VERBINDUNGS-Flow-Control (§4.1) ---------------------------------------
+    // ---- End to end: CONNECTION flow control (§4.1) ----------------------------------------
 
     [Test]
     public void ExceedingConnectionFlowControl_ClosesWithFlowControlError()
     {
-        // Der Server gewährt nur 8 KiB VERBINDUNGS-Fenster (Stream-Fenster bleiben groß).
+        // The server grants only an 8 KiB CONNECTION window (stream windows stay large).
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         var serverParams = new TransportParameters { InitialMaxDataValue = 8192 };
@@ -171,14 +171,14 @@ public class TransportErrorMatrixTests
             Pump(client, server);
         Assert.That(client.HandshakeConfirmed, Is.True);
 
-        // Braver Client hält das Limit ein — das Seam hebelt es aus, um den Verstoß zu provozieren.
+        // A well-behaved client honors the limit — the seam overrides it to provoke the violation.
         client.OverrideConnSendLimitForTest(1_000_000);
         QuicStream stream = client.OpenBidirectionalStream();
         stream.Write(new byte[40_000]);
         for (int round = 0; round < 40 && client.PeerCloseFrame is null; round++)
             Pump(client, server);
 
-        Assert.That(server.IsClosing, Is.True, "Der Server muss wegen FLOW_CONTROL_ERROR schließen.");
+        Assert.That(server.IsClosing, Is.True, "The server must close due to FLOW_CONTROL_ERROR.");
         Assert.That(client.PeerCloseFrame, Is.Not.Null);
         Assert.That(client.PeerCloseFrame!.ErrorCode, Is.EqualTo((ulong)TransportError.FlowControlError));
     }
@@ -186,7 +186,7 @@ public class TransportErrorMatrixTests
     [Test]
     public void StayingWithinConnectionFlowControl_DoesNotClose()
     {
-        // Gegenprobe: dieselbe Datenmenge INNERHALB des Fensters bleibt fehlerfrei.
+        // Counter-check: the same amount of data WITHIN the window stays error-free.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         var serverParams = new TransportParameters { InitialMaxDataValue = 65536 };
@@ -208,7 +208,7 @@ public class TransportErrorMatrixTests
         Assert.That(server.Streams[stream.Id.Value].Receive.HighestReceivedOffset, Is.EqualTo(40_000UL));
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static byte[] EncodeParams(params (ulong Id, byte[] Value)[] parameters)
     {

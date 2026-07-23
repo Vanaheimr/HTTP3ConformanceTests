@@ -1,18 +1,18 @@
-# Interoperabilität
+# Interoperability
 
-Nachweis, dass der from-scratch-Stack mit echten, fremden HTTP/3-Implementierungen zusammenarbeitet —
-in **beide** Richtungen (unser Client gegen fremde Server, fremde Clients gegen unseren Server).
+Proof that the from-scratch stack works with real, independent HTTP/3 implementations —
+in **both** directions (our client against foreign servers, foreign clients against our server).
 
-## Jederzeit wiederholen
+## Repeat at any time
 
-**Client-Seite** — die ganze Matrix mit einem Befehl (frische Verbindung je Ziel, **volle**
-Zertifikatskette + Hostname, kein `-k`):
+**Client side** — the whole matrix with a single command (fresh connection per target, **full**
+certificate chain + hostname validation, no `-k`):
 
 ```bash
 dotnet run --project samples/H3Get -- --interop
 ```
 
-**Server-Seite** — den eigenen Server starten und mit einem HTTP/3-fähigen `curl` prüfen:
+**Server side** — start our own server and probe it with an HTTP/3-capable `curl`:
 
 ```bash
 dotnet run --project samples/H3Server
@@ -21,20 +21,20 @@ dotnet run --project samples/H3Server
 curl --http3-only -k https://127.0.0.1:4433/
 ```
 
-> Hinweis: Das System-`curl` unter Windows ist ein Schannel-Build **ohne** HTTP/3. Ein HTTP/3-fähiges
-> `curl` liefert das offizielle Windows-Paket von <https://curl.se/windows/> (ngtcp2 + nghttp3) — oder,
-> am einfachsten, das in WSL/Debian vorinstallierte `curl` (HTTP/3 über OpenSSL-QUIC). Prüfen mit
-> `curl -V` (Feature-Zeile muss `HTTP3` enthalten). Dasselbe `curl --http3-only` taugt auch als Orakel
-> „spricht Ziel X überhaupt HTTP/3?" — z. B. `www.microsoft.com` bietet **kein** HTTP/3 (die Domain
-> scheitert bei jedem HTTP/3-Client, nicht nur bei uns; der Microsoft-Stack läuft über
-> `outlook.office.com`).
+> Note: the system `curl` on Windows is a Schannel build **without** HTTP/3. An HTTP/3-capable
+> `curl` is available from the official Windows package at <https://curl.se/windows/> (ngtcp2 +
+> nghttp3) — or, easiest of all, the `curl` preinstalled in WSL/Debian (HTTP/3 via OpenSSL-QUIC).
+> Check with `curl -V` (the features line must contain `HTTP3`). The same `curl --http3-only` also
+> serves as an oracle for "does target X speak HTTP/3 at all?" — e.g. `www.microsoft.com` offers
+> **no** HTTP/3 (the domain fails with every HTTP/3 client, not just ours; Microsoft's stack runs
+> on `outlook.office.com`).
 
-## Client-Interop-Matrix
+## Client interop matrix
 
-Stand **2026-07-23** — 8 unabhängige QUIC-Implementierungen, je Status 2xx/3xx mit voller
-Zertifikatsprüfung:
+As of **2026-07-23** — 8 independent QUIC implementations, each returning 2xx/3xx with full
+certificate validation:
 
-| Ziel | Fremd-Stack | Gruppe / Suite / Cert | Ergebnis |
+| Target | Foreign stack | Group / Suite / Cert | Result |
 |---|---|---|---|
 | `cloudflare-quic.com` | **quiche** (Cloudflare) | X25519 / AES-128-GCM-SHA256 / ECDSA | 200 |
 | `quic.nginx.org` | **nginx QUIC** | X25519 / AES-128-GCM-SHA256 / ECDSA | 200 |
@@ -45,27 +45,27 @@ Zertifikatsprüfung:
 | `caddyserver.com` | **quic-go** (Go, via Caddy) | X25519 / AES-128-GCM-SHA256 / ECDSA | 200 |
 | `www.akamai.com` | **Akamai QUIC** | X25519 / **AES-256-GCM-SHA384** / ECDSA | 403* |
 
-\* 403/301/302 sind reguläre HTTP-Antworten (Bot-Schutz, Redirect) — der HTTP/3-Stack läuft in allen
-Fällen end-to-end durch (Handshake, QPACK, Frames, Cert-Prüfung).
+\* 403/301/302 are regular HTTP responses (bot protection, redirects) — the HTTP/3 stack runs
+end-to-end in every case (handshake, QPACK, frames, certificate validation).
 
-**Krypto-Abdeckung live:** beide Schlüsselaustausch-Gruppen (X25519 **und** P-256/Secp256r1), beide
-Cipher-Suiten (AES-128-GCM-SHA256 **und** AES-256-GCM-SHA384) und beide Zertifikatstypen (ECDSA **und**
-RSA mit RSA-PSS-Signaturprüfung). `outlook.office.com` übt als einziges Ziel den kompletten Pfad
-P-256 + AES-256 + RSA. (Die PQ-Pfade ML-KEM-Hybrid und ML-DSA werden gegen den eigenen Server sowie —
-für ML-KEM — live gegen Cloudflare geprüft, siehe `H3Get --mlkem` / `H3Server --mldsa`.)
+**Live crypto coverage:** both key-exchange groups (X25519 **and** P-256/Secp256r1), both cipher
+suites (AES-128-GCM-SHA256 **and** AES-256-GCM-SHA384) and both certificate types (ECDSA **and**
+RSA with RSA-PSS signature verification). `outlook.office.com` is the only target exercising the
+full P-256 + AES-256 + RSA path. (The PQ paths ML-KEM hybrid and ML-DSA are verified against our
+own server and — for ML-KEM — live against Cloudflare, see `H3Get --mlkem` / `H3Server --mldsa`.)
 
-## Server-Interop
+## Server interop
 
-Unser `H3Server` besteht gegen zwei unabhängige fremde Client-Stacks:
+Our `H3Server` passes against two independent foreign client stacks:
 
-| Client | QUIC-Backend | geprüft |
+| Client | QUIC backend | Verified |
 |---|---|---|
-| `curl` 8.21 (Windows, curl.se) | **ngtcp2** + nghttp3 + LibreSSL | `GET /` (200), `POST /echo` (byte-genaues Echo), `GET /big` (300 KB), `GET /hints` (103 Early Hints + 200 + Trailer), Connection-Reuse |
-| `curl` 8.14 (WSL/Debian) | **OpenSSL-3.5-QUIC** + nghttp3 | dieselben Tests über die WSL2-NAT-Grenze (Host-IP aus `ip route`) |
+| `curl` 8.21 (Windows, curl.se) | **ngtcp2** + nghttp3 + LibreSSL | `GET /` (200), `POST /echo` (byte-exact echo), `GET /big` (300 KB), `GET /hints` (103 Early Hints + 200 + trailers), connection reuse |
+| `curl` 8.14 (WSL/Debian) | **OpenSSL-3.5-QUIC** + nghttp3 | same tests across the WSL2 NAT boundary (host IP from `ip route`) |
 
-## Offen (Kür)
+## Open (optional)
 
-- **Browser** (Firefox/Chrome) gegen `H3Server` — brauchen ein vertrauenswürdiges Zertifikat
-  (lokale CA statt self-signed).
-- Weitere Ziele nach Bedarf; der `--interop`-Modus lässt sich in `samples/H3Get/Program.cs`
-  (Liste `targets`) leicht erweitern.
+- **Browsers** (Firefox/Chrome) against `H3Server` — they require a trusted certificate
+  (local CA instead of self-signed).
+- Further targets as needed; the `--interop` mode is easy to extend in
+  `samples/H3Get/Program.cs` (the `targets` list).

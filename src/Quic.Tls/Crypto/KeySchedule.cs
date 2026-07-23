@@ -24,7 +24,7 @@ using System.Security.Cryptography;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// Die aus dem Handshake-Secret abgeleiteten Traffic Secrets (RFC 8446 §7.1).
+/// The traffic secrets derived from the handshake secret (RFC 8446 §7.1).
 /// </summary>
 public sealed record HandshakeTrafficSecrets(
     byte[] HandshakeSecret,
@@ -32,7 +32,7 @@ public sealed record HandshakeTrafficSecrets(
     byte[] ServerHandshakeTrafficSecret);
 
 /// <summary>
-/// Die aus dem Master-Secret abgeleiteten Application Traffic Secrets (1-RTT).
+/// The application traffic secrets derived from the master secret (1-RTT).
 /// </summary>
 public sealed record ApplicationTrafficSecrets(
     byte[] MasterSecret,
@@ -40,14 +40,14 @@ public sealed record ApplicationTrafficSecrets(
     byte[] ServerApplicationTrafficSecret);
 
 /// <summary>
-/// Der TLS-1.3-Key-Schedule (RFC 8446 §7.1). Kette:
+/// The TLS 1.3 key schedule (RFC 8446 §7.1). Chain:
 /// <code>
 ///   Early Secret ─(Derive "derived")→ ─Extract(ECDHE)→ Handshake Secret ─(Derive "* hs traffic")
 ///   Handshake Secret ─(Derive "derived")→ ─Extract(0)→ Master Secret ─(Derive "* ap traffic")
 /// </code>
-/// Alle Ableitungen laufen über <c>HKDF-Expand-Label</c> (siehe <see cref="TlsHkdf"/>).
-/// QUIC nutzt dieselben Traffic Secrets, ersetzt aber die Key/IV-Labels durch "quic key"/"quic iv"
-/// (das erledigt <c>TrafficKeys.FromSecret</c> in der QUIC-Schicht).
+/// All derivations go through <c>HKDF-Expand-Label</c> (see <see cref="TlsHkdf"/>).
+/// QUIC uses the same traffic secrets but replaces the key/IV labels with "quic key"/"quic iv"
+/// (handled by <c>TrafficKeys.FromSecret</c> in the QUIC layer).
 /// </summary>
 public sealed class KeySchedule
 {
@@ -55,12 +55,12 @@ public sealed class KeySchedule
     private readonly byte[] _emptyTranscriptHash;
 
     /// <summary>
-    /// Länge des Hash-Ausgangs (32 für SHA-256, 48 für SHA-384) – zugleich Secret-Länge.
+    /// Length of the hash output (32 for SHA-256, 48 for SHA-384) – also the secret length.
     /// </summary>
     public int HashLength { get; }
 
     /// <summary>
-    /// AEAD-Schlüssellänge der Suite (16 für AES-128/ChaCha20, 32 für AES-256).
+    /// AEAD key length of the suite (16 for AES-128/ChaCha20, 32 for AES-256).
     /// </summary>
     public int AeadKeyLength { get; }
 
@@ -73,7 +73,7 @@ public sealed class KeySchedule
             CipherSuite.Aes128GcmSha256 => (HashAlgorithmName.SHA256, 32, 16),
             CipherSuite.ChaCha20Poly1305Sha256 => (HashAlgorithmName.SHA256, 32, 32),
             CipherSuite.Aes256GcmSha384 => (HashAlgorithmName.SHA384, 48, 32),
-            _ => throw new NotSupportedException($"Cipher Suite {suite} wird nicht unterstützt."),
+            _ => throw new NotSupportedException($"Cipher suite {suite} is not supported."),
         };
         HashLength = hashLen;
         AeadKeyLength = aeadKeyLen;
@@ -81,7 +81,7 @@ public sealed class KeySchedule
     }
 
     /// <summary>
-    /// Transcript-Hash über die (konkatenierten) Handshake-Nachrichten.
+    /// Transcript hash over the (concatenated) handshake messages.
     /// </summary>
     public byte[] TranscriptHash(ReadOnlySpan<byte> handshakeMessages) => HashBytes(handshakeMessages);
 
@@ -93,7 +93,7 @@ public sealed class KeySchedule
         => TlsHkdf.ExpandLabel(_hash, secret, label, transcriptHash, HashLength);
 
     /// <summary>
-    /// Early Secret = HKDF-Extract(salt = 0, IKM = PSK). Ohne PSK ist die IKM eine Null-Folge.
+    /// Early secret = HKDF-Extract(salt = 0, IKM = PSK). Without a PSK the IKM is a run of zeros.
     /// </summary>
     public byte[] EarlySecret(ReadOnlySpan<byte> psk = default)
     {
@@ -103,7 +103,7 @@ public sealed class KeySchedule
     }
 
     /// <summary>
-    /// Handshake Secret = HKDF-Extract(salt = Derive-Secret(Early,"derived",""), IKM = (EC)DHE).
+    /// Handshake secret = HKDF-Extract(salt = Derive-Secret(Early,"derived",""), IKM = (EC)DHE).
     /// </summary>
     public byte[] HandshakeSecret(ReadOnlySpan<byte> earlySecret, ReadOnlySpan<byte> sharedSecret)
     {
@@ -112,7 +112,7 @@ public sealed class KeySchedule
     }
 
     /// <summary>
-    /// Master Secret = HKDF-Extract(salt = Derive-Secret(Handshake,"derived",""), IKM = 0).
+    /// Master secret = HKDF-Extract(salt = Derive-Secret(Handshake,"derived",""), IKM = 0).
     /// </summary>
     public byte[] MasterSecret(ReadOnlySpan<byte> handshakeSecret)
     {
@@ -121,9 +121,9 @@ public sealed class KeySchedule
     }
 
     /// <summary>
-    /// Bequemer Einstieg: leitet aus dem ECDHE-Geheimnis und dem Transcript-Hash über
-    /// ClientHello‖ServerHello die Handshake Traffic Secrets ab. Bei Resumption fließt der
-    /// <paramref name="psk"/> in das Early Secret ein (RFC 8446 §7.1); ohne PSK (Standard) ist es 0.
+    /// Convenient entry point: derives the handshake traffic secrets from the ECDHE secret and the
+    /// transcript hash over ClientHello‖ServerHello. With resumption, the <paramref name="psk"/>
+    /// flows into the early secret (RFC 8446 §7.1); without a PSK (default) it is 0.
     /// </summary>
     public HandshakeTrafficSecrets DeriveHandshakeSecrets(
         ReadOnlySpan<byte> sharedSecret,
@@ -138,38 +138,38 @@ public sealed class KeySchedule
     }
 
     /// <summary>
-    /// Der <c>binder_key</c> für eine Resumption-PSK (RFC 8446 §7.1): <c>Derive-Secret(Early Secret,
-    /// "res binder", "")</c>. Der PSK-Binder ist dann die <see cref="FinishedVerifyData"/> über den
-    /// Transcript-Hash des (bis vor die Binder) abgeschnittenen ClientHello.
+    /// The <c>binder_key</c> for a resumption PSK (RFC 8446 §7.1): <c>Derive-Secret(Early Secret,
+    /// "res binder", "")</c>. The PSK binder is then the <see cref="FinishedVerifyData"/> over the
+    /// transcript hash of the ClientHello truncated just before the binders.
     /// </summary>
     public byte[] ResumptionBinderKey(ReadOnlySpan<byte> psk)
         => DeriveSecret(EarlySecret(psk), "res binder", _emptyTranscriptHash);
 
     /// <summary>
-    /// Das <c>resumption_master_secret</c> (RFC 8446 §7.1): <c>Derive-Secret(Master Secret, "res master",
-    /// ClientHello…client Finished)</c>. Grundlage der später ausgegebenen Resumption-PSKs.
+    /// The <c>resumption_master_secret</c> (RFC 8446 §7.1): <c>Derive-Secret(Master Secret, "res master",
+    /// ClientHello…client Finished)</c>. The basis of the resumption PSKs issued later.
     /// </summary>
     public byte[] ResumptionMasterSecret(
         ReadOnlySpan<byte> masterSecret, ReadOnlySpan<byte> transcriptHashThroughClientFinished)
         => DeriveSecret(masterSecret, "res master", transcriptHashThroughClientFinished);
 
     /// <summary>
-    /// Die aus einem NewSessionTicket resultierende Resumption-PSK (RFC 8446 §4.6.1):
+    /// The resumption PSK resulting from a NewSessionTicket (RFC 8446 §4.6.1):
     /// <c>HKDF-Expand-Label(resumption_master_secret, "resumption", ticket_nonce, Hash.length)</c>.
     /// </summary>
     public byte[] ResumptionPsk(ReadOnlySpan<byte> resumptionMasterSecret, ReadOnlySpan<byte> ticketNonce)
         => TlsHkdf.ExpandLabel(_hash, resumptionMasterSecret, "resumption", ticketNonce, HashLength);
 
     /// <summary>
-    /// Das <c>client_early_traffic_secret</c> (RFC 8446 §7.1) für 0-RTT: <c>Derive-Secret(Early Secret(psk),
-    /// "c e traffic", ClientHello)</c>. Aus ihm leitet die QUIC-Schicht die 0-RTT-Schlüssel ab (nur Client→Server).
+    /// The <c>client_early_traffic_secret</c> (RFC 8446 §7.1) for 0-RTT: <c>Derive-Secret(Early Secret(psk),
+    /// "c e traffic", ClientHello)</c>. From it the QUIC layer derives the 0-RTT keys (client→server only).
     /// </summary>
     public byte[] ClientEarlyTrafficSecret(ReadOnlySpan<byte> psk, ReadOnlySpan<byte> transcriptHashClientHello)
         => DeriveSecret(EarlySecret(psk), "c e traffic", transcriptHashClientHello);
 
     /// <summary>
-    /// Leitet aus dem Handshake Secret und dem Transcript-Hash bis einschließlich Server-Finished
-    /// die Application (1-RTT) Traffic Secrets ab.
+    /// Derives the application (1-RTT) traffic secrets from the handshake secret and the
+    /// transcript hash up to and including the server Finished.
     /// </summary>
     public ApplicationTrafficSecrets DeriveApplicationSecrets(
         ReadOnlySpan<byte> handshakeSecret,
@@ -182,17 +182,17 @@ public sealed class KeySchedule
     }
 
     /// <summary>
-    /// Das <c>exporter_master_secret</c> (RFC 8446 §7.1): <c>Derive-Secret(Master Secret, "exp master",
-    /// ClientHello…server Finished)</c>. Grundlage aller Keying-Material-Exporte (§7.5).
+    /// The <c>exporter_master_secret</c> (RFC 8446 §7.1): <c>Derive-Secret(Master Secret, "exp master",
+    /// ClientHello…server Finished)</c>. The basis of all keying-material exports (§7.5).
     /// </summary>
     public byte[] ExporterMasterSecret(
         ReadOnlySpan<byte> masterSecret, ReadOnlySpan<byte> transcriptHashThroughServerFinished)
         => DeriveSecret(masterSecret, "exp master", transcriptHashThroughServerFinished);
 
     /// <summary>
-    /// Der TLS-Exporter (RFC 8446 §7.5): <c>HKDF-Expand-Label(Derive-Secret(exporter_master_secret,
-    /// label, ""), "exporter", Hash(context), length)</c>. Beide Seiten der Verbindung erhalten für
-    /// gleiches Label/gleichen Kontext identisches Schlüsselmaterial (z. B. für Channel Binding).
+    /// The TLS exporter (RFC 8446 §7.5): <c>HKDF-Expand-Label(Derive-Secret(exporter_master_secret,
+    /// label, ""), "exporter", Hash(context), length)</c>. Both sides of the connection obtain
+    /// identical keying material for the same label/context (e.g. for channel binding).
     /// </summary>
     public byte[] ExportKeyingMaterial(
         ReadOnlySpan<byte> exporterMasterSecret, string label, ReadOnlySpan<byte> context, int length)
@@ -202,16 +202,16 @@ public sealed class KeySchedule
     }
 
     /// <summary>
-    /// Der <c>finished_key</c> eines Traffic Secrets: <c>HKDF-Expand-Label(secret, "finished", "", Hash.length)</c>
-    /// (RFC 8446 §4.4.4). Kontext ist leer.
+    /// The <c>finished_key</c> of a traffic secret: <c>HKDF-Expand-Label(secret, "finished", "", Hash.length)</c>
+    /// (RFC 8446 §4.4.4). The context is empty.
     /// </summary>
     public byte[] FinishedKey(ReadOnlySpan<byte> baseTrafficSecret)
         => TlsHkdf.ExpandLabel(_hash, baseTrafficSecret, "finished", HashLength);
 
     /// <summary>
-    /// Die <c>verify_data</c> einer Finished-Nachricht: <c>HMAC(finished_key, Transcript-Hash)</c>
-    /// (RFC 8446 §4.4.4). Für den Server-Finished ist der Transcript CH..CertificateVerify, für den
-    /// Client-Finished CH..server-Finished.
+    /// The <c>verify_data</c> of a Finished message: <c>HMAC(finished_key, transcript hash)</c>
+    /// (RFC 8446 §4.4.4). For the server Finished the transcript is CH..CertificateVerify, for the
+    /// client Finished CH..server Finished.
     /// </summary>
     public byte[] FinishedVerifyData(ReadOnlySpan<byte> baseTrafficSecret, ReadOnlySpan<byte> transcriptHash)
     {

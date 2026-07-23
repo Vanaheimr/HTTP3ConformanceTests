@@ -25,34 +25,34 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
 
 /// <summary>
-/// Routet WebTransport-Streams, -Datagramme und -Capsules zwischen der HTTP/3-Verbindung und den
-/// <see cref="WebTransportSession"/>s (draft-ietf-webtrans-http3-13). Peer-initiierte Uni-Streams mit
-/// Typ 0x54 (§4.1) und Bidi-Streams mit WT_STREAM-Signal 0x41 (§4.2) werden anhand ihrer Session-ID
-/// zugeordnet; noch unbekannte Sessions werden begrenzt gepuffert (§4.5).
+/// Routes WebTransport streams, datagrams and capsules between the HTTP/3 connection and the
+/// <see cref="WebTransportSession"/>s (draft-ietf-webtrans-http3-13). Peer-initiated uni streams
+/// with type 0x54 (§4.1) and bidi streams with the WT_STREAM signal 0x41 (§4.2) are matched by
+/// their session ID; sessions still unknown are buffered to a limit (§4.5).
 /// </summary>
 internal sealed class WebTransportManager
 {
-    private const int MaxBufferedStreams = 16; // §4.5: Puffer begrenzen ⇒ WT_BUFFERED_STREAM_REJECTED
+    private const int MaxBufferedStreams = 16; // §4.5: limit the buffer ⇒ WT_BUFFERED_STREAM_REJECTED
 
     private readonly bool _weAreClient;
-    private readonly Dictionary<ulong, WebTransportSession> _sessions = [];   // Session-ID (CONNECT-Stream) → Session
-    private readonly List<BufferedStream> _bufferedForUnknownSession = [];    // §4.5: warten auf ihre Session
+    private readonly Dictionary<ulong, WebTransportSession> _sessions = [];   // session ID (CONNECT stream) → session
+    private readonly List<BufferedStream> _bufferedForUnknownSession = [];    // §4.5: waiting for their session
 
     public WebTransportManager(bool weAreClient) => _weAreClient = weAreClient;
 
     public void RegisterSession(WebTransportSession session)
     {
         _sessions[session.SessionId] = session;
-        DrainBufferedStreams(); // §4.5: früh angekommene Streams jetzt zuordnen
+        DrainBufferedStreams(); // §4.5: match early-arrived streams now
     }
 
     public bool TryGetSession(ulong sessionId, out WebTransportSession? session) => _sessions.TryGetValue(sessionId, out session);
 
     /// <summary>
-    /// Ordnet einen erkannten WebTransport-Datenstrom seiner Session zu (§4.1/§4.2). Der Aufrufer hat
-    /// den Kopf (Uni-Typ 0x54 bzw. WT_STREAM 0x41 ‖ Session-ID) bereits geparst und übergibt die schon
-    /// mitgelesenen Nutzdaten als <paramref name="leftover"/>. Ist die Session noch nicht da, wird der
-    /// Stream begrenzt gepuffert (§4.5) oder bei Überlauf mit WT_BUFFERED_STREAM_REJECTED verworfen.
+    /// Matches a recognised WebTransport data stream to its session (§4.1/§4.2). The caller has
+    /// already parsed the header (uni type 0x54 or WT_STREAM 0x41 ‖ session ID) and hands over the
+    /// payload already read along as <paramref name="leftover"/>. When the session is not yet there,
+    /// the stream is buffered to a limit (§4.5) or, on overflow, discarded with WT_BUFFERED_STREAM_REJECTED.
     /// </summary>
     public void ClaimStream(QuicStream stream, ulong sessionId, byte[] leftover, bool bidirectional)
     {
@@ -91,8 +91,8 @@ internal sealed class WebTransportManager
     }
 
     /// <summary>
-    /// Liefert ein WebTransport-Datagramm an seine Session (die Quarter Stream ID adressiert den
-    /// CONNECT-Stream, §4.4). <c>true</c>, wenn es zu einer bekannten Session gehörte.
+    /// Delivers a WebTransport datagram to its session (the quarter stream ID addresses the
+    /// CONNECT stream, §4.4). <c>true</c> when it belonged to a known session.
     /// </summary>
     public bool TryDeliverDatagram(ulong sessionId, byte[] payload)
     {

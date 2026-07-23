@@ -24,7 +24,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Recovery;
 
 /// <summary>
-/// Ein gesendetes Paket, das für Loss Detection und Retransmission verfolgt wird.
+/// A sent packet tracked for loss detection and retransmission.
 /// </summary>
 public sealed class SentPacket
 {
@@ -34,23 +34,23 @@ public sealed class SentPacket
     public required int Size { get; init; }
 
     /// <summary>
-    /// Bei Verlust erneut zu sendende Frames (CRYPTO, STREAM). ACK/Flow-Control werden neu abgeleitet.
+    /// Frames to resend on loss (CRYPTO, STREAM). ACK/flow control are re-derived.
     /// </summary>
     public required IReadOnlyList<Frame> RetransmittableFrames { get; init; }
 }
 
 /// <summary>
-/// Loss Detection und Retransmission-Buchführung nach RFC 9002 §6 – getrennt je Packet-Number-Space
-/// (Initial/Handshake/Application). Erkennt Verluste per Paket- und Zeitschwelle, aktualisiert den
-/// RTT-Schätzer und den Congestion Controller und liefert die Frames verlorener Pakete zurück.
-/// Zeitpunkte sind <see cref="TimeSpan.Ticks"/> (100 ns) einer monotonen Uhr.
+/// Loss detection and retransmission bookkeeping per RFC 9002 §6 – separate per packet-number space
+/// (Initial/Handshake/Application). Detects losses via packet and time thresholds, updates the RTT
+/// estimator and the congestion controller, and returns the frames of lost packets.
+/// Timestamps are <see cref="TimeSpan.Ticks"/> (100 ns) of a monotonic clock.
 /// </summary>
 public sealed class LossRecovery
 {
     private const int PacketThreshold = 3;
 
     /// <summary>
-    /// PTO-Multiplikator für die Persistent-Congestion-Dauer (RFC 9002 §7.6, empfohlen: 3).
+    /// PTO multiplier for the persistent-congestion duration (RFC 9002 §7.6, recommended: 3).
     /// </summary>
     private const int PersistentCongestionThreshold = 3;
 
@@ -59,13 +59,13 @@ public sealed class LossRecovery
         public readonly SortedDictionary<ulong, SentPacket> Sent = [];
         public long LargestAcked = -1;
         public long LossTimeTicks = -1;
-        public ulong LargestCeCount; // höchster bisher gemeldeter ECN-CE-Zähler (RFC 9002 §A.7)
+        public ulong LargestCeCount; // highest ECN-CE counter reported so far (RFC 9002 §A.7)
     }
 
     private readonly SpaceState[] _spaces = [new(), new(), new()];
 
     /// <summary>
-    /// Zeitpunkt der ersten RTT-Stichprobe; vorher greift Persistent Congestion nicht (RFC 9002 §7.6.2).
+    /// Time of the first RTT sample; before it, persistent congestion does not apply (RFC 9002 §7.6.2).
     /// </summary>
     private long _firstRttSampleTicks = -1;
 
@@ -74,16 +74,16 @@ public sealed class LossRecovery
     public TimeSpan MaxAckDelay { get; set; } = TimeSpan.FromMilliseconds(25);
 
     /// <summary>
-    /// Zeitpunkt des zuletzt gesendeten ack-eliciting Pakets (für PTO); -1 = keines im Flug.
+    /// Time of the most recently sent ack-eliciting packet (for PTO); -1 = none in flight.
     /// </summary>
     public long LastAckElicitingSentTicks { get; private set; } = -1;
 
     public int PtoCount { get; private set; }
 
     /// <summary>
-    /// Verwirft den gesamten Loss-Recovery-Zustand eines Packet-Number-Space (RFC 9002 §6.4), wenn dessen
-    /// Schutzschlüssel verworfen werden (Initial/Handshake nach dem Handshake): die noch nicht bestätigten
-    /// Pakete gelten nicht mehr, ihre Bytes werden aus <c>bytes_in_flight</c> genommen.
+    /// Discards the entire loss-recovery state of a packet-number space (RFC 9002 §6.4) when its
+    /// protection keys are discarded (Initial/Handshake after the handshake): the not-yet-acknowledged
+    /// packets no longer count, their bytes are removed from <c>bytes_in_flight</c>.
     /// </summary>
     public void DiscardSpace(int space)
     {
@@ -108,8 +108,8 @@ public sealed class LossRecovery
     }
 
     /// <summary>
-    /// Verarbeitet ein empfangenes ACK: entfernt bestätigte Pakete, aktualisiert RTT/Congestion Window
-    /// und erkennt verlorene Pakete. Gibt die erneut zu sendenden Frames verlorener Pakete zurück.
+    /// Processes a received ACK: removes acknowledged packets, updates RTT/congestion window and
+    /// detects lost packets. Returns the frames of lost packets to resend.
     /// </summary>
     public List<Frame> OnAckReceived(int space, AckFrame ack, TimeSpan ackDelay, long nowTicks)
     {
@@ -130,7 +130,7 @@ public sealed class LossRecovery
             }
         }
 
-        // RTT nur aus dem größten, neu bestätigten und ack-eliciting Paket ableiten.
+        // Derive the RTT only from the largest, newly acknowledged and ack-eliciting packet.
         if (largestNewlyAcked is { AckEliciting: true } &&
             largestNewlyAcked.PacketNumber == ack.LargestAcknowledged)
         {
@@ -140,7 +140,7 @@ public sealed class LossRecovery
                 _firstRttSampleTicks = nowTicks; // RFC 9002 §B.8: first_rtt_sample
         }
 
-        // ECN (RFC 9002 §A.7 ProcessECN): meldet das ACK einen gestiegenen CE-Zähler, gilt das als Congestion.
+        // ECN (RFC 9002 §A.7 ProcessECN): if the ACK reports an increased CE counter, that counts as congestion.
         if (ack.Ecn is { } ecn && ecn.CongestionExperienced > st.LargestCeCount)
         {
             st.LargestCeCount = ecn.CongestionExperienced;
@@ -167,7 +167,7 @@ public sealed class LossRecovery
         foreach (SentPacket sp in st.Sent.Values.ToList())
         {
             if ((long)sp.PacketNumber >= st.LargestAcked)
-                continue; // nur ältere als das größte bestätigte Paket
+                continue; // only packets older than the largest acknowledged one
 
             bool lostByThreshold = (long)sp.PacketNumber <= st.LargestAcked - PacketThreshold;
             bool lostByTime = sp.TimeSentTicks <= lostSendThreshold;
@@ -197,20 +197,20 @@ public sealed class LossRecovery
     }
 
     /// <summary>
-    /// Prüft Persistent Congestion (RFC 9002 §7.6.2): Kollabiert das Fenster, wenn zwei ack-eliciting
-    /// Pakete verloren sind, dazwischen nichts bestätigt wurde und ihr Sende-Abstand die Persistent-
-    /// Congestion-Dauer übersteigt – und beide nach der ersten RTT-Stichprobe gesendet wurden.
-    /// <para>Konservative Näherung: „nichts dazwischen bestätigt" wird über konsekutive Paketnummern der
-    /// verlorenen (stets ack-eliciting) Pakete geprüft. Eine Lücke (bestätigtes oder noch fliegendes
-    /// Paket) unterbricht den Lauf; ein dazwischenliegendes reines ACK-Paket führt höchstens zu einer
-    /// verpassten – nie einer falschen – Erkennung.</para>
+    /// Checks for persistent congestion (RFC 9002 §7.6.2): collapses the window when two ack-eliciting
+    /// packets are lost, nothing was acknowledged in between and their send spacing exceeds the
+    /// persistent-congestion duration – and both were sent after the first RTT sample.
+    /// <para>Conservative approximation: "nothing acknowledged in between" is checked via consecutive
+    /// packet numbers of the lost (always ack-eliciting) packets. A gap (an acknowledged or still
+    /// in-flight packet) breaks the run; an intervening pure ACK packet leads at most to a missed –
+    /// never a false – detection.</para>
     /// </summary>
     private void DetectPersistentCongestion(List<SentPacket> lostAckEliciting)
     {
         if (_firstRttSampleTicks < 0)
-            return; // erst nach der ersten RTT-Stichprobe
+            return; // only after the first RTT sample
 
-        // Nur Pakete berücksichtigen, die nach der ersten RTT-Stichprobe gesendet wurden (RFC 9002 §B.8).
+        // Consider only packets sent after the first RTT sample (RFC 9002 §B.8).
         List<SentPacket> candidates = lostAckEliciting
             .Where(p => p.TimeSentTicks > _firstRttSampleTicks)
             .OrderBy(p => p.PacketNumber)
@@ -220,7 +220,7 @@ public sealed class LossRecovery
 
         long pcDuration = Rtt.GetProbeTimeout(MaxAckDelay).Ticks * PersistentCongestionThreshold;
 
-        // Längsten Lauf konsekutiver Paketnummern finden und dessen Zeitspanne prüfen.
+        // Find the longest run of consecutive packet numbers and check its time span.
         int runStart = 0;
         for (int i = 1; i <= candidates.Count; i++)
         {
@@ -241,7 +241,7 @@ public sealed class LossRecovery
     }
 
     /// <summary>
-    /// PTO-Deadline (RFC 9002 §6.2): letzter ack-eliciting Sendezeitpunkt + PTO·2^ptoCount. -1 = kein Timer.
+    /// PTO deadline (RFC 9002 §6.2): last ack-eliciting send time + PTO·2^ptoCount. -1 = no timer.
     /// </summary>
     public long GetProbeTimeoutDeadline()
     {
@@ -252,13 +252,13 @@ public sealed class LossRecovery
     }
 
     /// <summary>
-    /// Erhöht den PTO-Backoff-Zähler (bei abgelaufener PTO aufzurufen).
+    /// Increments the PTO backoff counter (to be called when a PTO expires).
     /// </summary>
     public void OnProbeTimeoutFired() => PtoCount++;
 
     /// <summary>
-    /// Liefert die Frames des ältesten noch unbestätigten Pakets eines Space zur erneuten Übertragung
-    /// (Probe gegen Tail Loss). Leer, wenn nichts aussteht.
+    /// Returns the frames of the oldest still-unacknowledged packet of a space for retransmission
+    /// (probe against tail loss). Empty when nothing is outstanding.
     /// </summary>
     public List<Frame> GetProbeFrames(int space)
     {
@@ -269,11 +269,11 @@ public sealed class LossRecovery
     }
 
     /// <summary>
-    /// Wird bei abgelehntem 0-RTT aufgerufen (RFC 9001 §4.6.2): entfernt alle als 0-RTT gesendeten (nie
-    /// bestätigten) Pakete – erkennbar an <paramref name="maxZeroRttPacketNumber"/>, da 0-RTT- vor
-    /// 1-RTT-Paketnummern liegen – aus der Verlustverfolgung und gibt ihre Frames zur sofortigen erneuten
-    /// Übertragung über 1-RTT zurück. So entfällt die Wartezeit auf Zeitschwelle/PTO, und weil die Pakete
-    /// aus der Sent-Liste verschwinden, werden sie nicht zusätzlich als „verloren" doppelt gesendet.
+    /// Called when 0-RTT is rejected (RFC 9001 §4.6.2): removes all packets sent as 0-RTT (never
+    /// acknowledged) – identifiable via <paramref name="maxZeroRttPacketNumber"/>, since 0-RTT packet
+    /// numbers precede 1-RTT ones – from loss tracking and returns their frames for immediate
+    /// retransmission over 1-RTT. This removes the wait for time threshold/PTO, and because the
+    /// packets vanish from the sent list, they are not additionally double-sent as "lost".
     /// </summary>
     public List<Frame> OnZeroRttRejected(int space, ulong maxZeroRttPacketNumber)
     {
@@ -291,7 +291,7 @@ public sealed class LossRecovery
         foreach (SpaceState st in _spaces)
             foreach (SentPacket sp in st.Sent.Values)
                 if (sp.AckEliciting)
-                    return; // es gibt noch ack-eliciting Pakete im Flug
+                    return; // there are still ack-eliciting packets in flight
         LastAckElicitingSentTicks = -1;
     }
 }

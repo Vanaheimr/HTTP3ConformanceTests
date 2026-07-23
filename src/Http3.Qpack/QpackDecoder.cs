@@ -24,30 +24,30 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// Ergebnis einer QPACK-Dekodierung.
+/// Result of a QPACK decode.
 /// </summary>
 public enum QpackResult
 {
     Ok,
     /// <summary>
-    /// Malformed/abgeschnittene Kodierung ⇒ QPACK_DECOMPRESSION_FAILED.
+    /// Malformed/truncated encoding ⇒ QPACK_DECOMPRESSION_FAILED.
     /// </summary>
     DecompressionFailed,
     /// <summary>
-    /// Verweis auf die dynamische Tabelle, die wir mit Kapazität 0 nicht führen.
+    /// A reference to the dynamic table, which we do not maintain with capacity 0.
     /// </summary>
     DynamicTableReference,
 
     /// <summary>
-    /// Die Field Section verlangt mehr Inserts, als der Decoder bislang empfangen hat (Stream blockiert).
+    /// The field section requires more inserts than the decoder has received so far (stream blocked).
     /// </summary>
     Blocked,
 }
 
 /// <summary>
-/// QPACK-Decoder ohne dynamische Tabelle (RFC 9204). Dekodiert Encoded Field Sections, die nur die
-/// statische Tabelle und Literale nutzen. Verweise auf die dynamische Tabelle (Indexed/Literal mit
-/// Post-Base bzw. dynamischer Tabellenreferenz) werden abgelehnt, da wir Kapazität 0 ansagen.
+/// QPACK decoder without a dynamic table (RFC 9204). Decodes encoded field sections that use only
+/// the static table and literals. References to the dynamic table (indexed/literal with post-base
+/// or a dynamic table reference) are rejected, since we announce capacity 0.
 /// </summary>
 public static class QpackDecoder
 {
@@ -64,7 +64,7 @@ public static class QpackDecoder
             return QpackResult.DecompressionFailed;
 
         if (requiredInsertCount != 0)
-            return QpackResult.DynamicTableReference; // wir führen keine dynamische Tabelle
+            return QpackResult.DynamicTableReference; // we maintain no dynamic table
 
         while (!reader.IsEmpty)
         {
@@ -77,7 +77,7 @@ public static class QpackDecoder
                     ? DecodeLiteralWithNameRef(ref reader, first, headers)
                     : (first & 0x20) != 0
                         ? DecodeLiteralWithLiteralName(ref reader, first, headers)
-                        : QpackResult.DynamicTableReference; // Post-Base-Formen -> dynamisch
+                        : QpackResult.DynamicTableReference; // post-base forms -> dynamic
 
             if (result != QpackResult.Ok)
                 return result;

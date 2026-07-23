@@ -24,9 +24,9 @@ using System.Security.Cryptography;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// ECDHE-Schlüsselaustausch über NIST-Kurven (RFC 8446 §4.2.8, §7.4.2). Für QUIC v1 nutzen wir
-/// secp256r1 (P-256). Der öffentliche Schlüssel wird als unkomprimierter Punkt (0x04‖X‖Y) übertragen;
-/// das gemeinsame Geheimnis ist die X-Koordinate des Produktpunkts.
+/// ECDHE key exchange over NIST curves (RFC 8446 §4.2.8, §7.4.2). For QUIC v1 we use
+/// secp256r1 (P-256). The public key is transmitted as an uncompressed point (0x04‖X‖Y);
+/// the shared secret is the X coordinate of the product point.
 /// </summary>
 public sealed class EcdheKeyExchange : IKeyExchange
 {
@@ -36,7 +36,7 @@ public sealed class EcdheKeyExchange : IKeyExchange
     public NamedGroup Group { get; }
 
     /// <summary>
-    /// Der öffentliche Schlüssel als unkomprimierter Punkt (0x04‖X‖Y).
+    /// The public key as an uncompressed point (0x04‖X‖Y).
     /// </summary>
     public byte[] PublicKey { get; }
 
@@ -54,7 +54,7 @@ public sealed class EcdheKeyExchange : IKeyExchange
     }
 
     /// <summary>
-    /// Erzeugt ein frisches Schlüsselpaar für die angegebene Gruppe.
+    /// Creates a fresh key pair for the given group.
     /// </summary>
     public static EcdheKeyExchange Create(NamedGroup group)
     {
@@ -62,20 +62,20 @@ public sealed class EcdheKeyExchange : IKeyExchange
         {
             NamedGroup.Secp256r1 => (ECCurve.NamedCurves.nistP256, 32),
             NamedGroup.Secp384r1 => (ECCurve.NamedCurves.nistP384, 48),
-            _ => throw new NotSupportedException($"Gruppe {group} wird (noch) nicht unterstützt."),
+            _ => throw new NotSupportedException($"Group {group} is not (yet) supported."),
         };
         return new EcdheKeyExchange(group, ECDiffieHellman.Create(curve), fieldBytes);
     }
 
     /// <summary>
-    /// Leitet das gemeinsame Geheimnis aus dem öffentlichen Schlüssel der Gegenseite ab
-    /// (unkomprimierter Punkt). Ergebnis ist die rohe X-Koordinate – so verlangt es TLS 1.3.
+    /// Derives the shared secret from the peer's public key (uncompressed point).
+    /// The result is the raw X coordinate – as TLS 1.3 requires.
     /// </summary>
     public byte[] DeriveSharedSecret(ReadOnlySpan<byte> peerPublicKey)
     {
         int expected = 1 + 2 * _fieldBytes;
         if (peerPublicKey.Length != expected || peerPublicKey[0] != 0x04)
-            throw new ArgumentException("Ungültiger unkomprimierter EC-Punkt.", nameof(peerPublicKey));
+            throw new ArgumentException("Invalid uncompressed EC point.", nameof(peerPublicKey));
 
         var peerParams = new ECParameters
         {

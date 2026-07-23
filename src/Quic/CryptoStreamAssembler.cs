@@ -18,30 +18,30 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic;
 
 /// <summary>
-/// Reassembliert den CRYPTO-Byte-Strom eines Encryption-Levels aus (möglicherweise ungeordneten,
-/// paketübergreifenden) Fragmenten (RFC 9000 §19.6, §7.5). Jeder Encryption-Level hat seinen eigenen
-/// CRYPTO-Strom, der bei Offset 0 beginnt. Duplikate/Überlappungen werden idempotent behandelt.
+/// Reassembles the CRYPTO byte stream of an encryption level from (possibly unordered,
+/// cross-packet) fragments (RFC 9000 §19.6, §7.5). Each encryption level has its own CRYPTO
+/// stream starting at offset 0. Duplicates/overlaps are handled idempotently.
 /// </summary>
 public sealed class CryptoStreamAssembler
 {
     private readonly SortedDictionary<ulong, byte[]> _fragments = new();
 
     /// <summary>
-    /// Fügt ein bei <paramref name="offset"/> beginnendes Fragment hinzu.
+    /// Adds a fragment starting at <paramref name="offset"/>.
     /// </summary>
     public void Add(ulong offset, ReadOnlySpan<byte> data)
     {
         if (data.Length == 0)
             return;
 
-        // Bereits vollständig vom zusammenhängenden Präfix abgedeckte Fragmente ignorieren.
-        // (Für den Handshake genügt diese einfache, nicht überlappungsspaltende Ablage.)
+        // Ignore fragments already fully covered by the contiguous prefix.
+        // (For the handshake this simple, non-overlap-splitting storage suffices.)
         _fragments[offset] = data.ToArray();
     }
 
     /// <summary>
-    /// Der zusammenhängende Präfix ab Offset 0. Bricht an der ersten Lücke ab – der Rest wartet
-    /// auf fehlende Fragmente.
+    /// The contiguous prefix from offset 0. Stops at the first gap – the rest waits for
+    /// missing fragments.
     /// </summary>
     public byte[] Contiguous()
     {
@@ -50,12 +50,12 @@ public sealed class CryptoStreamAssembler
         foreach ((ulong offset, byte[] data) in _fragments)
         {
             if (offset > pos)
-                break; // Lücke
+                break; // gap
 
-            // Überlappung: nur den noch nicht geschriebenen Teil anhängen.
+            // Overlap: only append the part not yet written.
             ulong skip = pos - offset;
             if (skip >= (ulong)data.Length)
-                continue; // vollständig redundant
+                continue; // fully redundant
 
             ms.Write(data, (int)skip, data.Length - (int)skip);
             pos += (ulong)data.Length - skip;
@@ -64,7 +64,7 @@ public sealed class CryptoStreamAssembler
     }
 
     /// <summary>
-    /// Länge des aktuell zusammenhängenden Präfixes.
+    /// Length of the currently contiguous prefix.
     /// </summary>
     public long ContiguousLength => Contiguous().Length;
 }

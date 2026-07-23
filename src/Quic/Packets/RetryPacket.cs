@@ -26,16 +26,16 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Retry-Paket (RFC 9000 §17.2.5). Ein Server sendet es zur Adressvalidierung: Es enthält ein Retry Token,
-/// das der Client in seinem nächsten Initial zurückspiegelt, sowie einen 16-Byte Retry Integrity Tag
-/// (RFC 9001 §5.8) über das ursprüngliche DCID. Trägt keine Paketnummer/Länge. Die vom Server gewählte
-/// Source Connection ID wird zur neuen Destination Connection ID des Clients.
+/// Retry packet (RFC 9000 §17.2.5). A server sends it for address validation: it contains a Retry
+/// token, which the client echoes in its next Initial, plus a 16-byte Retry integrity tag
+/// (RFC 9001 §5.8) over the original DCID. Carries no packet number/length. The source connection ID
+/// chosen by the server becomes the client's new destination connection ID.
 /// </summary>
 public static class RetryPacket
 {
     /// <summary>
-    /// Baut ein Retry-Paket. <paramref name="originalDestinationConnectionId"/> ist die DCID aus dem
-    /// Client-Initial, das den Retry auslöste (fließt in den Integrity Tag ein).
+    /// Builds a Retry packet. <paramref name="originalDestinationConnectionId"/> is the DCID from the
+    /// client Initial that triggered the Retry (it flows into the integrity tag).
     /// </summary>
     public static byte[] Build(
         uint version,
@@ -45,7 +45,7 @@ public static class RetryPacket
         ConnectionId originalDestinationConnectionId)
     {
         using var w = new BufferWriter(32 + retryToken.Length);
-        // Erstes Byte: Long-Header-Form + Fixed Bit + Typ Retry (3); die unteren 4 Bits sind unbedeutend.
+        // First byte: long-header form + fixed bit + type Retry (3); the lower 4 bits are insignificant.
         w.WriteByte((byte)(0xC0 | ((byte)LongPacketType.Retry << 4) | (RandomNumberGenerator.GetBytes(1)[0] & 0x0f)));
         w.WriteUInt32(version);
         w.WriteByte((byte)destinationConnectionId.Length);
@@ -60,7 +60,7 @@ public static class RetryPacket
     }
 
     /// <summary>
-    /// Parst ein Retry-Paket in seine Felder (ohne den Integrity Tag zu prüfen – dafür <see cref="Verify"/>).
+    /// Parses a Retry packet into its fields (without checking the integrity tag – use <see cref="Verify"/> for that).
     /// </summary>
     public static bool TryParse(ReadOnlySpan<byte> datagram, out uint version, out ConnectionId dcid, out ConnectionId scid, out byte[] token, out byte[] integrityTag)
     {
@@ -80,7 +80,7 @@ public static class RetryPacket
         if (!TryReadCid(ref r, out dcid) || !TryReadCid(ref r, out scid))
             return false;
 
-        // Rest = Retry Token ‖ 16-Byte Integrity Tag; der Token hat keine explizite Länge.
+        // Rest = Retry token ‖ 16-byte integrity tag; the token has no explicit length.
         if (r.Remaining < 16)
             return false;
         int tokenLength = r.Remaining - 16;
@@ -92,7 +92,7 @@ public static class RetryPacket
     }
 
     /// <summary>
-    /// Prüft den Integrity Tag eines empfangenen Retry-Pakets (RFC 9001 §5.8) gegen die ursprüngliche DCID.
+    /// Verifies the integrity tag of a received Retry packet (RFC 9001 §5.8) against the original DCID.
     /// </summary>
     public static bool Verify(ReadOnlySpan<byte> retryDatagram, ConnectionId originalDestinationConnectionId)
     {

@@ -25,13 +25,13 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 
 /// <summary>
-/// Sendeseite eines Streams (RFC 9000 §3.1): puffert zu sendende Bytes und erzeugt daraus STREAM-
-/// Frames, begrenzt durch das Flow-Control-Fenster des Peers (max_stream_data) und die maximale
-/// Frame-Größe. Verfolgt den Sende-Offset und das FIN.
+/// Send side of a stream (RFC 9000 §3.1): buffers bytes to send and produces STREAM frames from
+/// them, limited by the peer's flow-control window (max_stream_data) and the maximum frame size.
+/// Tracks the send offset and the FIN.
 /// </summary>
 public sealed class StreamSendBuffer(ulong streamId)
 {
-    private readonly ByteQueue _pending = new(); // Zero-Alloc-Pfad: O(1)-Konsum statt List<byte>-Shifting
+    private readonly ByteQueue _pending = new(); // zero-alloc path: O(1) consume instead of List<byte> shifting
     private ulong _sentOffset;
     private bool _finQueued;
     private bool _finSent;
@@ -39,73 +39,73 @@ public sealed class StreamSendBuffer(ulong streamId)
     public StreamId StreamId { get; } = new(streamId);
 
     /// <summary>
-    /// Vom Peer gewährtes Sende-Limit (max_stream_data). Wächst über MAX_STREAM_DATA.
+    /// Send limit granted by the peer (max_stream_data). Grows via MAX_STREAM_DATA.
     /// </summary>
     public ulong MaxData { get; set; }
 
     /// <summary>
-    /// Bereits in Frames ausgegebene Byte-Menge (Sende-Offset).
+    /// Amount of bytes already emitted in frames (send offset).
     /// </summary>
     public ulong SentOffset => _sentOffset;
 
     /// <summary>
-    /// Die Sendeseite wurde per RESET_STREAM abgebrochen (RFC 9000 §19.4).
+    /// The send side was aborted via RESET_STREAM (RFC 9000 §19.4).
     /// </summary>
     public bool IsReset { get; private set; }
 
     /// <summary>
-    /// Der Fehlercode des Abbruchs (gültig, wenn <see cref="IsReset"/>).
+    /// The error code of the abort (valid when <see cref="IsReset"/>).
     /// </summary>
     public ulong ResetErrorCode { get; private set; }
 
     /// <summary>
-    /// Die im RESET_STREAM mitgeteilte Final Size (RFC 9000 §4.5: Anzahl bereits gesendeter Bytes).
+    /// The final size communicated in the RESET_STREAM (RFC 9000 §4.5: number of bytes already sent).
     /// </summary>
     public ulong ResetFinalSize { get; private set; }
 
     /// <summary>
-    /// Ein RESET_STREAM-Frame wartet auf die Emission (wird vom Endpoint abgeholt).
+    /// A RESET_STREAM frame is waiting to be emitted (picked up by the endpoint).
     /// </summary>
     public bool ResetPending { get; private set; }
 
     /// <summary>
-    /// Der Abbruch erfolgte per RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset) mit garantierter
-    /// Teilzustellung bis <see cref="ReliableSize"/>.
+    /// The abort happened via RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset) with guaranteed
+    /// partial delivery up to <see cref="ReliableSize"/>.
     /// </summary>
     public bool IsResetAt { get; private set; }
 
     /// <summary>
-    /// Bei einem RESET_STREAM_AT die zuverlässig zuzustellende Byte-Menge; STREAM-Frames unterhalb dieses
-    /// Offsets werden bei Verlust weiterhin retransmittiert (draft §5).
+    /// With a RESET_STREAM_AT, the amount of bytes to deliver reliably; STREAM frames below this
+    /// offset keep being retransmitted on loss (draft §5).
     /// </summary>
     public ulong ReliableSize { get; private set; }
 
     /// <summary>
-    /// Es liegen noch nicht ausgegebene Daten oder ein ausstehendes FIN vor.
+    /// There is still unemitted data or a pending FIN.
     /// </summary>
     public bool HasPending => !IsReset && (_pending.Count > 0 || (_finQueued && !_finSent));
 
     /// <summary>
-    /// Der Sender ist durch das Flow-Control-Fenster blockiert (Daten da, aber kein Kredit).
+    /// The sender is blocked by the flow-control window (data present, but no credit).
     /// </summary>
     public bool IsBlocked => !IsReset && _pending.Count > 0 && _sentOffset >= MaxData;
 
     public void Write(ReadOnlySpan<byte> data)
     {
         if (IsReset)
-            return; // nach dem Reset werden keine Daten mehr angenommen
+            return; // no more data is accepted after the reset
         _pending.Append(data);
     }
 
     /// <summary>
-    /// Markiert das Stream-Ende; das nächste Frame, das die Restdaten leert, trägt das FIN.
+    /// Marks the end of the stream; the next frame that drains the remaining data carries the FIN.
     /// </summary>
     public void Finish() => _finQueued = true;
 
     /// <summary>
-    /// Bricht die Sendeseite abrupt ab (RFC 9000 §19.4): verwirft ungesendete Daten, hält die Final
-    /// Size (= gesendete Bytes, §4.5) fest und lässt den Endpoint ein RESET_STREAM emittieren. Nach dem
-    /// Abbruch werden STREAM-Frames dieses Streams weder gesendet noch retransmittiert. Idempotent.
+    /// Aborts the send side abruptly (RFC 9000 §19.4): discards unsent data, records the final size
+    /// (= bytes sent, §4.5) and lets the endpoint emit a RESET_STREAM. After the abort, STREAM frames
+    /// of this stream are neither sent nor retransmitted. Idempotent.
     /// </summary>
     public void Reset(ulong errorCode)
     {
@@ -119,10 +119,10 @@ public sealed class StreamSendBuffer(ulong streamId)
     }
 
     /// <summary>
-    /// Bricht die Sendeseite ab, garantiert aber die zuverlässige Zustellung der ersten
-    /// <paramref name="reliableSize"/> Bytes (draft-ietf-quic-reliable-stream-reset §5). Es können nur
-    /// bereits gesendete Bytes garantiert werden — die Reliable Size wird auf den aktuellen Sende-Offset
-    /// begrenzt; ungesendete Daten werden wie beim gewöhnlichen Reset verworfen. Idempotent.
+    /// Aborts the send side but guarantees reliable delivery of the first
+    /// <paramref name="reliableSize"/> bytes (draft-ietf-quic-reliable-stream-reset §5). Only
+    /// already-sent bytes can be guaranteed — the reliable size is clamped to the current send
+    /// offset; unsent data is discarded as with an ordinary reset. Idempotent.
     /// </summary>
     public void ResetAt(ulong errorCode, ulong reliableSize)
     {
@@ -133,15 +133,15 @@ public sealed class StreamSendBuffer(ulong streamId)
         ResetPending = true;
         ResetErrorCode = errorCode;
         ResetFinalSize = _sentOffset;
-        ReliableSize = Math.Min(reliableSize, _sentOffset); // nur bereits Gesendetes ist garantierbar
+        ReliableSize = Math.Min(reliableSize, _sentOffset); // only what was already sent can be guaranteed
         _pending.Clear();
     }
 
     /// <summary>
-    /// Holt das zu sendende RESET_STREAM- bzw. RESET_STREAM_AT-Frame ab (einmalig; Verlust-Wiederholung
-    /// übernimmt die Loss Recovery). Ein RESET_STREAM_AT wird nur erzeugt, wenn der Peer die Extension
-    /// angekündigt hat (<paramref name="peerSupportsResetAt"/>) — sonst degradiert der Abbruch zu einem
-    /// gewöhnlichen RESET_STREAM (ohne Zustellgarantie).
+    /// Fetches the RESET_STREAM or RESET_STREAM_AT frame to send (once; loss repetition is handled by
+    /// loss recovery). A RESET_STREAM_AT is only produced when the peer announced the extension
+    /// (<paramref name="peerSupportsResetAt"/>) — otherwise the abort degrades to an ordinary
+    /// RESET_STREAM (without a delivery guarantee).
     /// </summary>
     public Frame? TakeResetFrame(bool peerSupportsResetAt)
     {
@@ -154,8 +154,8 @@ public sealed class StreamSendBuffer(ulong streamId)
     }
 
     /// <summary>
-    /// Erzeugt das nächste STREAM-Frame (bis zu <paramref name="maxPayload"/> Bytes, innerhalb des
-    /// Flow-Control-Fensters) oder <c>null</c>, wenn nichts zu senden ist.
+    /// Produces the next STREAM frame (up to <paramref name="maxPayload"/> bytes, within the
+    /// flow-control window) or <c>null</c> when there is nothing to send.
     /// </summary>
     public StreamFrame? NextFrame(int maxPayload)
     {
@@ -165,12 +165,12 @@ public sealed class StreamSendBuffer(ulong streamId)
         ulong window = _sentOffset < MaxData ? MaxData - _sentOffset : 0;
         int count = (int)Math.Min(Math.Min((ulong)_pending.Count, (ulong)maxPayload), window);
 
-        // Nur ein reines FIN-Frame (ohne Daten) senden, wenn keine Daten mehr ausstehen.
+        // Send a pure FIN frame (without data) only when no data remains outstanding.
         bool fin = _finQueued && _pending.Count == count;
         if (count == 0 && !fin)
             return null;
 
-        // EINE Kopie je Frame ist nötig: das Frame behält die Bytes für mögliche Retransmissionen.
+        // ONE copy per frame is necessary: the frame keeps the bytes for possible retransmissions.
         byte[] data = count > 0 ? _pending.Span[..count].ToArray() : [];
         _pending.Consume(count);
 

@@ -30,9 +30,9 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// WebSockets über HTTP/3 (RFC 9220): Extended CONNECT (RFC 8441) mit :protocol = „websocket",
-/// SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08), Tunnel-Bytes in DATA-Frames (RFC 9114 §4.4) und darüber
-/// das unveränderte RFC-6455-Framing (Kopie aus Hermod.HTTP2 — nur der Namespace wurde getauscht).
+/// WebSockets over HTTP/3 (RFC 9220): Extended CONNECT (RFC 8441) with :protocol = "websocket",
+/// SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08), tunnel bytes in DATA frames (RFC 9114 §4.4) and on top
+/// the unchanged RFC 6455 framing (copy from Hermod.HTTP2 — only the namespace was swapped).
 /// </summary>
 [TestFixture]
 public class Http3WebSocketTests
@@ -42,7 +42,7 @@ public class Http3WebSocketTests
     [Test]
     public void ExtendedConnect_WithoutServerSetting_IsRefusedLocally()
     {
-        // Server OHNE connectHandler kündigt das Setting nicht an ⇒ RFC 8441 §3 MUST NOT.
+        // A server WITHOUT a connectHandler does not announce the setting ⇒ RFC 8441 §3 MUST NOT.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         using var server = new Http3ServerConnection(cert, _ => new Http3Response { Status = 200, Body = [] });
@@ -61,8 +61,8 @@ public class Http3WebSocketTests
     [Test]
     public void ExtendedConnect_WithoutSetting_IsMalformedOnServer()
     {
-        // Ein Roh-Client ignoriert das fehlende Setting — der Server behandelt den Request als
-        // malformed (400 + H3_MESSAGE_ERROR), denn der Client DURFTE ihn nicht senden (RFC 8441 §3).
+        // A raw client ignores the missing setting — the server treats the request as
+        // malformed (400 + H3_MESSAGE_ERROR), because the client was NOT allowed to send it (RFC 8441 §3).
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         int handled = 0;
         using var server = new Http3ServerConnection(cert, _ => { handled++; return new Http3Response { Status = 200, Body = [] }; });
@@ -100,7 +100,7 @@ public class Http3WebSocketTests
         using Http3ClientConnection c = client;
         using Http3ServerConnection s = server;
 
-        ulong streamId = client.SendExtendedConnect("localhost", "/", "unbekanntes-protokoll");
+        ulong streamId = client.SendExtendedConnect("localhost", "/", "unknown-protocol");
         int status = 0;
         Http3Tunnel? tunnel = null;
         for (int round = 0; round < 20 && status == 0; round++)
@@ -125,14 +125,14 @@ public class Http3WebSocketTests
         (Http3Tunnel tunnel, IReadOnlyList<HeaderField> _) = OpenWebSocket(client, server, offerDeflate: false);
         var ws = new WebSocketConnection(tunnel, WebSocketRole.Client);
 
-        // Text-Echo.
-        ws.SendTextAsync("Hallo WebSocket über HTTP/3!", None);
+        // Text echo.
+        ws.SendTextAsync("Hello WebSocket over HTTP/3!", None);
         WebSocketMessage? echo = AwaitMessage(ws, client, server);
         Assert.That(echo, Is.Not.Null);
         Assert.That(echo!.Opcode, Is.EqualTo(WebSocketOpcode.Text));
-        Assert.That(Encoding.UTF8.GetString(echo.Payload), Is.EqualTo("Hallo WebSocket über HTTP/3!"));
+        Assert.That(Encoding.UTF8.GetString(echo.Payload), Is.EqualTo("Hello WebSocket over HTTP/3!"));
 
-        // Binär-Echo.
+        // Binary echo.
         byte[] binary = [1, 2, 3, 250, 251, 252];
         ws.SendBinaryAsync(binary, None);
         echo = AwaitMessage(ws, client, server);
@@ -140,13 +140,13 @@ public class Http3WebSocketTests
         Assert.That(echo!.Opcode, Is.EqualTo(WebSocketOpcode.Binary));
         Assert.That(echo.Payload, Is.EqualTo(binary));
 
-        // Close-Handshake (RFC 6455 §5.5.1): der Server spiegelt den Close, beide Enden enden sauber.
-        ws.CloseAsync(1000, "fertig", None);
+        // Close handshake (RFC 6455 §5.5.1): the server mirrors the close, both ends end cleanly.
+        ws.CloseAsync(1000, "done", None);
         WebSocketMessage? closed = AwaitMessage(ws, client, server);
-        Assert.That(closed, Is.Null); // ReceiveAsync liefert null nach vollzogenem Close-Handshake
+        Assert.That(closed, Is.Null); // ReceiveAsync returns null after a completed close handshake
         for (int round = 0; round < 10 && !serverLoopEnded(); round++)
             Pump(client, server);
-        Assert.That(serverLoopEnded(), Is.True, "Die Server-Echo-Schleife muss nach dem Close enden.");
+        Assert.That(serverLoopEnded(), Is.True, "The server echo loop must end after the close.");
         Assert.That(client.IsClosing, Is.False);
         Assert.That(server.IsClosing, Is.False);
     }
@@ -164,7 +164,7 @@ public class Http3WebSocketTests
                                       h.Value.Contains(WebSocketDeflate.ExtensionName)));
         var ws = new WebSocketConnection(tunnel, WebSocketRole.Client, PerMessageDeflate: true);
 
-        string text = string.Concat(Enumerable.Repeat("Komprimierbarer Inhalt! ", 200)); // ~4,8 KB, gut komprimierbar
+        string text = string.Concat(Enumerable.Repeat("Compressible content! ", 200)); // ~4.4 KB, compresses well
         ws.SendTextAsync(text, None);
         WebSocketMessage? echo = AwaitMessage(ws, client, server);
         Assert.That(echo, Is.Not.Null);
@@ -174,7 +174,7 @@ public class Http3WebSocketTests
     [Test]
     public void NonDataFrame_OnEstablishedTunnel_IsFrameUnexpected()
     {
-        // Roh-Client: Tunnel etablieren, dann verbotenerweise ein HEADERS-Frame senden (RFC 9114 §4.4).
+        // Raw client: establish the tunnel, then illicitly send a HEADERS frame (RFC 9114 §4.4).
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         using var server = new Http3ServerConnection(cert, _ => new Http3Response { Status = 200, Body = [] },
             connectHandler: request => new Http3ConnectResult { Status = 200, OnTunnel = _ => { } });
@@ -192,7 +192,7 @@ public class Http3WebSocketTests
         for (int round = 0; round < 10; round++)
             Pump(client, server);
 
-        request.Write(Http3Frames.Build(Http3FrameType.Headers, EncodeConnect("websocket"))); // verboten
+        request.Write(Http3Frames.Build(Http3FrameType.Headers, EncodeConnect("websocket"))); // forbidden
         for (int round = 0; round < 10 && !server.IsClosing; round++)
             Pump(client, server);
 
@@ -204,25 +204,25 @@ public class Http3WebSocketTests
     [Test]
     public void Validator_ProtocolPseudoHeaderRules()
     {
-        // :protocol auf Nicht-CONNECT ⇒ malformed (RFC 8441 §4).
+        // :protocol on a non-CONNECT ⇒ malformed (RFC 8441 §4).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "GET"), new(":scheme", "https"), new(":authority", "h"), new(":path", "/"), new(":protocol", "websocket")]), Is.Not.Null);
-        // Extended CONNECT ohne :path ⇒ malformed (RFC 8441 §4: :scheme und :path MÜSSEN vorhanden sein).
+        // Extended CONNECT without :path ⇒ malformed (RFC 8441 §4: :scheme and :path MUST be present).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "CONNECT"), new(":protocol", "websocket"), new(":scheme", "https"), new(":authority", "h")]), Is.Not.Null);
-        // Wohlgeformtes Extended CONNECT.
+        // Well-formed Extended CONNECT.
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "CONNECT"), new(":protocol", "websocket"), new(":scheme", "https"), new(":authority", "h"), new(":path", "/chat")]), Is.Null);
-        // Klassischer CONNECT bleibt gültig (nur :authority).
+        // Classic CONNECT stays valid (only :authority).
         Assert.That(Http3MessageValidator.ValidateRequestHeaders(
             [new(":method", "CONNECT"), new(":authority", "h:443")]), Is.Null);
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     /// <summary>
-    /// Client + Server mit WebSocket-Echo-connectHandler (RFC 8441 §5-Handshake: Annahme nur für
-    /// :protocol „websocket", permessage-deflate wird bei Angebot akzeptiert), Handshake gepumpt.
+    /// Client + server with a WebSocket echo connectHandler (RFC 8441 §5 handshake: acceptance only
+    /// for :protocol "websocket", permessage-deflate accepted when offered), handshake pumped.
     /// </summary>
     private static (Http3ClientConnection, Http3ServerConnection, ServerCertificate) WebSocketServerPair(out Func<bool> serverLoopEnded)
     {
@@ -263,7 +263,7 @@ public class Http3WebSocketTests
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
         for (int round = 0; round < 5; round++)
-            Pump(client, server); // SETTINGS (ENABLE_CONNECT_PROTOCOL) eintreffen lassen
+            Pump(client, server); // let the SETTINGS (ENABLE_CONNECT_PROTOCOL) arrive
         Assert.That(client.ServerEnablesConnectProtocol, Is.True);
 
         serverLoopEnded = () => loopEnded;
@@ -279,13 +279,13 @@ public class Http3WebSocketTests
             else
                 await ws.SendBinaryAsync(message.Payload, None);
         }
-        tunnel.Complete(); // geordnetes Tunnel-Ende (FIN, RFC 9220 §3)
+        tunnel.Complete(); // orderly tunnel end (FIN, RFC 9220 §3)
         onEnded();
     }
 
     /// <summary>
-    /// Öffnet einen WebSocket per Extended CONNECT (RFC 8441 §5: sec-websocket-version 13,
-    /// optional permessage-deflate-Angebot) und pumpt bis zur 2xx-Annahme.
+    /// Opens a WebSocket via Extended CONNECT (RFC 8441 §5: sec-websocket-version 13,
+    /// optional permessage-deflate offer) and pumps until the 2xx acceptance.
     /// </summary>
     private static (Http3Tunnel, IReadOnlyList<HeaderField>) OpenWebSocket(Http3ClientConnection client, Http3ServerConnection server, bool offerDeflate)
     {
@@ -308,15 +308,15 @@ public class Http3WebSocketTests
     }
 
     /// <summary>
-    /// Startet einen ReceiveAsync und pumpt, bis er abgeschlossen ist (single-threaded Event-Loop:
-    /// die Task-Continuations laufen inline im Pump).
+    /// Starts a ReceiveAsync and pumps until it completes (single-threaded event loop:
+    /// the task continuations run inline in the pump).
     /// </summary>
     private static WebSocketMessage? AwaitMessage(WebSocketConnection ws, Http3ClientConnection client, Http3ServerConnection server)
     {
         Task<WebSocketMessage?> task = ws.ReceiveAsync(None);
         for (int round = 0; round < 100 && !task.IsCompleted; round++)
             Pump(client, server);
-        Assert.That(task.IsCompleted, Is.True, "Die WebSocket-Nachricht muss innerhalb der Pump-Runden ankommen.");
+        Assert.That(task.IsCompleted, Is.True, "The WebSocket message must arrive within the pump rounds.");
         return task.Result;
     }
 

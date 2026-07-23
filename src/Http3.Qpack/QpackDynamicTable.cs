@@ -18,51 +18,51 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// Die dynamische QPACK-Tabelle (RFC 9204 §3.2): eine FIFO von Header-Einträgen mit Byte-Kapazität.
-/// Einträge werden hinten eingefügt und vorne verdrängt (Eviction), wenn sonst die Kapazität überschritten
-/// würde. Jeder Eintrag erhält einen fortlaufenden <b>absoluten Index</b> (ab 0); verdrängte Indizes sind
-/// ungültig. Encoder und Decoder halten je eine solche Tabelle und synchronisieren sie über den QPACK-
-/// Encoder-Stream.
+/// The dynamic QPACK table (RFC 9204 §3.2): a FIFO of header entries with a byte capacity.
+/// Entries are inserted at the back and evicted at the front when the capacity would otherwise be
+/// exceeded. Every entry receives a running <b>absolute index</b> (from 0); evicted indices are
+/// invalid. Encoder and decoder each hold such a table and synchronise them via the QPACK
+/// encoder stream.
 /// </summary>
 public sealed class QpackDynamicTable
 {
     private readonly List<(string Name, string Value)> _entries = [];
-    private readonly List<int> _refCounts = []; // je Eintrag: offene Referenzen aus noch nicht bestätigten Field Sections (Encoder-Seite)
+    private readonly List<int> _refCounts = []; // per entry: open references from not-yet-acknowledged field sections (encoder side)
 
     /// <summary>
-    /// Aktuell gesetzte Kapazität in Bytes (via Set Dynamic Table Capacity bzw. SETTINGS begrenzt).
+    /// Currently set capacity in bytes (via Set Dynamic Table Capacity, bounded by SETTINGS).
     /// </summary>
     public ulong Capacity { get; private set; }
 
     /// <summary>
-    /// Aktuelle Größe aller gehaltenen Einträge in Bytes.
+    /// Current size of all held entries in bytes.
     /// </summary>
     public ulong Size { get; private set; }
 
     /// <summary>
-    /// Gesamtzahl je eingefügter Einträge – der nächste Eintrag erhielte diesen absoluten Index.
+    /// Total number of entries ever inserted – the next entry would receive this absolute index.
     /// </summary>
     public ulong InsertCount { get; private set; }
 
     /// <summary>
-    /// Anzahl aktuell gehaltener Einträge.
+    /// Number of currently held entries.
     /// </summary>
     public int Count => _entries.Count;
 
     /// <summary>
-    /// Maximale theoretische Eintragszahl (RFC 9204 §3.2.2): <c>floor(Kapazität / 32)</c>.
+    /// Maximum theoretical entry count (RFC 9204 §3.2.2): <c>floor(capacity / 32)</c>.
     /// </summary>
     public ulong MaxEntries => Capacity / 32;
 
     private ulong OldestAbsolute => InsertCount - (ulong)_entries.Count;
 
     /// <summary>
-    /// Eintragsgröße (RFC 9204 §3.2.1): Länge Name + Länge Wert + 32.
+    /// Entry size (RFC 9204 §3.2.1): name length + value length + 32.
     /// </summary>
     public static ulong EntrySize(string name, string value) => (ulong)(name.Length + value.Length + 32);
 
     /// <summary>
-    /// Setzt die Kapazität und verdrängt ggf. Einträge (RFC 9204 §3.2.3).
+    /// Sets the capacity and evicts entries if needed (RFC 9204 §3.2.3).
     /// </summary>
     public void SetCapacity(ulong capacity)
     {
@@ -71,9 +71,9 @@ public sealed class QpackDynamicTable
     }
 
     /// <summary>
-    /// Fügt einen Eintrag ein; verdrängt bei Bedarf die ältesten <b>unreferenzierten</b> Einträge.
-    /// <c>false</c>, wenn er selbst die Kapazität übersteigt oder nur durch Verdrängen eines noch
-    /// referenzierten Eintrags Platz entstünde (Eviction-Schutz, RFC 9204 §2.1.1).
+    /// Inserts an entry; evicts the oldest <b>unreferenced</b> entries if needed.
+    /// <c>false</c> when it exceeds the capacity itself or room could only be made by evicting a
+    /// still-referenced entry (eviction protection, RFC 9204 §2.1.1).
     /// </summary>
     public bool Insert(string name, string value)
     {
@@ -88,16 +88,16 @@ public sealed class QpackDynamicTable
     }
 
     /// <summary>
-    /// Verdrängt die ältesten unreferenzierten Einträge; <c>false</c>, wenn der nötige Platz blockiert ist.
+    /// Evicts the oldest unreferenced entries; <c>false</c> when the needed room is blocked.
     /// </summary>
     private bool EvictToFit(ulong incoming)
     {
         while (Size + incoming > Capacity)
         {
             if (_entries.Count == 0)
-                return incoming <= Capacity; // leer: passt genau dann, wenn incoming ≤ Kapazität
+                return incoming <= Capacity; // empty: fits exactly when incoming ≤ capacity
             if (_refCounts[0] > 0)
-                return false;                // ältester Eintrag ist referenziert ⇒ nicht verdrängbar
+                return false;                // the oldest entry is referenced ⇒ not evictable
             (string n, string v) = _entries[0];
             _entries.RemoveAt(0);
             _refCounts.RemoveAt(0);
@@ -107,7 +107,7 @@ public sealed class QpackDynamicTable
     }
 
     /// <summary>
-    /// Vermerkt eine Referenz auf einen Eintrag (Encoder: schützt ihn bis zur Section-Acknowledgment).
+    /// Records a reference to an entry (encoder: protects it until the section acknowledgment).
     /// </summary>
     public void AddReference(ulong absoluteIndex)
     {
@@ -117,7 +117,7 @@ public sealed class QpackDynamicTable
     }
 
     /// <summary>
-    /// Gibt eine Referenz frei (Encoder: nach Section-Acknowledgment/Stream-Cancellation).
+    /// Releases a reference (encoder: after section acknowledgment/stream cancellation).
     /// </summary>
     public void RemoveReference(ulong absoluteIndex)
     {
@@ -129,7 +129,7 @@ public sealed class QpackDynamicTable
     }
 
     /// <summary>
-    /// Liefert den Eintrag mit dem absoluten Index, falls er (noch) vorhanden ist.
+    /// Returns the entry with the absolute index, if it is (still) present.
     /// </summary>
     public bool TryGetByAbsolute(ulong absoluteIndex, out (string Name, string Value) entry)
     {
@@ -141,7 +141,7 @@ public sealed class QpackDynamicTable
     }
 
     /// <summary>
-    /// Höchster absoluter Index eines exakten (Name, Wert)-Paares, falls vorhanden.
+    /// Highest absolute index of an exact (name, value) pair, if present.
     /// </summary>
     public bool TryFindExact(string name, string value, out ulong absoluteIndex)
     {
@@ -156,7 +156,7 @@ public sealed class QpackDynamicTable
     }
 
     /// <summary>
-    /// Höchster absoluter Index eines Eintrags mit passendem Namen (beliebiger Wert), falls vorhanden.
+    /// Highest absolute index of an entry with a matching name (any value), if present.
     /// </summary>
     public bool TryFindName(string name, out ulong absoluteIndex)
     {
@@ -171,7 +171,7 @@ public sealed class QpackDynamicTable
     }
 
     /// <summary>
-    /// Ob ein Eintrag dieser Größe noch eingefügt werden könnte (ggf. nach Eviction bis zum ältesten unbenutzten).
+    /// Whether an entry of this size could still be inserted (possibly after evicting up to the oldest unused one).
     /// </summary>
     public bool CanInsert(string name, string value) => EntrySize(name, value) <= Capacity;
 }

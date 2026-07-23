@@ -29,10 +29,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// SETTINGS_MAX_FIELD_SECTION_SIZE (RFC 9114 §4.2.2): Größe einer Field Section = Σ (Name + Wert +
-/// 32 Bytes) je Feld, unkomprimiert. Wer das Setting empfangen hat, SOLL keine größeren Sektionen
-/// senden; ein Server MAG zu große Request-Header mit 431 beantworten, ein Client zu große
-/// Antworten verwerfen.
+/// SETTINGS_MAX_FIELD_SECTION_SIZE (RFC 9114 §4.2.2): size of a field section = Σ (name + value +
+/// 32 bytes) per field, uncompressed. Whoever received the setting SHOULD NOT send larger sections;
+/// a server MAY answer oversized request headers with 431, a client may discard oversized
+/// responses.
 /// </summary>
 [TestFixture]
 public class Http3FieldSectionSizeTests
@@ -64,16 +64,16 @@ public class Http3FieldSectionSizeTests
         Assert.That(client.HandshakeConfirmed, Is.True);
         client.InitializeHttp3();
         for (int round = 0; round < 5; round++)
-            Pump(client, server); // die SETTINGS des Servers (Limit 200) eintreffen lassen
+            Pump(client, server); // let the server's SETTINGS (limit 200) arrive
 
-        // Zu große Header ⇒ SHOULD NOT senden ⇒ der Client verweigert lokal (§4.2.2).
+        // Oversized headers ⇒ SHOULD NOT send ⇒ the client refuses locally (§4.2.2).
         var huge = Http3Request.Get("localhost", "/") with
         {
             AdditionalHeaders = [new HeaderField("x-big", new string('a', 500))],
         };
         Assert.Throws<ArgumentException>(() => client.SendRequest(huge));
 
-        // Ein normaler GET (Sektion < 200 Bytes) läuft weiterhin durch.
+        // A normal GET (section < 200 bytes) still runs through.
         ulong ok = client.SendRequest(Http3Request.Get("localhost", "/"));
         Http3Response? response = null;
         for (int round = 0; round < 30 && response is null; round++)
@@ -88,9 +88,9 @@ public class Http3FieldSectionSizeTests
     [Test]
     public void Server_Responds431_ToOversizedRequestHeaders_WithoutInvokingHandler()
     {
-        // Ein Roh-QUIC-Client umgeht die Sender-Prüfung und schickt zu große Header —
-        // der Server antwortet 431 (RFC 6585), ruft den Handler NICHT auf und bittet per
-        // STOP_SENDING (H3_NO_ERROR, §4.1) um das Ende des Requests.
+        // A raw QUIC client bypasses the sender check and sends oversized headers —
+        // the server answers 431 (RFC 6585), does NOT invoke the handler, and asks via
+        // STOP_SENDING (H3_NO_ERROR, §4.1) for the end of the request.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         int handled = 0;
         using var server = new Http3ServerConnection(cert, request => { handled++; return new Http3Response { Status = 200, Body = [] }; },
@@ -124,26 +124,26 @@ public class Http3FieldSectionSizeTests
             received.AddRange(request.Read());
         }
 
-        Assert.That(handled, Is.EqualTo(0)); // der Handler sah den Request nie
+        Assert.That(handled, Is.EqualTo(0)); // the handler never saw the request
         Assert.That(Http3Frames.TryReadAll(received.ToArray(), out List<Http3Frame> frames, out _), Is.True);
         Http3Frame headersFrame = frames.First(f => f.Type == Http3FrameType.Headers);
         Assert.That(QpackDecoder.Decode(headersFrame.Payload.Span, out List<HeaderField> headers), Is.EqualTo(QpackResult.Ok));
         Assert.That(headers.First(h => h.Name == ":status").Value, Is.EqualTo("431"));
         Assert.That(request.PeerStopSendingErrorCode, Is.EqualTo(Http3Error.NoError)); // §4.1: H3_NO_ERROR
-        Assert.That(server.IsClosing, Is.False, "431 ist eine normale Antwort, kein Verbindungsfehler.");
+        Assert.That(server.IsClosing, Is.False, "431 is a normal response, not a connection error.");
     }
 
     [Test]
     public void Server_Downgrades_OversizedResponseHeaders_To500()
     {
-        // Unser eigener Server respektiert das Client-Limit (SHOULD NOT senden): statt der zu
-        // großen Antwort-Header schickt er ein minimales 500.
+        // Our own server respects the client limit (SHOULD NOT send): instead of the oversized
+        // response headers it sends a minimal 500.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         Http3Response Handler(Http3Request request) => new()
         {
             Status = 200,
             Headers = [new HeaderField("x-big", new string('a', 500))],
-            Body = System.Text.Encoding.UTF8.GetBytes("Rumpf"),
+            Body = System.Text.Encoding.UTF8.GetBytes("body"),
         };
 
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
@@ -162,7 +162,7 @@ public class Http3FieldSectionSizeTests
             {
                 client.InitializeHttp3();
                 for (int extra = 0; extra < 3; extra++)
-                    Pump(client, server); // dem Server unsere SETTINGS (Limit 200) zustellen
+                    Pump(client, server); // deliver our SETTINGS (limit 200) to the server
                 requestStream = client.SendRequest(Http3Request.Get("localhost", "/"));
                 requestSent = true;
             }
@@ -171,7 +171,7 @@ public class Http3FieldSectionSizeTests
         }
 
         Assert.That(response, Is.Not.Null);
-        Assert.That(response!.Status, Is.EqualTo(500));       // heruntergestuft statt Limit-Verstoß
+        Assert.That(response!.Status, Is.EqualTo(500));       // downgraded instead of violating the limit
         Assert.That(response.GetHeader("x-big"), Is.Null);
         Assert.That(client.IsResponseTooLarge(requestStream), Is.False);
     }
@@ -179,8 +179,8 @@ public class Http3FieldSectionSizeTests
     [Test]
     public void Client_DiscardsOversizedResponse_FromRawServer()
     {
-        // Ein Roh-Server ignoriert unser Limit und sendet zu große Antwort-Header — der Client
-        // verwirft die Antwort (§4.2.2 „can discard") und bricht den Stream ab; die Verbindung lebt.
+        // A raw server ignores our limit and sends oversized response headers — the client
+        // discards the response (§4.2.2 "can discard") and aborts the stream; the connection lives.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         using var client = new Http3ClientConnection("localhost", certificateValidation: validation,
@@ -208,16 +208,16 @@ public class Http3FieldSectionSizeTests
         for (int round = 0; round < 10 && !client.IsResponseTooLarge(streamId); round++)
             Pump2(client, server);
 
-        Assert.That(client.IsResponseTooLarge(streamId), Is.True, "Die zu große Antwort muss verworfen werden.");
+        Assert.That(client.IsResponseTooLarge(streamId), Is.True, "The oversized response must be discarded.");
         Assert.That(client.TryGetResponse(streamId, out _), Is.False);
-        Assert.That(client.IsClosing, Is.False, "Verwerfen ist ein Stream-, kein Verbindungsvorgang.");
+        Assert.That(client.IsClosing, Is.False, "Discarding is a stream operation, not a connection operation.");
         for (int round = 0; round < 10 && !server.Streams[streamId].IsResetByPeer; round++)
             Pump2(client, server);
         Assert.That(server.Streams[streamId].IsResetByPeer, Is.True);
         Assert.That(server.Streams[streamId].PeerResetErrorCode, Is.EqualTo(Http3Error.RequestCancelled));
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     private static void Pump(Http3ClientConnection client, Http3ServerConnection server)
     {

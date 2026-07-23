@@ -28,8 +28,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Tests für Immediate Close und Draining (RFC 9000 §10.2): ein CONNECTION_CLOSE versetzt den Sender in
-/// den Closing-, den Empfänger in den Draining-Zustand; nach 3·PTO folgt der endgültige Closed-Zustand.
+/// Tests for immediate close and draining (RFC 9000 §10.2): a CONNECTION_CLOSE puts the sender into
+/// the closing state, the receiver into the draining state; after 3·PTO the final closed state follows.
 /// </summary>
 [TestFixture]
 public class ConnectionCloseTests
@@ -48,7 +48,7 @@ public class ConnectionCloseTests
             foreach (byte[] dg in server.GetDatagramsToSend())
                 client.ProcessDatagram(dg);
         }
-        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake muss zustande kommen.");
+        Assert.That(client.HandshakeConfirmed, Is.True, "Handshake must come about.");
         return (client, server);
     }
 
@@ -60,20 +60,20 @@ public class ConnectionCloseTests
         using var _ = client;
         using var __ = server;
 
-        client.Close(TransportError.ApplicationError, "tschüss");
+        client.Close(TransportError.ApplicationError, "goodbye");
         Assert.That(client.IsClosing, Is.True);
 
-        // Ein Umlauf bringt das CONNECTION_CLOSE zum Server.
+        // One round trip brings the CONNECTION_CLOSE to the server.
         foreach (byte[] dg in client.GetDatagramsToSend())
             server.ProcessDatagram(dg);
 
-        Assert.That(server.IsDraining, Is.True, "Empfang eines CONNECTION_CLOSE muss in den Draining-Zustand führen.");
+        Assert.That(server.IsDraining, Is.True, "Receiving a CONNECTION_CLOSE must lead into the draining state.");
         Assert.That(server.PeerCloseFrame, Is.Not.Null);
         Assert.That(server.PeerCloseFrame!.ErrorCode, Is.EqualTo((ulong)TransportError.ApplicationError));
-        Assert.That(server.PeerCloseFrame.ReasonPhrase, Is.EqualTo("tschüss"));
-        Assert.That(server.PeerCloseFrame.IsApplicationError, Is.False); // Transport-CONNECTION_CLOSE (Typ 0x1c)
+        Assert.That(server.PeerCloseFrame.ReasonPhrase, Is.EqualTo("goodbye"));
+        Assert.That(server.PeerCloseFrame.IsApplicationError, Is.False); // transport CONNECTION_CLOSE (type 0x1c)
 
-        // Draining: Der Server sendet keinerlei Datagramme mehr (RFC 9000 §10.2.2).
+        // Draining: the server sends no more datagrams whatsoever (RFC 9000 §10.2.2).
         Assert.That(server.GetDatagramsToSend(), Is.Empty);
     }
 
@@ -87,10 +87,10 @@ public class ConnectionCloseTests
 
         client.Close();
         IReadOnlyList<byte[]> first = client.GetDatagramsToSend();
-        Expect.Single(first);                       // genau ein Close-Paket
-        Assert.That(client.GetDatagramsToSend(), Is.Empty);  // ohne Anlass nicht erneut
+        Expect.Single(first);                       // exactly one close packet
+        Assert.That(client.GetDatagramsToSend(), Is.Empty);  // not again without a trigger
 
-        // Ein eingehendes Paket im Closing-Zustand löst ein erneutes CONNECTION_CLOSE aus (RFC 9000 §10.2.1).
+        // An incoming packet in the closing state triggers a renewed CONNECTION_CLOSE (RFC 9000 §10.2.1).
         client.ProcessDatagram(first[0]);
         Expect.Single(client.GetDatagramsToSend());
     }
@@ -107,9 +107,9 @@ public class ConnectionCloseTests
         Assert.That(client.IsClosing, Is.True);
         Assert.That(client.IsClosed, Is.False);
 
-        // Nach mehr als 3·PTO (in-process winzig) folgt der endgültige Closed-Zustand.
+        // After more than 3·PTO (tiny in-process) the final closed state follows.
         Thread.Sleep(400);
-        client.CheckIdleTimeout(); // treibt den Übergang
+        client.CheckIdleTimeout(); // drives the transition
 
         Assert.That(client.IsClosed, Is.True);
         Assert.That(client.IsClosing, Is.False);

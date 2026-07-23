@@ -55,7 +55,7 @@ public class KeyExchangeTests
         Assert.That(aliceView.Length, Is.EqualTo(56));
     }
 
-    // RFC 7748 §5.2 — die beiden X448-Einzelvektoren: scalarmult(clamp(scalar), u) == output.
+    // RFC 7748 §5.2 — the two X448 single vectors: scalarmult(clamp(scalar), u) == output.
         [TestCase(
         "3d262fddf9ec8e88495266fea19a34d28882acef045104d0d1aae121700a779c984c24f8cdd78fbff44943eba368f54b29259a4f1c600ad3",
         "06fce640fa3487bfda5f6cf2d5263f8aad88334cbd07437f020f08f9814dc031ddbdc38c19c6da2583fa5429db94ada18aa7a7fb4ef8a086",
@@ -75,8 +75,8 @@ public class KeyExchangeTests
     [Test]
     public void X25519MlKem768_ClientServer_DeriveSameSecret()
     {
-        // Client bietet an (ek ‖ x25519 = 1216 Byte); Server encapsuliert (ct ‖ x25519 = 1120 Byte);
-        // Client leitet aus der Server-Antwort dasselbe 64-Byte-Geheimnis ab (ML-KEM-ss ‖ X25519-ss).
+        // The client offers (ek ‖ x25519 = 1216 bytes); the server encapsulates (ct ‖ x25519 = 1120 bytes);
+        // the client derives the same 64-byte secret from the server response (ML-KEM ss ‖ X25519 ss).
         using var client = new X25519MlKem768KeyExchange();
         using var server = new X25519MlKem768KeyExchange();
 
@@ -94,15 +94,15 @@ public class KeyExchangeTests
     [Test]
     public void X25519MlKem768_TamperedCiphertext_YieldsDifferentSecret()
     {
-        // ML-KEM ist IND-CCA2: ein veränderter Ciphertext liefert (implizite Rejection) ein anderes Geheimnis,
-        // kein Fehler — der Handshake scheitert dann am Finished-MAC.
+        // ML-KEM is IND-CCA2: a modified ciphertext yields (implicit rejection) a different secret,
+        // not an error — the handshake then fails at the Finished MAC.
         using var client = new X25519MlKem768KeyExchange();
         using var server = new X25519MlKem768KeyExchange();
 
         (byte[] responseShare, _) = server.Encapsulate(client.PublicKey);
         byte[] honest = client.DeriveSharedSecret(responseShare);
 
-        responseShare[0] ^= 0x01; // ML-KEM-Ciphertext-Teil verfälschen
+        responseShare[0] ^= 0x01; // tamper with the ML-KEM ciphertext part
         byte[] tampered = client.DeriveSharedSecret(responseShare);
 
         Assert.That(tampered, Is.Not.EqualTo(honest));
@@ -118,15 +118,15 @@ public class KeyExchangeTests
         Expect.Type<X25519KeyExchange>(x);
         Expect.Type<X448KeyExchange>(x448);
         Expect.Type<EcdheKeyExchange>(p256);
-        Assert.That(x.PublicKey.Length, Is.EqualTo(32));    // X25519: 32 Byte
-        Assert.That(x448.PublicKey.Length, Is.EqualTo(56)); // X448: 56 Byte
-        Assert.That(p256.PublicKey.Length, Is.EqualTo(65)); // P-256: unkomprimierter Punkt
+        Assert.That(x.PublicKey.Length, Is.EqualTo(32));    // X25519: 32 bytes
+        Assert.That(x448.PublicKey.Length, Is.EqualTo(56)); // X448: 56 bytes
+        Assert.That(p256.PublicKey.Length, Is.EqualTo(65)); // P-256: uncompressed point
     }
 
     [Test]
     public void CrossGroup_ProducesDifferentUnusableSecrets_ButSameGroupAgrees()
     {
-        // Sanity: dieselbe Gruppe einigt sich; das ist die Grundlage des Handshakes.
+        // Sanity: the same group agrees; this is the foundation of the handshake.
         using var a = KeyExchange.Create(NamedGroup.X25519);
         using var b = KeyExchange.Create(NamedGroup.X25519);
         Assert.That(b.DeriveSharedSecret(a.PublicKey), Is.EqualTo(a.DeriveSharedSecret(b.PublicKey)));

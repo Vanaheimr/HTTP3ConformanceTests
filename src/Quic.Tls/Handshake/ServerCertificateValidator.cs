@@ -27,27 +27,27 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 /// <summary>
-/// Wird geworfen, wenn die Prüfung des Serverzertifikats fehlschlägt (fataler Handshake-Fehler).
+/// Thrown when validation of the server certificate fails (fatal handshake error).
 /// </summary>
 public sealed class CertificateValidationException(string message) : Exception(message);
 
 /// <summary>
-/// Prüft das Serverzertifikat clientseitig: (1) die CertificateVerify-Signatur über den Transcript-Hash
-/// mit dem öffentlichen Schlüssel des Leaf-Zertifikats (RFC 8446 §4.4.3) und (2) gemäß Policy die
-/// Zertifikatskette, den Hostname und den Gültigkeitszeitraum.
+/// Validates the server certificate on the client side: (1) the CertificateVerify signature over the
+/// transcript hash with the public key of the leaf certificate (RFC 8446 §4.4.3) and (2), per policy,
+/// the certificate chain, the hostname and the validity period.
 /// </summary>
 public static class ServerCertificateValidator
 {
     /// <summary>
-    /// Führt die vollständige Prüfung durch und wirft bei Fehlschlag eine
-    /// <see cref="CertificateValidationException"/>. Gibt das geprüfte Leaf-Zertifikat zurück.
+    /// Performs the full validation and throws a <see cref="CertificateValidationException"/> on
+    /// failure. Returns the validated leaf certificate.
     /// </summary>
-    /// <param name="certificateChainDer">Die DER-Zertifikate aus der Certificate-Nachricht (Leaf zuerst).</param>
-    /// <param name="scheme">Signaturverfahren aus der CertificateVerify-Nachricht.</param>
-    /// <param name="signature">Signatur aus der CertificateVerify-Nachricht.</param>
-    /// <param name="transcriptHash">Transcript-Hash bis einschließlich Certificate.</param>
-    /// <param name="serverName">Erwarteter Hostname (für die Hostname-Prüfung).</param>
-    /// <param name="options">Vertrauens-Policy.</param>
+    /// <param name="certificateChainDer">The DER certificates from the Certificate message (leaf first).</param>
+    /// <param name="scheme">Signature scheme from the CertificateVerify message.</param>
+    /// <param name="signature">Signature from the CertificateVerify message.</param>
+    /// <param name="transcriptHash">Transcript hash up to and including Certificate.</param>
+    /// <param name="serverName">Expected hostname (for the hostname check).</param>
+    /// <param name="options">Trust policy.</param>
     public static X509Certificate2 Validate(
         IReadOnlyList<byte[]> certificateChainDer,
         SignatureScheme scheme,
@@ -57,39 +57,39 @@ public static class ServerCertificateValidator
         CertificateValidationOptions options)
     {
         if (certificateChainDer.Count == 0)
-            throw new CertificateValidationException("Server sendete kein Zertifikat.");
+            throw new CertificateValidationException("Server sent no certificate.");
 
         var leaf = X509CertificateLoader.LoadCertificate(certificateChainDer[0]);
 
-        // (1) CertificateVerify-Signatur — immer, unabhängig von der Policy.
+        // (1) CertificateVerify signature — always, regardless of policy.
         byte[] content = CertificateVerify.BuildSignatureContent(CertificateVerify.ServerContext, transcriptHash);
         if (!VerifySignature(leaf, scheme, signature, content))
         {
             leaf.Dispose();
             throw new CertificateValidationException(
-                $"CertificateVerify-Signatur ungültig (Verfahren {scheme}).");
+                $"CertificateVerify signature invalid (scheme {scheme}).");
         }
 
-        // (2) Hostname — Policy.
+        // (2) Hostname — policy.
         if (options.VerifyHostname && !leaf.MatchesHostname(serverName))
         {
             leaf.Dispose();
             throw new CertificateValidationException(
-                $"Zertifikat gilt nicht für Hostname '{serverName}'.");
+                $"Certificate is not valid for hostname '{serverName}'.");
         }
 
-        // (3) Kette + Gültigkeitszeitraum — Policy.
+        // (3) Chain + validity period — policy.
         if (options.VerifyCertificateChain && !VerifyChain(leaf, certificateChainDer, options, out string? error))
         {
             leaf.Dispose();
-            throw new CertificateValidationException($"Zertifikatskette ungültig: {error}");
+            throw new CertificateValidationException($"Certificate chain invalid: {error}");
         }
 
         return leaf;
     }
 
     /// <summary>
-    /// Prüft die CertificateVerify-Signatur mit dem passenden Algorithmus des Leaf-Schlüssels.
+    /// Verifies the CertificateVerify signature with the algorithm matching the leaf key.
     /// </summary>
     private static bool VerifySignature(X509Certificate2 leaf, SignatureScheme scheme, ReadOnlySpan<byte> signature, byte[] content)
     {
@@ -103,7 +103,7 @@ public static class ServerCertificateValidator
                     return false;
                 HashAlgorithmName hash = scheme == SignatureScheme.EcdsaSecp256r1Sha256
                     ? HashAlgorithmName.SHA256 : HashAlgorithmName.SHA384;
-                // TLS überträgt ECDSA-Signaturen als DER-kodierte r/s-Sequenz.
+                // TLS transmits ECDSA signatures as a DER-encoded r/s sequence.
                 return ecdsa.VerifyData(content, signature, hash, DSASignatureFormat.Rfc3279DerSequence);
             }
 
@@ -125,9 +125,9 @@ public static class ServerCertificateValidator
 
             case SignatureScheme.Ed25519:
             {
-                // Ed25519 signiert den Inhalt direkt (PureEdDSA, kein Vor-Hash). Der öffentliche Schlüssel
-                // kommt als SubjectPublicKeyInfo (id-Ed25519, 1.3.101.112) aus dem Leaf-Zertifikat; die BCL
-                // kann Ed25519 nicht verifizieren, daher über das BouncyCastle-Primitiv.
+                // Ed25519 signs the content directly (PureEdDSA, no pre-hash). The public key comes
+                // as a SubjectPublicKeyInfo (id-Ed25519, 1.3.101.112) from the leaf certificate; the
+                // BCL cannot verify Ed25519, hence via the BouncyCastle primitive.
                 if (leaf.PublicKey.Oid.Value != "1.3.101.112")
                     return false;
                 return Ed25519Signature.VerifyWithSubjectPublicKeyInfo(
@@ -136,8 +136,8 @@ public static class ServerCertificateValidator
 
             case SignatureScheme.Ed448:
             {
-                // Ed448 signiert den Inhalt direkt (PureEdDSA, leerer Kontext). Public Key aus dem
-                // Leaf-SPKI (id-Ed448, 1.3.101.113); die BCL kann Ed448 nicht verifizieren.
+                // Ed448 signs the content directly (PureEdDSA, empty context). Public key from the
+                // leaf SPKI (id-Ed448, 1.3.101.113); the BCL cannot verify Ed448.
                 if (leaf.PublicKey.Oid.Value != "1.3.101.113")
                     return false;
                 return Ed448Signature.VerifyWithSubjectPublicKeyInfo(
@@ -148,10 +148,10 @@ public static class ServerCertificateValidator
             case SignatureScheme.MLDsa65:
             case SignatureScheme.MLDsa87:
             {
-                // ML-DSA (FIPS 204, draft-ietf-tls-mldsa §4): pure Signatur, FIPS-204-Kontext leer.
-                // Der Schlüssel kommt als id-ML-DSA-44/65/87-SPKI aus dem Leaf; die Parameterstärke
-                // MUSS zum SignatureScheme passen (§4: „subject public key MUST … corresponding").
-                // SYSLIB5006: X509-PQC-Integration in .NET 10 noch „experimentell" — punktuell unterdrückt.
+                // ML-DSA (FIPS 204, draft-ietf-tls-mldsa §4): pure signature, empty FIPS 204 context.
+                // The key comes as an id-ML-DSA-44/65/87 SPKI from the leaf; the parameter strength
+                // MUST match the SignatureScheme (§4: "subject public key MUST … corresponding").
+                // SYSLIB5006: X509 PQC integration in .NET 10 is still "experimental" — suppressed locally.
 #pragma warning disable SYSLIB5006
                 using MLDsa? mldsa = leaf.GetMLDsaPublicKey();
 #pragma warning restore SYSLIB5006
@@ -169,21 +169,21 @@ public static class ServerCertificateValidator
             }
 
             default:
-                // rsa_pkcs1_* sind in TLS 1.3 für CertificateVerify unzulässig; alles Übrige nicht unterstützt.
-                throw new CertificateValidationException($"Signaturverfahren {scheme} wird nicht unterstützt.");
+                // rsa_pkcs1_* are not permitted for CertificateVerify in TLS 1.3; everything else unsupported.
+                throw new CertificateValidationException($"Signature scheme {scheme} is not supported.");
         }
     }
 
     /// <summary>
-    /// Baut die Kette (mit den mitgesendeten Zwischenzertifikaten) und prüft sie.
+    /// Builds the chain (with the intermediates sent along) and validates it.
     /// </summary>
     private static bool VerifyChain(X509Certificate2 leaf, IReadOnlyList<byte[]> chainDer, CertificateValidationOptions options, out string? error)
     {
         using var chain = new X509Chain();
-        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck; // offline-freundlich; kein OCSP/CRL
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck; // offline-friendly; no OCSP/CRL
         chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
 
-        // Mitgesendete Zwischenzertifikate als Baumaterial bereitstellen.
+        // Provide the intermediates sent along as building material.
         var intermediates = new List<X509Certificate2>();
         for (int i = 1; i < chainDer.Count; i++)
         {
@@ -208,7 +208,7 @@ public static class ServerCertificateValidator
 
             error = chain.ChainStatus.Length > 0
                 ? string.Join("; ", chain.ChainStatus.Select(s => s.StatusInformation.Trim()))
-                : "unbekannt";
+                : "unknown";
             return false;
         }
         finally

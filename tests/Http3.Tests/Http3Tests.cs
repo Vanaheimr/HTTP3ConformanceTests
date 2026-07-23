@@ -42,19 +42,19 @@ public class Http3FrameTests
     [Test]
     public void TryReadAll_ParsesMultipleFrames_AndReportsPartialTail()
     {
-        // HEADERS(2 Byte) + DATA(3 Byte) + angefangenes drittes Frame (Länge 10, aber nur 1 Byte da).
+        // HEADERS(2 bytes) + DATA(3 bytes) + a started third frame (length 10, but only 1 byte present).
         byte[] buffer =
         [
             0x01, 0x02, 0xaa, 0xbb,              // HEADERS len=2
             0x00, 0x03, 0x01, 0x02, 0x03,        // DATA len=3
-            0x00, 0x0a, 0xff,                    // DATA len=10 (unvollständig)
+            0x00, 0x0a, 0xff,                    // DATA len=10 (incomplete)
         ];
 
         Assert.That(Http3Frames.TryReadAll(buffer, out var frames, out int consumed), Is.True);
         Assert.That(frames.Count, Is.EqualTo(2));
         Assert.That(frames[0].Type, Is.EqualTo(Http3FrameType.Headers));
         Assert.That(frames[1].Type, Is.EqualTo(Http3FrameType.Data));
-        Assert.That(consumed, Is.EqualTo(9)); // das unvollständige dritte Frame bleibt liegen
+        Assert.That(consumed, Is.EqualTo(9)); // the incomplete third frame stays put
     }
 }
 
@@ -75,12 +75,12 @@ public class Http3RequestTests
     [Test]
     public void RequestHeaders_SurviveQpackAndHttp3FrameRoundTrip()
     {
-        // So baut der Client die Anfrage: QPACK-Header-Block in einem HEADERS-Frame.
+        // This is how the client builds the request: QPACK header block in a HEADERS frame.
         var request = Http3Request.Get("cloudflare-quic.com", "/");
         byte[] headerBlock = QpackEncoder.Encode(request.ToHeaderFields());
         byte[] frame = Http3Frames.Build(Http3FrameType.Headers, headerBlock);
 
-        // Empfängerseite: Frame parsen -> QPACK dekodieren.
+        // Receiver side: parse the frame -> decode QPACK.
         Assert.That(Http3Frames.TryReadAll(frame, out var frames, out _), Is.True);
         Assert.That(frames[0].Type, Is.EqualTo(Http3FrameType.Headers));
         Assert.That(QpackDecoder.Decode(frames[0].Payload.Span, out var headers), Is.EqualTo(QpackResult.Ok));
@@ -90,7 +90,7 @@ public class Http3RequestTests
     [Test]
     public void ResponseHeaders_DecodeStatusAndContentType()
     {
-        // Ein typischer Server-HEADERS-Block (Static-Table + Literale), so wie ihn Cloudflare sendet.
+        // A typical server HEADERS block (static table + literals), the way Cloudflare sends it.
         byte[] headerBlock = QpackEncoder.Encode(
         [
             new HeaderField(":status", "200"),

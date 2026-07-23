@@ -26,28 +26,28 @@ using Org.BouncyCastle.Security;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// Ed25519-Signaturen (RFC 8032, PureEdDSA) über BouncyCastle. Die BCL kennt Ed25519 nicht als
-/// Signaturalgorithmus — wie bei <see cref="X25519KeyExchange"/> kommt das Primitiv aus BouncyCastle,
-/// gekapselt in dieser Klasse. In TLS 1.3 ist das der SignatureScheme <c>ed25519</c> (0x0807, RFC 8446
-/// §4.2.3): der CertificateVerify-Inhalt wird <b>ohne</b> Vor-Hash direkt signiert. Öffentlicher
-/// Schlüssel und Signatur sind 32 bzw. 64 Byte.
+/// Ed25519 signatures (RFC 8032, PureEdDSA) via BouncyCastle. The BCL does not know Ed25519 as a
+/// signature algorithm — as with <see cref="X25519KeyExchange"/>, the primitive comes from
+/// BouncyCastle, encapsulated in this class. In TLS 1.3 this is the SignatureScheme <c>ed25519</c>
+/// (0x0807, RFC 8446 §4.2.3): the CertificateVerify content is signed directly <b>without</b> a
+/// pre-hash. Public key and signature are 32 and 64 bytes respectively.
 /// </summary>
 public sealed class Ed25519Signature
 {
     private readonly Ed25519PrivateKeyParameters _privateKey;
 
     /// <summary>
-    /// Der öffentliche Schlüssel (32 Byte, RFC 8032 §5.1.5).
+    /// The public key (32 bytes, RFC 8032 §5.1.5).
     /// </summary>
     public byte[] PublicKey { get; }
 
     /// <summary>
-    /// Erzeugt ein frisches Schlüsselpaar.
+    /// Creates a fresh key pair.
     /// </summary>
     public Ed25519Signature() : this(new Ed25519PrivateKeyParameters(new SecureRandom())) { }
 
     /// <summary>
-    /// Übernimmt einen vorhandenen 32-Byte-Seed (privater Schlüssel) — v. a. für RFC-Testvektoren.
+    /// Takes an existing 32-byte seed (private key) — mainly for RFC test vectors.
     /// </summary>
     public Ed25519Signature(ReadOnlySpan<byte> seed)
         : this(new Ed25519PrivateKeyParameters(seed.ToArray(), 0)) { }
@@ -59,7 +59,7 @@ public sealed class Ed25519Signature
     }
 
     /// <summary>
-    /// Signiert den Inhalt direkt (PureEdDSA, kein Vor-Hash). Ergebnis: 64 Byte.
+    /// Signs the content directly (PureEdDSA, no pre-hash). Result: 64 bytes.
     /// </summary>
     public byte[] Sign(ReadOnlySpan<byte> content)
     {
@@ -70,7 +70,7 @@ public sealed class Ed25519Signature
     }
 
     /// <summary>
-    /// Verifiziert eine Ed25519-Signatur gegen einen rohen 32-Byte-Public-Key.
+    /// Verifies an Ed25519 signature against a raw 32-byte public key.
     /// </summary>
     public static bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> content, ReadOnlySpan<byte> signature)
     {
@@ -80,8 +80,8 @@ public sealed class Ed25519Signature
     }
 
     /// <summary>
-    /// Verifiziert gegen den Ed25519-Public-Key aus einem SubjectPublicKeyInfo (id-Ed25519, 1.3.101.112) —
-    /// wie es aus einem X.509-Leaf-Zertifikat exportiert wird.
+    /// Verifies against the Ed25519 public key from a SubjectPublicKeyInfo (id-Ed25519, 1.3.101.112) —
+    /// as exported from an X.509 leaf certificate.
     /// </summary>
     public static bool VerifyWithSubjectPublicKeyInfo(byte[] spki, ReadOnlySpan<byte> content, ReadOnlySpan<byte> signature)
     {

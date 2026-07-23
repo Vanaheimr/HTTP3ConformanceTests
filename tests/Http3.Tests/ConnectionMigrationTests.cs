@@ -27,8 +27,8 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Tests der Pfadvalidierung (RFC 9000 §8.2) – dem Kern-Primitiv der Connection Migration (§9):
-/// PATH_CHALLENGE senden, passendes PATH_RESPONSE erwarten.
+/// Tests of path validation (RFC 9000 §8.2) — the core primitive of connection migration (§9):
+/// send PATH_CHALLENGE, expect a matching PATH_RESPONSE.
 /// </summary>
 [TestFixture]
 public class ConnectionMigrationTests
@@ -64,13 +64,13 @@ public class ConnectionMigrationTests
 
         Assert.That(client.PathValidated, Is.False);
 
-        client.InitiatePathValidation(); // sendet PATH_CHALLENGE
+        client.InitiatePathValidation(); // sends PATH_CHALLENGE
         Assert.That(client.PathValidationPending, Is.True);
 
         for (int round = 0; round < 5; round++)
-            Pump(client, server); // Server spiegelt via PATH_RESPONSE zurück
+            Pump(client, server); // the server mirrors it back via PATH_RESPONSE
 
-        Assert.That(client.PathValidated, Is.True, "Ein passendes PATH_RESPONSE muss den Pfad validieren.");
+        Assert.That(client.PathValidated, Is.True, "A matching PATH_RESPONSE must validate the path.");
         Assert.That(client.PathValidationPending, Is.False);
     }
 
@@ -102,11 +102,11 @@ public class ConnectionMigrationTests
         client.InitiatePathValidation();
         Assert.That(client.PathValidationPending, Is.True);
 
-        // Ohne Austausch verstreicht die Validierungsfrist (3·PTO, in-process winzig).
+        // Without an exchange the validation deadline passes (3·PTO, tiny in-process).
         Thread.Sleep(300);
-        client.CheckIdleTimeout(); // treibt den Ablauf
+        client.CheckIdleTimeout(); // drives the expiry
 
-        Assert.That(client.PathValidationPending, Is.False, "Ohne PATH_RESPONSE muss die Validierung verfallen.");
+        Assert.That(client.PathValidationPending, Is.False, "Without a PATH_RESPONSE the validation must expire.");
         Assert.That(client.PathValidated, Is.False);
     }
 }

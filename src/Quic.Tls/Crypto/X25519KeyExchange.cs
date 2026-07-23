@@ -26,9 +26,9 @@ using Org.BouncyCastle.Security;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// X25519-Schlüsselaustausch (RFC 7748) über BouncyCastle. Die BCL bietet X25519 nicht; hier ist die
-/// einzige Stelle, an der eine externe Krypto-Bibliothek verwendet wird – gekapselt hinter
-/// <see cref="IKeyExchange"/>. Öffentlicher Schlüssel und Geheimnis sind je 32 Byte.
+/// X25519 key exchange (RFC 7748) via BouncyCastle. The BCL does not offer X25519; this is the
+/// only place where an external crypto library is used – encapsulated behind
+/// <see cref="IKeyExchange"/>. Public key and secret are 32 bytes each.
 /// </summary>
 public sealed class X25519KeyExchange : IKeyExchange
 {
@@ -46,7 +46,7 @@ public sealed class X25519KeyExchange : IKeyExchange
     public byte[] DeriveSharedSecret(ReadOnlySpan<byte> peerPublicKey)
     {
         if (peerPublicKey.Length != X25519PublicKeyParameters.KeySize)
-            throw new ArgumentException("X25519-Public-Key muss 32 Byte lang sein.", nameof(peerPublicKey));
+            throw new ArgumentException("X25519 public key must be 32 bytes long.", nameof(peerPublicKey));
 
         var peer = new X25519PublicKeyParameters(peerPublicKey.ToArray(), 0);
         var agreement = new X25519Agreement();

@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// Zugriff auf die QPACK-Static-Table (RFC 9204, Anhang A) mit Lookup-Indizes.
+/// Access to the QPACK static table (RFC 9204, appendix A) with lookup indices.
 /// </summary>
 internal static partial class QpackStaticTable
 {
@@ -26,8 +26,8 @@ internal static partial class QpackStaticTable
 
     public static (string Name, string Value) Get(int index) => Entries[index];
 
-    // name -> kleinster Index; (name,value) -> Index. Lazy, da die Initialisierungsreihenfolge
-    // von Feldern über Partial-Class-Dateien hinweg nicht garantiert ist (Entries vs. Index).
+    // name -> smallest index; (name,value) -> index. Lazy, since the initialisation order of
+    // fields across partial-class files is not guaranteed (Entries vs. index).
     private static Dictionary<string, int>? _nameIndex;
     private static Dictionary<(string, string), int>? _pairIndex;
     private static Dictionary<string, int> NameIndex => _nameIndex ??= BuildNameIndex();
@@ -37,7 +37,7 @@ internal static partial class QpackStaticTable
     {
         var map = new Dictionary<string, int>(Entries.Length);
         for (int i = 0; i < Entries.Length; i++)
-            map.TryAdd(Entries[i].Name, i); // erster (niedrigster) Index gewinnt
+            map.TryAdd(Entries[i].Name, i); // the first (lowest) index wins
         return map;
     }
 
@@ -50,13 +50,13 @@ internal static partial class QpackStaticTable
     }
 
     /// <summary>
-    /// Findet den Index eines exakten (Name, Wert)-Paares, falls vorhanden.
+    /// Finds the index of an exact (name, value) pair, if present.
     /// </summary>
     public static bool TryGetPairIndex(string name, string value, out int index)
         => PairIndex.TryGetValue((name, value), out index);
 
     /// <summary>
-    /// Findet den Index eines Eintrags mit passendem Namen (beliebiger Wert), falls vorhanden.
+    /// Finds the index of an entry with a matching name (any value), if present.
     /// </summary>
     public static bool TryGetNameIndex(string name, out int index)
         => NameIndex.TryGetValue(name, out index);

@@ -28,11 +28,11 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 /// <summary>
-/// Treibt die Client-Seite des TLS-1.3-Handshakes für QUIC (RFC 8446 + RFC 9001). Bietet Key Shares für
-/// mehrere Gruppen an (Standard: X25519 + P-256) und behandelt HelloRetryRequest (RFC 8446 §4.1.4).
-/// Interface zur QUIC-Schicht wie gehabt (CRYPTO rein/raus, Schlüssel erscheinen als Properties).
-/// <para>Prüft das Serverzertifikat: die CertificateVerify-Signatur immer, Kette/Hostname gemäß
-/// <see cref="CertificateValidationOptions"/>; ebenso den Server-Finished-MAC.</para>
+/// Drives the client side of the TLS 1.3 handshake for QUIC (RFC 8446 + RFC 9001). Offers key shares
+/// for multiple groups (default: X25519 + P-256) and handles HelloRetryRequest (RFC 8446 §4.1.4).
+/// Interface to the QUIC layer as established (CRYPTO in/out, keys appear as properties).
+/// <para>Validates the server certificate: the CertificateVerify signature always, chain/hostname per
+/// <see cref="CertificateValidationOptions"/>; likewise the server Finished MAC.</para>
 /// </summary>
 public sealed class TlsClientHandshake : ITlsHandshake
 {
@@ -55,18 +55,21 @@ public sealed class TlsClientHandshake : ITlsHandshake
     private Transcript? _transcript;
     private List<byte[]>? _serverCertChain;
 
-    // Session Resumption (RFC 8446 §2.2): das angebotene Ticket, der daraus abgeleitete Binder-Key,
-    // das resumption_master_secret dieser Verbindung und die vom Server empfangenen neuen Tickets.
+    // Session resumption (RFC 8446 §2.2): the offered ticket, the binder key derived from it,
+    // this connection's resumption_master_secret and the new tickets received from the server.
     private readonly ResumptionTicket? _resumptionTicket;
     private byte[]? _binderKey;
     private bool _pskAccepted;
     private byte[]? _resumptionMasterSecret;
-    private byte[]? _exporterMasterSecret; // exporter_master_secret (RFC 8446 §7.1) für §7.5-Exporte
+    private byte[]? _exporterMasterSecret; // exporter_master_secret (RFC 8446 §7.1) for §7.5 exports
     private readonly List<ResumptionTicket> _newSessionTickets = [];
 
-    // 0-RTT (RFC 8446 §2.3): angebotenes/abgeleitetes Early-Traffic-Secret + ob der Server es akzeptierte.
+    // 0-RTT (RFC 8446 §2.3): offered/derived early traffic secret + whether the server accepted it.
     private bool _earlyDataOffered;
     private byte[]? _earlyTrafficSecret;
+
+    // Wall clock for the obfuscated ticket age (RFC 8446 §4.2.11); injectable for tests.
+    private readonly TimeProvider _timeProvider;
 
     public TlsClientHandshake(
         string serverName,
@@ -75,7 +78,8 @@ public sealed class TlsClientHandshake : ITlsHandshake
         IReadOnlyList<NamedGroup>? supportedGroups = null,
         CertificateValidationOptions? certificateValidation = null,
         IReadOnlyList<CipherSuite>? cipherSuites = null,
-        ResumptionTicket? resumptionTicket = null)
+        ResumptionTicket? resumptionTicket = null,
+        TimeProvider? timeProvider = null)
     {
         _serverName = serverName;
         _quicTransportParameters = quicTransportParameters;
@@ -84,20 +88,21 @@ public sealed class TlsClientHandshake : ITlsHandshake
         _cipherSuites = cipherSuites ?? [CipherSuite.Aes128GcmSha256, CipherSuite.Aes256GcmSha384];
         _validation = certificateValidation ?? CertificateValidationOptions.Default;
         _resumptionTicket = resumptionTicket;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
-    /// <c>true</c>, wenn der Server unser PSK-Angebot akzeptiert hat (Handshake per Resumption statt Zertifikat).
+    /// <c>true</c> when the server accepted our PSK offer (handshake via resumption instead of certificate).
     /// </summary>
     public bool ResumptionAccepted => _pskAccepted;
 
     /// <summary>
-    /// Die vom Server nach dem Handshake ausgestellten Session-Tickets (RFC 8446 §4.6.1) für spätere Resumption.
+    /// The session tickets issued by the server after the handshake (RFC 8446 §4.6.1) for later resumption.
     /// </summary>
     public IReadOnlyList<ResumptionTicket> NewSessionTickets => _newSessionTickets;
 
     /// <summary>
-    /// Diagnose: Anzahl empfangener NewSessionTicket-Nachrichten (auch solche, die nicht als Ticket taugten).
+    /// Diagnostics: number of received NewSessionTicket messages (including those unusable as tickets).
     /// </summary>
     public int NewSessionTicketMessagesSeen { get; private set; }
 
@@ -110,54 +115,54 @@ public sealed class TlsClientHandshake : ITlsHandshake
     public ApplicationTrafficSecrets? ApplicationSecrets { get; private set; }
 
     /// <summary>
-    /// TLS-Keying-Material-Exporter (RFC 8446 §7.5) auf Basis des <c>exporter_master_secret</c>;
-    /// verfügbar, sobald die Application Secrets abgeleitet sind (nach dem Server-Finished).
+    /// TLS keying-material exporter (RFC 8446 §7.5) based on the <c>exporter_master_secret</c>;
+    /// available once the application secrets are derived (after the server Finished).
     /// </summary>
     public byte[] ExportKeyingMaterial(string label, ReadOnlySpan<byte> context, int length)
         => _exporterMasterSecret is { } secret && _ks is { } ks
             ? ks.ExportKeyingMaterial(secret, label, context, length)
-            : throw new InvalidOperationException("Keying-Material-Export erst nach dem Server-Finished möglich (RFC 8446 §7.5).");
+            : throw new InvalidOperationException("Keying-material export only possible after the server Finished (RFC 8446 §7.5).");
     public bool ServerFinishedValid { get; private set; }
     public bool IsComplete => _state == State.Complete;
     public byte[]? PeerQuicTransportParameters { get; private set; }
 
     /// <summary>
-    /// Das geprüfte Leaf-Zertifikat des Servers (erst nach CertificateVerify verfügbar).
+    /// The server's validated leaf certificate (only available after CertificateVerify).
     /// </summary>
     public X509Certificate2? ServerCertificate { get; private set; }
 
     /// <summary>
-    /// <c>true</c>, sobald das Serverzertifikat samt CertificateVerify-Signatur geprüft wurde.
+    /// <c>true</c> once the server certificate incl. the CertificateVerify signature has been validated.
     /// </summary>
     public bool ServerCertificateValid { get; private set; }
 
     /// <summary>
-    /// Die Gruppe, mit der der Handshake letztlich abgeschlossen wurde (nach evtl. HRR).
+    /// The group with which the handshake was ultimately completed (after a possible HRR).
     /// </summary>
     public NamedGroup? NegotiatedGroup { get; private set; }
 
     /// <summary>
-    /// Startet den Handshake: erzeugt Key Shares und baut den (ersten) ClientHello.
+    /// Starts the handshake: generates key shares and builds the (first) ClientHello.
     /// </summary>
     public void Start()
     {
         foreach (NamedGroup group in _keyShareGroups)
             _keyExchanges[group] = KeyExchange.Create(group);
 
-        // Resumption: Key-Schedule (an die Ticket-Suite gebunden) und Binder-Key vorbereiten, damit der
-        // ClientHello den PSK-Binder tragen kann.
+        // Resumption: prepare the key schedule (bound to the ticket suite) and the binder key so the
+        // ClientHello can carry the PSK binder.
         if (_resumptionTicket is { } ticket)
         {
             _ks = new KeySchedule(ticket.CipherSuite);
             _binderKey = _ks.ResumptionBinderKey(ticket.Psk);
-            _earlyDataOffered = ticket.AllowsEarlyData; // erlaubt das Ticket 0-RTT, bieten wir es an
+            _earlyDataOffered = ticket.AllowsEarlyData; // if the ticket allows 0-RTT, we offer it
         }
 
         _clientHello1 = BuildClientHello(_keyShareGroups);
         _outgoing.Enqueue((EncryptionLevel.Initial, _clientHello1));
 
-        // 0-RTT: Early-Traffic-Secret über den Hash des (vollständigen) ClientHello ableiten – daraus
-        // installiert die QUIC-Schicht die 0-RTT-Schreibschlüssel, um sofort Anwendungsdaten zu senden.
+        // 0-RTT: derive the early traffic secret over the hash of the (complete) ClientHello – from it
+        // the QUIC layer installs the 0-RTT write keys in order to send application data immediately.
         if (_earlyDataOffered && _resumptionTicket is { } t && _ks is not null)
             _earlyTrafficSecret = _ks.ClientEarlyTrafficSecret(t.Psk, _ks.TranscriptHash(_clientHello1));
 
@@ -165,8 +170,8 @@ public sealed class TlsClientHandshake : ITlsHandshake
     }
 
     /// <summary>
-    /// Sendet nach einem QUIC-Retry denselben ClientHello erneut (unveränderter Inhalt, RFC 9000 §17.2.5).
-    /// Der Transkript-Hash beginnt weiterhin erst beim ServerHello, daher ist kein Neuaufbau nötig.
+    /// After a QUIC Retry, sends the same ClientHello again (unchanged content, RFC 9000 §17.2.5).
+    /// The transcript hash still only starts at the ServerHello, so no rebuild is needed.
     /// </summary>
     public void ResendClientHello()
     {
@@ -224,7 +229,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
                 ProcessCertificateVerify(message);
                 break;
             case HandshakeType.NewSessionTicket:
-                // Post-Handshake-Nachricht: NICHT an den Handshake-Transcript anhängen.
+                // Post-handshake message: do NOT append to the handshake transcript.
                 NewSessionTicketMessagesSeen++;
                 ProcessNewSessionTicket(message);
                 break;
@@ -237,7 +242,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
     private void ProcessCertificate(HandshakeMessage message)
     {
         if (!CertificateMessage.TryParse(message.Body.Span, out List<byte[]> chain))
-            throw new InvalidOperationException("Ungültige Certificate-Nachricht.");
+            throw new InvalidOperationException("Invalid Certificate message.");
         _serverCertChain = chain;
         _transcript?.Append(message.Full.Span);
     }
@@ -245,11 +250,11 @@ public sealed class TlsClientHandshake : ITlsHandshake
     private void ProcessCertificateVerify(HandshakeMessage message)
     {
         if (_serverCertChain is null)
-            throw new InvalidOperationException("CertificateVerify ohne vorangehendes Certificate.");
+            throw new InvalidOperationException("CertificateVerify without a preceding Certificate.");
         if (!CertificateVerify.TryParse(message.Body.Span, out SignatureScheme scheme, out byte[] signature))
-            throw new InvalidOperationException("Ungültige CertificateVerify-Nachricht.");
+            throw new InvalidOperationException("Invalid CertificateVerify message.");
 
-        // Der signierte Transcript-Hash reicht bis einschließlich Certificate – also VOR dem Anhängen dieser Nachricht.
+        // The signed transcript hash extends up to and including Certificate – i.e. BEFORE appending this message.
         byte[] transcriptHash = _transcript!.CurrentHash();
         ServerCertificate = ServerCertificateValidator.Validate(
             _serverCertChain, scheme, signature, transcriptHash, _serverName, _validation);
@@ -261,7 +266,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
     private void ProcessServerHello(HandshakeMessage message)
     {
         if (!ServerHello.TryParse(message.Full.Span, out ServerHelloInfo? sh) || sh is null)
-            throw new InvalidOperationException("Ungültiger ServerHello.");
+            throw new InvalidOperationException("Invalid ServerHello.");
 
         NegotiatedCipherSuite = sh.CipherSuite;
 
@@ -272,15 +277,15 @@ public sealed class TlsClientHandshake : ITlsHandshake
         }
 
         if (sh.KeyShareGroup is not { } group || sh.KeySharePublicKey is null)
-            throw new InvalidOperationException("ServerHello ohne Key Share.");
+            throw new InvalidOperationException("ServerHello without a key share.");
         if (!_keyExchanges.TryGetValue(group, out IKeyExchange? kex))
-            throw new InvalidOperationException($"Server wählte nicht angebotene Gruppe {group}.");
+            throw new InvalidOperationException($"Server chose unoffered group {group}.");
 
-        // Hat der Server unser PSK-Angebot akzeptiert? Dann läuft der Handshake per Resumption (kein Zertifikat).
+        // Did the server accept our PSK offer? Then the handshake runs via resumption (no certificate).
         _pskAccepted = _resumptionTicket is not null && sh.SelectedPskIdentity == 0;
 
-        // Transcript beim ersten (nicht durch HRR ausgelösten) ServerHello anlegen. Bei Resumption ist _ks
-        // bereits mit der Ticket-Suite angelegt (für den Binder) und wird beibehalten.
+        // Create the transcript at the first (non-HRR-triggered) ServerHello. With resumption, _ks is
+        // already created with the ticket suite (for the binder) and is kept.
         if (_transcript is null)
         {
             _ks ??= new KeySchedule(sh.CipherSuite);
@@ -291,7 +296,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
 
         NegotiatedGroup = group;
         byte[] shared = kex.DeriveSharedSecret(sh.KeySharePublicKey);
-        // Bei akzeptierter Resumption fließt die PSK ins Early Secret ein (RFC 8446 §7.1).
+        // With accepted resumption, the PSK flows into the early secret (RFC 8446 §7.1).
         ReadOnlySpan<byte> psk = _pskAccepted ? _resumptionTicket!.Psk : default;
         HandshakeSecrets = _ks!.DeriveHandshakeSecrets(shared, _transcript.CurrentHash(), psk);
         _state = State.WaitServerFinished;
@@ -300,18 +305,18 @@ public sealed class TlsClientHandshake : ITlsHandshake
     private void HandleHelloRetryRequest(HandshakeMessage hrr, ServerHelloInfo sh)
     {
         if (_hrrHandled)
-            throw new InvalidOperationException("Zweiter HelloRetryRequest ist unzulässig.");
+            throw new InvalidOperationException("A second HelloRetryRequest is not permitted.");
         _hrrHandled = true;
 
         if (sh.KeyShareGroup is not { } group)
-            throw new InvalidOperationException("HRR ohne angeforderte Gruppe.");
+            throw new InvalidOperationException("HRR without a requested group.");
         if (!_supportedGroups.Contains(group) || !KeyExchange.IsSupported(group))
-            throw new InvalidOperationException($"HRR fordert nicht unterstützte Gruppe {group}.");
+            throw new InvalidOperationException($"HRR requests unsupported group {group}.");
 
         _ks = new KeySchedule(sh.CipherSuite);
         _transcript = new Transcript(_ks.Hash);
 
-        // RFC 8446 §4.4.1: ClientHello1 wird durch die synthetische message_hash-Nachricht ersetzt.
+        // RFC 8446 §4.4.1: ClientHello1 is replaced by the synthetic message_hash message.
         _transcript.Append(SyntheticMessageHash(_ks.TranscriptHash(_clientHello1), _ks.HashLength));
         _transcript.Append(hrr.Full.Span);
 
@@ -335,9 +340,9 @@ public sealed class TlsClientHandshake : ITlsHandshake
         Func<ReadOnlyMemory<byte>, byte[]>? computeBinder = null;
         if (_resumptionTicket is { } ticket && _ks is { } ks && _binderKey is { } binderKey)
         {
-            pskIdentity = new PskIdentity(ticket.Identity, ticket.ObfuscatedTicketAge(DateTimeOffset.UtcNow));
+            pskIdentity = new PskIdentity(ticket.Identity, ticket.ObfuscatedTicketAge(_timeProvider.GetUtcNow()));
             binderLength = ks.HashLength;
-            // Binder = HMAC(finished_key(binder_key), Transcript-Hash(abgeschnittener ClientHello)).
+            // Binder = HMAC(finished_key(binder_key), transcript hash(truncated ClientHello)).
             computeBinder = truncated => ks.FinishedVerifyData(binderKey, ks.TranscriptHash(truncated.Span));
         }
 
@@ -356,7 +361,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
     }
 
     /// <summary>
-    /// Die synthetische message_hash-Nachricht (RFC 8446 §4.4.1): Typ 0xFE ‖ 3-Byte-Länge ‖ Hash.
+    /// The synthetic message_hash message (RFC 8446 §4.4.1): type 0xFE ‖ 3-byte length ‖ hash.
     /// </summary>
     private static byte[] SyntheticMessageHash(byte[] hash, int hashLength)
     {
@@ -381,7 +386,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
             if (type == (ushort)ExtensionType.QuicTransportParameters)
                 PeerQuicTransportParameters = data.ToArray();
             else if (type == (ushort)ExtensionType.EarlyData)
-                EarlyDataAccepted = true; // Server bestätigt 0-RTT (RFC 8446 §4.2.10)
+                EarlyDataAccepted = true; // server confirms 0-RTT (RFC 8446 §4.2.10)
         }
     }
 
@@ -395,7 +400,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
     {
         byte[] transcriptThroughServerFinished = _transcript!.CurrentHash();
         ApplicationSecrets = _ks!.DeriveApplicationSecrets(HandshakeSecrets!.HandshakeSecret, transcriptThroughServerFinished);
-        // exporter_master_secret (RFC 8446 §7.1) über CH…server-Finished — für §7.5-Keying-Material-Exporte.
+        // exporter_master_secret (RFC 8446 §7.1) over CH…server Finished — for §7.5 keying-material exports.
         _exporterMasterSecret = _ks.ExporterMasterSecret(ApplicationSecrets.MasterSecret, transcriptThroughServerFinished);
 
         byte[] verifyData = _ks.FinishedVerifyData(HandshakeSecrets.ClientHandshakeTrafficSecret, transcriptThroughServerFinished);
@@ -403,8 +408,8 @@ public sealed class TlsClientHandshake : ITlsHandshake
         _outgoing.Enqueue((EncryptionLevel.Handshake, clientFinished));
         _transcript.Append(clientFinished);
 
-        // resumption_master_secret (RFC 8446 §7.1) über CH…client-Finished – Grundlage der später
-        // per NewSessionTicket ausgestellten Resumption-PSKs.
+        // resumption_master_secret (RFC 8446 §7.1) over CH…client Finished – the basis of the
+        // resumption PSKs issued later via NewSessionTicket.
         _resumptionMasterSecret = _ks.ResumptionMasterSecret(
             ApplicationSecrets.MasterSecret, _transcript.CurrentHash());
         _state = State.Complete;
@@ -413,14 +418,15 @@ public sealed class TlsClientHandshake : ITlsHandshake
     private void ProcessNewSessionTicket(HandshakeMessage message)
     {
         if (_resumptionMasterSecret is null || _ks is null || NegotiatedCipherSuite is not { } suite)
-            return; // vor Handshake-Abschluss ungültig
+            return; // invalid before handshake completion
         if (!Messages.NewSessionTicket.TryParse(message.Body.Span, out NewSessionTicketInfo? info) || info is null)
             return;
 
         byte[] psk = _ks.ResumptionPsk(_resumptionMasterSecret, info.Nonce);
         _newSessionTickets.Add(new ResumptionTicket(
             psk, info.Ticket, info.AgeAdd, suite, _serverName,
-            info.LifetimeSeconds, info.MaxEarlyDataSize, PeerQuicTransportParameters ?? []));
+            info.LifetimeSeconds, info.MaxEarlyDataSize, PeerQuicTransportParameters ?? [],
+            receivedAt: _timeProvider.GetUtcNow()));
     }
 
     public void Dispose()

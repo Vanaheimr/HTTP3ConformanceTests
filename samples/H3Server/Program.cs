@@ -30,34 +30,34 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 #endregion
 
 // ---------------------------------------------------------------------------------------------
-// H3Server: Ein minimaler HTTP/3-Server, from scratch. Lauscht auf UDP, führt den QUIC/TLS-1.3-
-// Server-Handshake (selbstsigniertes Zertifikat) und beantwortet GET-Anfragen. Test z. B. mit
+// H3Server: a minimal HTTP/3 server, from scratch. Listens on UDP, performs the QUIC/TLS 1.3
+// server handshake (self-signed certificate) and answers GET requests. Test e.g. with
 //   curl --http3-only -k https://localhost:4433/
-// oder mit dem eigenen Client (samples/H3Get).
+// or with our own client (samples/H3Get).
 // ---------------------------------------------------------------------------------------------
 
 int port = args.FirstOrDefault(a => int.TryParse(a, out _)) is { } portArg ? int.Parse(portArg) : 4433;
 
-// Optionaler kurzer Idle-Timeout (RFC 9000 §10.1) zum Vorführen des Reapings: --idle=<ms>.
+// Optional short idle timeout (RFC 9000 §10.1) to demonstrate reaping: --idle=<ms>.
 string? idleArg = args.FirstOrDefault(a => a.StartsWith("--idle=", StringComparison.Ordinal));
 ulong idleMs = idleArg is not null && ulong.TryParse(idleArg["--idle=".Length..], out ulong v) ? v : 30_000;
 var serverParams = new TransportParameters { MaxIdleTimeoutMs = idleMs };
 
-// Optionale Adressvalidierung per Retry (RFC 9000 §8.1): --retry.
+// Optional address validation via Retry (RFC 9000 §8.1): --retry.
 bool requireRetry = args.Contains("--retry");
 
-// Optional Graceful Shutdown vorführen (RFC 9114 §5.2): nach der ersten beantworteten Anfrage ein
-// GOAWAY senden, dann (einen Austausch später) mit H3_NO_ERROR schließen: --goaway.
+// Optionally demonstrate graceful shutdown (RFC 9114 §5.2): after the first answered request send a
+// GOAWAY, then (one exchange later) close with H3_NO_ERROR: --goaway.
 bool goAwayDemo = args.Contains("--goaway");
 
-// Optional ein Ed25519-, Ed448- oder ML-DSA-Serverzertifikat statt ECDSA-P-256:
-// --ed25519 / --ed448 (RFC 8032/8410) bzw. --mldsa (FIPS 204, Post-Quantum, draft-ietf-tls-mldsa).
+// Optionally an Ed25519, Ed448 or ML-DSA server certificate instead of ECDSA P-256:
+// --ed25519 / --ed448 (RFC 8032/8410) or --mldsa (FIPS 204, post-quantum, draft-ietf-tls-mldsa).
 bool useEd25519 = args.Contains("--ed25519");
 bool useEd448 = args.Contains("--ed448");
 bool useMLDsa = args.Contains("--mldsa");
 
-// Optional eine Named Group bevorzugen: --x448 (RFC 7748) oder --mlkem (PQ-Hybrid X25519MLKEM768).
-// Für normale Clients bleiben X25519/P-256 als Rückfall.
+// Optionally prefer a named group: --x448 (RFC 7748) or --mlkem (PQ hybrid X25519MLKEM768).
+// For normal clients X25519/P-256 remain as fallback.
 IReadOnlyList<NamedGroup>? preferGroups =
     args.Contains("--mlkem") ? [NamedGroup.X25519MlKem768, NamedGroup.X25519, NamedGroup.Secp256r1]
     : args.Contains("--x448") ? [NamedGroup.X448, NamedGroup.X25519, NamedGroup.Secp256r1]
@@ -68,34 +68,34 @@ using var certificate =
     : useEd448 ? ServerCertificate.CreateSelfSignedEd448("localhost")
     : useEd25519 ? ServerCertificate.CreateSelfSignedEd25519("localhost")
     : ServerCertificate.CreateSelfSigned("localhost");
-// Prozessweiter Ticket-Store für Session Resumption (RFC 8446 §4.6.1): eine Instanz für alle Verbindungen.
+// Process-wide ticket store for session resumption (RFC 8446 §4.6.1): one instance for all connections.
 var resumptionCache = new ServerResumptionCache();
 
-// Geheimnis für aus der CID ableitbare Stateless-Reset-Tokens (RFC 9000 §10.3.1). PERSISTIERT über Neustarts:
-// nur mit demselben Geheimnis kann ein neu gestarteter Server für vor dem Neustart aufgebaute Verbindungen
-// noch gültige (vom Client erkennbare) Resets senden. Standardpfad neben der Exe; via --secret-file= änderbar.
+// Secret for CID-derivable stateless-reset tokens (RFC 9000 §10.3.1). PERSISTS across restarts:
+// only with the same secret can a freshly restarted server still send valid (client-recognizable)
+// resets for connections built before the restart. Default path next to the exe; changeable via --secret-file=.
 string secretPath = args.FirstOrDefault(a => a.StartsWith("--secret-file=", StringComparison.Ordinal)) is { } sfArg
     ? sfArg["--secret-file=".Length..]
     : Path.Combine(AppContext.BaseDirectory, "stateless-reset-secret.bin");
 byte[] statelessResetSecret = LoadOrCreateSecret(secretPath, out bool secretCreated);
 var statelessResetTokens = new StatelessResetTokenGenerator(statelessResetSecret);
 
-Console.WriteLine($"== HTTP/3 from Scratch — Server auf UDP/{port} ==");
-Console.WriteLine($"Zertifikat: {certificate.Certificate.Subject} ({certificate.SignatureScheme}, Thumbprint {certificate.Certificate.Thumbprint[..16]}…)");
-Console.WriteLine($"Idle-Timeout: {idleMs} ms (angekündigt; effektiv mind. 3·PTO)");
-Console.WriteLine($"Stateless-Reset-Geheimnis: {secretPath} ({(secretCreated ? "neu erzeugt" : "geladen — überlebt Neustarts")})");
+Console.WriteLine($"== HTTP/3 from Scratch — server on UDP/{port} ==");
+Console.WriteLine($"Certificate: {certificate.Certificate.Subject} ({certificate.SignatureScheme}, thumbprint {certificate.Certificate.Thumbprint[..16]}…)");
+Console.WriteLine($"Idle timeout: {idleMs} ms (announced; effectively at least 3·PTO)");
+Console.WriteLine($"Stateless-reset secret: {secretPath} ({(secretCreated ? "newly created" : "loaded — survives restarts")})");
 if (requireRetry)
-    Console.WriteLine("Adressvalidierung: Retry aktiv (jede neue Verbindung erhält zuerst ein Retry)");
-Console.WriteLine("Warte auf HTTP/3-Clients … (Strg+C zum Beenden)\n");
+    Console.WriteLine("Address validation: Retry active (every new connection first receives a Retry)");
+Console.WriteLine("Waiting for HTTP/3 clients … (Ctrl+C to stop)\n");
 
 using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { ReceiveTimeout = 1000 };
 socket.Bind(new IPEndPoint(IPAddress.Any, port));
 
-// Verbindungen werden vorrangig über die Connection ID demultiplext (nicht über die Adresse), damit
-// eine Connection Migration (RFC 9000 §9) – ein Client, der die Adresse wechselt – dieselbe Verbindung trifft.
+// Connections are demultiplexed primarily via the connection ID (not via the address), so that a
+// connection migration (RFC 9000 §9) — a client changing its address — hits the same connection.
 var connections = new List<ServerConn>();
-var datagramEchoTunnels = new List<Http3Tunnel>(); // „datagram-echo"-Tunnel (RFC 9297): Echo in der Hauptschleife
-var webTransportSessions = new List<WebTransportSession>(); // WebTransport-Sessions: Echo in der Hauptschleife
+var datagramEchoTunnels = new List<Http3Tunnel>(); // "datagram-echo" tunnels (RFC 9297): echo in the main loop
+var webTransportSessions = new List<WebTransportSession>(); // WebTransport sessions: echo in the main loop
 var wtEchoStreams = new List<(WebTransportStream In, WebTransportStream? Reply)>();
 var wtEchoBuffers = new Dictionary<WebTransportStream, List<byte>>();
 byte[] buffer = new byte[2048];
@@ -110,7 +110,7 @@ while (true)
     }
     catch (SocketException)
     {
-        // Timeout: Timer aller Verbindungen prüfen (Loss Detection + Idle) und ggf. nachsenden.
+        // Timeout: check the timers of all connections (loss detection + idle) and resend if needed.
         foreach (ServerConn sc in connections)
         {
             sc.Connection.CheckTimeouts();
@@ -121,7 +121,7 @@ while (true)
         connections.RemoveAll(sc =>
         {
             if (!sc.Connection.IsIdleTimedOut) return false;
-            Console.WriteLine($"Verbindung von {sc.Endpoint} nach Idle-Timeout geschlossen.");
+            Console.WriteLine($"Connection from {sc.Endpoint} closed after idle timeout.");
             sc.Connection.Dispose();
             return true;
         });
@@ -130,90 +130,90 @@ while (true)
 
     ReadOnlySpan<byte> datagram = buffer.AsSpan(0, n);
 
-    // 1) Über die Ziel-Connection-ID finden (nach dem Handshake stabil, auch bei Adresswechsel).
+    // 1) Find via the destination connection ID (stable after the handshake, even on an address change).
     ServerConn? conn = ExtractDcid(datagram) is { } dcid
         ? connections.FirstOrDefault(c => c.Connection.OwnsConnectionId(dcid))
         : null;
-    // 2) Sonst über die Absenderadresse (Handshake / neue Verbindung).
+    // 2) Otherwise via the sender address (handshake / new connection).
     conn ??= connections.FirstOrDefault(c => c.Endpoint.Equals(from));
 
     if (conn is null)
     {
         byte first = datagram.Length > 0 ? datagram[0] : (byte)0;
 
-        // Ein 1-RTT-Paket (Short Header) zu unbekannter DCID gehört zu einer verlorenen Verbindung ⇒
-        // Stateless Reset senden (RFC 9000 §10.3), keine neue Verbindung öffnen.
+        // A 1-RTT packet (short header) for an unknown DCID belongs to a lost connection ⇒
+        // send a stateless reset (RFC 9000 §10.3), do not open a new connection.
         if (datagram.Length > 0 && PacketFormat.IsShortHeader(first))
         {
             if (StatelessReset.BuildResponse(datagram, localCidLength: 8, statelessResetTokens) is { } reset)
             {
                 socket.SendTo(reset, from);
-                Console.WriteLine($"Stateless Reset an {from} gesendet (unbekannte Connection ID, RFC 9000 §10.3).");
+                Console.WriteLine($"Stateless reset sent to {from} (unknown connection ID, RFC 9000 §10.3).");
             }
             continue;
         }
 
-        // Nur ein echtes Initial-Paket eröffnet eine neue Verbindung; andere Long-Header (Handshake/0-RTT) zu
-        // unbekannter Verbindung werden verworfen (RFC 9000 §5.2), damit sie nicht fälschlich eine Verbindung anlegen.
+        // Only a genuine Initial packet opens a new connection; other long headers (Handshake/0-RTT) for
+        // an unknown connection are dropped (RFC 9000 §5.2) so they do not wrongly create a connection.
         if (!PacketFormat.IsLongHeader(first) || PacketFormat.GetLongPacketType(first) != LongPacketType.Initial)
             continue;
 
         conn = new ServerConn(new Http3ServerConnection(certificate, Handle, serverParams, requireRetry,
             preferredGroups: preferGroups, resumptionCache: resumptionCache, maxEarlyDataSize: 0xFFFFFFFF,
             statelessResetTokens: statelessResetTokens,
-            maxFieldSectionSize: 16_384,        // RFC 9114 §4.2.2: zu große Request-Header ⇒ 431
-            connectHandler: HandleConnect,      // RFC 9220: WebSockets über Extended CONNECT
-            enableDatagrams: true,              // RFC 9297/9221: HTTP-Datagramme
+            maxFieldSectionSize: 16_384,        // RFC 9114 §4.2.2: oversized request headers ⇒ 431
+            connectHandler: HandleConnect,      // RFC 9220: WebSockets via Extended CONNECT
+            enableDatagrams: true,              // RFC 9297/9221: HTTP datagrams
             webTransportMaxSessions: 4,         // draft-webtrans-http3: WebTransport
             webTransportHandler: HandleWebTransport,
             webTransportProtocolSelector: SelectWebTransportProtocol), from); // draft §3.3
         connections.Add(conn);
-        Console.WriteLine($"Neue Verbindung von {from}");
+        Console.WriteLine($"New connection from {from}");
     }
     else if (!conn.Endpoint.Equals(from))
     {
-        // Connection Migration (RFC 9000 §9): bekannte Verbindung von neuer Adresse → neuen Pfad validieren.
-        Console.WriteLine($"Connection Migration: {conn.Endpoint} → {from} — validiere neuen Pfad (PATH_CHALLENGE) …");
+        // Connection migration (RFC 9000 §9): known connection from a new address → validate the new path.
+        Console.WriteLine($"Connection migration: {conn.Endpoint} → {from} — validating new path (PATH_CHALLENGE) …");
         conn.Endpoint = from;
         conn.Connection.InitiatePathValidation();
     }
 
     conn.Connection.ProcessDatagram(datagram);
 
-    // Graceful-Shutdown-Demo (RFC 9114 §5.2): erst GOAWAY ankündigen (und flushen), im NÄCHSTEN
-    // Austausch dann — sofern nichts mehr aussteht — anständig mit H3_NO_ERROR schließen.
+    // Graceful-shutdown demo (RFC 9114 §5.2): first announce GOAWAY (and flush), then in the NEXT
+    // exchange — provided nothing is outstanding — close decently with H3_NO_ERROR.
     if (goAwayDemo && !conn.Connection.IsClosing && !conn.Connection.IsDraining)
     {
         if (conn.GoAwayAnnounced && !conn.Connection.HasPendingRequests)
         {
-            Console.WriteLine("→ Alle angenommenen Requests bedient — CONNECTION_CLOSE (H3_NO_ERROR).");
+            Console.WriteLine("→ All accepted requests served — CONNECTION_CLOSE (H3_NO_ERROR).");
             conn.Connection.CloseGracefully();
         }
         else if (conn.Connection.RequestsHandled > 0 && conn.Connection.GoAwaySent is null)
         {
             conn.Connection.InitiateGracefulShutdown();
             conn.GoAwayAnnounced = true;
-            Console.WriteLine($"→ GOAWAY gesendet (Grenze: Stream-ID {conn.Connection.GoAwaySent}) — Graceful Shutdown (RFC 9114 §5.2).");
+            Console.WriteLine($"→ GOAWAY sent (limit: stream ID {conn.Connection.GoAwaySent}) — graceful shutdown (RFC 9114 §5.2).");
         }
     }
 
-    // „datagram-echo"-Tunnel bedienen (RFC 9297): empfangene HTTP-Datagramme zurückspiegeln.
+    // Serve "datagram-echo" tunnels (RFC 9297): mirror received HTTP datagrams back.
     foreach (Http3Tunnel echoTunnel in datagramEchoTunnels)
         while (echoTunnel.TryReceiveDatagram(out byte[]? payload) && payload is not null)
         {
-            Console.WriteLine($"  ← HTTP-Datagramm ({payload.Length} Bytes) — Echo zurück (unzuverlässig, RFC 9297).");
+            Console.WriteLine($"  ← HTTP datagram ({payload.Length} bytes) — echoing back (unreliable, RFC 9297).");
             echoTunnel.TrySendDatagram(payload);
         }
 
-    // WebTransport-Sessions bedienen: Datagramme + eingehende Streams zurückspiegeln (Echo).
+    // Serve WebTransport sessions: mirror datagrams + incoming streams back (echo).
     foreach (WebTransportSession wt in webTransportSessions)
     {
         while (wt.TryReceiveDatagram(out byte[]? dgram) && dgram is not null)
         {
-            Console.WriteLine($"  ← WT-Datagramm ({dgram.Length} Bytes) — Echo.");
+            Console.WriteLine($"  ← WT datagram ({dgram.Length} bytes) — echo.");
             wt.SendDatagram(dgram);
         }
-        // Eingehende uni-/bidi-Streams annehmen und den Rumpf zurückschicken.
+        // Accept incoming uni/bidi streams and send the body back.
         while (wt.AcceptUnidirectionalStream() is { } uni)
             wtEchoStreams.Add((uni, null));
         while (wt.AcceptBidirectionalStream() is { } bidi)
@@ -227,8 +227,8 @@ while (true)
         if (inStream.IsReceiveComplete)
         {
             byte[] body = [.. wtEchoBuffers[inStream]];
-            Console.WriteLine($"  ← WT-Stream ({(reply is null ? "uni" : "bidi")}, {body.Length} Bytes: „{Encoding.UTF8.GetString(body)}\")");
-            if (reply is not null) { reply.Write(body); reply.Finish(); } // bidi ⇒ Echo zurück
+            Console.WriteLine($"  ← WT stream ({(reply is null ? "uni" : "bidi")}, {body.Length} bytes: \"{Encoding.UTF8.GetString(body)}\")");
+            if (reply is not null) { reply.Write(body); reply.Finish(); } // bidi ⇒ echo back
             wtEchoBuffers.Remove(inStream);
             wtEchoStreams.RemoveAt(i);
         }
@@ -240,20 +240,20 @@ while (true)
     if (conn.Connection.PathValidated && !conn.PathAnnounced)
     {
         conn.PathAnnounced = true;
-        Console.WriteLine($"  ✓ Neuer Pfad {conn.Endpoint} validiert (PATH_RESPONSE erhalten).");
+        Console.WriteLine($"  ✓ New path {conn.Endpoint} validated (PATH_RESPONSE received).");
     }
 
-    // Anständiger Abbau (RFC 9000 §10.2): Peer hat CONNECTION_CLOSE gesendet → Draining → aussortieren.
+    // Decent teardown (RFC 9000 §10.2): the peer sent CONNECTION_CLOSE → draining → weed out.
     if (conn.Connection.IsDraining)
     {
-        string reason = conn.Connection.PeerCloseFrame?.ReasonPhrase is { Length: > 0 } r ? $" – „{r}\"" : "";
-        Console.WriteLine($"Peer {conn.Endpoint} schloss die Verbindung (Fehlercode {conn.Connection.PeerCloseFrame?.ErrorCode}){reason}.");
+        string reason = conn.Connection.PeerCloseFrame?.ReasonPhrase is { Length: > 0 } r ? $" — \"{r}\"" : "";
+        Console.WriteLine($"Peer {conn.Endpoint} closed the connection (error code {conn.Connection.PeerCloseFrame?.ErrorCode}){reason}.");
         conn.Connection.Dispose();
         connections.Remove(conn);
     }
 }
 
-// Extrahiert die (versionsunabhängige) Destination Connection ID eines Datagramms; lokale CIDs sind 8 Byte.
+// Extracts the (version-independent) destination connection ID of a datagram; local CIDs are 8 bytes.
 static ConnectionId? ExtractDcid(ReadOnlySpan<byte> datagram)
 {
     if (datagram.IsEmpty)
@@ -264,9 +264,9 @@ static ConnectionId? ExtractDcid(ReadOnlySpan<byte> datagram)
     return datagram.Length >= 1 + localCidLength ? new ConnectionId(datagram.Slice(1, localCidLength)) : null;
 }
 
-// Lädt das 32-Byte-Stateless-Reset-Geheimnis aus <paramref name="path"/> oder erzeugt und speichert es neu.
-// Über Neustarts hinweg stabil, damit die aus der CID abgeleiteten Tokens (RFC 9000 §10.3.1) gleich bleiben.
-// Sicherheitshinweis: Die Datei ist ein kryptografisches Geheimnis (wer sie hat, kann Resets fälschen).
+// Loads the 32-byte stateless-reset secret from <paramref name="path"/> or creates and stores a new one.
+// Stable across restarts, so that the tokens derived from the CID (RFC 9000 §10.3.1) stay the same.
+// Security note: the file is a cryptographic secret (whoever has it can forge resets).
 static byte[] LoadOrCreateSecret(string path, out bool created)
 {
     if (File.Exists(path))
@@ -284,8 +284,8 @@ static byte[] LoadOrCreateSecret(string path, out bool created)
     return fresh;
 }
 
-// Extended CONNECT (RFC 8441/9220): :protocol „websocket" ⇒ WebSocket-Echo über den Tunnel;
-// „datagram-echo" ⇒ HTTP-Datagramme (RFC 9297) zurückspiegeln; alles andere ⇒ 501 (RFC 9220 §3 SHOULD).
+// Extended CONNECT (RFC 8441/9220): :protocol "websocket" ⇒ WebSocket echo over the tunnel;
+// "datagram-echo" ⇒ mirror HTTP datagrams back (RFC 9297); everything else ⇒ 501 (RFC 9220 §3 SHOULD).
 Http3ConnectResult HandleConnect(Http3Request request)
 {
     Console.WriteLine($"  → CONNECT :protocol={request.Protocol}  (:path={request.Path})");
@@ -294,7 +294,7 @@ Http3ConnectResult HandleConnect(Http3Request request)
         return new Http3ConnectResult
         {
             Status = 200,
-            OnTunnel = tunnel => datagramEchoTunnels.Add(tunnel), // Echo übernimmt die Hauptschleife
+            OnTunnel = tunnel => datagramEchoTunnels.Add(tunnel), // the main loop takes over the echo
         };
 
     if (request.Protocol != "websocket")
@@ -316,7 +316,7 @@ Http3ConnectResult HandleConnect(Http3Request request)
     };
 }
 
-// RFC-6455-Echo: Text-/Binärnachrichten zurückspiegeln, bis der Close-Handshake (oder ein FIN) endet.
+// RFC 6455 echo: mirror text/binary messages back until the close handshake (or a FIN) ends it.
 static async Task EchoWebSocket(WebSocketConnection ws, Http3Tunnel tunnel)
 {
     while (await ws.ReceiveAsync(CancellationToken.None) is { } message)
@@ -324,17 +324,17 @@ static async Task EchoWebSocket(WebSocketConnection ws, Http3Tunnel tunnel)
         if (message.Opcode == WebSocketOpcode.Text)
         {
             string text = Encoding.UTF8.GetString(message.Payload);
-            Console.WriteLine($"  ← WebSocket-Text: „{text}\" — Echo zurück.");
+            Console.WriteLine($"  ← WebSocket text: \"{text}\" — echoing back.");
             await ws.SendTextAsync(text, CancellationToken.None);
         }
         else
             await ws.SendBinaryAsync(message.Payload, CancellationToken.None);
     }
-    tunnel.Complete(); // geordnetes Tunnel-Ende (FIN ≙ TCP-Close, RFC 9220 §3)
-    Console.WriteLine("  ✓ WebSocket geschlossen (Close-Handshake vollzogen).");
+    tunnel.Complete(); // orderly tunnel end (FIN ≙ TCP close, RFC 9220 §3)
+    Console.WriteLine("  ✓ WebSocket closed (close handshake performed).");
 }
 
-// WebTransport (draft-webtrans-http3): /wt annehmen, sonst 404. Echo für Datagramme + eingehende Streams.
+// WebTransport (draft-webtrans-http3): accept /wt, otherwise 404. Echo for datagrams + incoming streams.
 Action<WebTransportSession>? HandleWebTransport(Http3Request request)
 {
     Console.WriteLine($"  → WebTransport CONNECT :path={request.Path}");
@@ -343,16 +343,16 @@ Action<WebTransportSession>? HandleWebTransport(Http3Request request)
     return session =>
     {
         webTransportSessions.Add(session);
-        Console.WriteLine($"  ✓ WebTransport-Session {session.SessionId} etabliert"
+        Console.WriteLine($"  ✓ WebTransport session {session.SessionId} established"
                           + (session.NegotiatedProtocol is { } p ? $" (WT-Protocol: {p})." : "."));
-        // Keying-Material-Exporter (draft §4.7): muss byte-genau mit dem Client übereinstimmen.
+        // Keying-material exporter (draft §4.7): must match the client byte for byte.
         byte[] ekm = session.ExportKeyingMaterial("demo-export", [1, 2, 3], 16);
-        Console.WriteLine($"  → Keying-Material-Export (Label \"demo-export\"): {Convert.ToHexString(ekm).ToLowerInvariant()}");
+        Console.WriteLine($"  → Keying-material export (label \"demo-export\"): {Convert.ToHexString(ekm).ToLowerInvariant()}");
     };
 }
 
-// Protokoll-Aushandlung (draft-webtrans-http3 §3.3): wir sprechen echo-v2/echo-v1 — die Angebotsliste
-// des Clients ist nach Präferenz sortiert, also gewinnt sein bestes von uns unterstütztes Angebot.
+// Protocol negotiation (draft-webtrans-http3 §3.3): we speak echo-v2/echo-v1 — the client's offer
+// list is sorted by preference, so its best offer that we support wins.
 static string? SelectWebTransportProtocol(Http3Request request, IReadOnlyList<string> offered)
 {
     Console.WriteLine($"  → WT-Available-Protocols: {string.Join(", ", offered)}");
@@ -362,9 +362,9 @@ static string? SelectWebTransportProtocol(Http3Request request, IReadOnlyList<st
 static Http3Response Handle(Http3Request request)
 {
     Console.WriteLine($"  → {request.Method} {request.Path}  (:authority={request.Authority}"
-                      + (request.Body.Length > 0 ? $", Rumpf {request.Body.Length} Bytes" : "") + ")");
+                      + (request.Body.Length > 0 ? $", body {request.Body.Length} bytes" : "") + ")");
 
-    // GET /big: ~300 KB deterministischer Rumpf — Spielwiese für Priorisierung (RFC 9218) und Transfers.
+    // GET /big: ~300 KB deterministic body — playground for prioritization (RFC 9218) and transfers.
     if (request.Path == "/big")
     {
         byte[] bigBody = new byte[300_000];
@@ -378,11 +378,11 @@ static Http3Response Handle(Http3Request request)
         };
     }
 
-    // GET /hints: 103 Early Hints (Interim-Response, RFC 9110 §15.2.2) vor der finalen Antwort und
-    // eine Trailer-Sektion mit Prüfsumme danach (RFC 9114 §4.1: HEADERS(1xx) → HEADERS → DATA → HEADERS).
+    // GET /hints: 103 Early Hints (interim response, RFC 9110 §15.2.2) before the final response and
+    // a trailer section with a checksum after it (RFC 9114 §4.1: HEADERS(1xx) → HEADERS → DATA → HEADERS).
     if (request.Path == "/hints")
     {
-        byte[] hintsBody = Encoding.UTF8.GetBytes("<html><head><title>Early Hints</title></head><body>Rumpf nach 103.</body></html>");
+        byte[] hintsBody = Encoding.UTF8.GetBytes("<html><head><title>Early Hints</title></head><body>Body after 103.</body></html>");
         return new Http3Response
         {
             Status = 200,
@@ -394,7 +394,7 @@ static Http3Response Handle(Http3Request request)
         };
     }
 
-    // POST /echo: den Request-Rumpf byte-genau zurückspiegeln (RFC 9114 §4.1 — Content in DATA-Frames).
+    // POST /echo: mirror the request body back byte for byte (RFC 9114 §4.1 — content in DATA frames).
     if (request.Method == "POST" && request.Path == "/echo")
         return new Http3Response
         {
@@ -412,9 +412,9 @@ static Http3Response Handle(Http3Request request)
         <!DOCTYPE html>
         <html><head><title>HTTP/3 from Scratch</title></head>
         <body>
-          <h1>Hallo von einem selbstgebauten HTTP/3-Server!</h1>
-          <p>Du hast <code>{request.Method} {request.Path}</code> angefragt.</p>
-          <p>QUIC + TLS 1.3 + QPACK + HTTP/3 — alles from scratch auf .NET, nur BCL.</p>
+          <h1>Hello from a hand-built HTTP/3 server!</h1>
+          <p>You requested <code>{request.Method} {request.Path}</code>.</p>
+          <p>QUIC + TLS 1.3 + QPACK + HTTP/3 — all from scratch on .NET, BCL only.</p>
         </body></html>
         """;
     return new Http3Response
@@ -425,11 +425,11 @@ static Http3Response Handle(Http3Request request)
     };
 }
 
-// Eine Serververbindung samt aktueller Peer-Adresse (die sich bei Migration ändern kann).
+// A server connection together with its current peer address (which may change on migration).
 sealed class ServerConn(Http3ServerConnection connection, EndPoint endpoint)
 {
     public Http3ServerConnection Connection { get; } = connection;
     public EndPoint Endpoint { get; set; } = endpoint;
     public bool PathAnnounced { get; set; }
-    public bool GoAwayAnnounced { get; set; } // GOAWAY bereits gesendet (Graceful-Shutdown-Demo)
+    public bool GoAwayAnnounced { get; set; } // GOAWAY already sent (graceful-shutdown demo)
 }

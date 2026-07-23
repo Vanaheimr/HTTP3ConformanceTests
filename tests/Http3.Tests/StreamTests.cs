@@ -43,10 +43,10 @@ public class StreamIdTests
     [Test]
     public void Create_ProducesExpectedStreamIds()
     {
-        Assert.That(StreamId.Create(true, true, 0).Value, Is.EqualTo(0UL));   // erster Client-Bidi
-        Assert.That(StreamId.Create(true, true, 1).Value, Is.EqualTo(4UL));   // zweiter Client-Bidi
-        Assert.That(StreamId.Create(true, false, 0).Value, Is.EqualTo(2UL));  // erster Client-Uni (Control)
-        Assert.That(StreamId.Create(false, false, 0).Value, Is.EqualTo(3UL)); // erster Server-Uni
+        Assert.That(StreamId.Create(true, true, 0).Value, Is.EqualTo(0UL));   // first client bidi
+        Assert.That(StreamId.Create(true, true, 1).Value, Is.EqualTo(4UL));   // second client bidi
+        Assert.That(StreamId.Create(true, false, 0).Value, Is.EqualTo(2UL));  // first client uni (control)
+        Assert.That(StreamId.Create(false, false, 0).Value, Is.EqualTo(3UL)); // first server uni
     }
 }
 
@@ -56,9 +56,9 @@ public class StreamReceiveBufferTests
     public void ReassemblesOutOfOrder_AndTracksFin()
     {
         var buf = new StreamReceiveBuffer();
-        Assert.That(buf.Receive(3, [0x33, 0x44], fin: true), Is.EqualTo(StreamReceiveResult.Ok));  // Ende zuerst
-        Assert.That(buf.ReadAvailable(), Is.Empty);                                              // Lücke -> nichts lesbar
-        Assert.That(buf.Receive(0, [0x00, 0x11, 0x22], false), Is.EqualTo(StreamReceiveResult.Ok)); // Lücke schließen
+        Assert.That(buf.Receive(3, [0x33, 0x44], fin: true), Is.EqualTo(StreamReceiveResult.Ok));  // end first
+        Assert.That(buf.ReadAvailable(), Is.Empty);                                              // gap -> nothing readable
+        Assert.That(buf.Receive(0, [0x00, 0x11, 0x22], false), Is.EqualTo(StreamReceiveResult.Ok)); // close the gap
 
         Assert.That(buf.ReadAvailable(), Is.EqualTo(new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44 }));
         Assert.That(buf.FinReceived, Is.True);
@@ -70,7 +70,7 @@ public class StreamReceiveBufferTests
     {
         var buf = new StreamReceiveBuffer();
         buf.Receive(0, [1, 2, 3], false);
-        buf.Receive(2, [3, 4, 5], false); // überlappt bei Offset 2
+        buf.Receive(2, [3, 4, 5], false); // overlaps at offset 2
         Assert.That(buf.ReadAvailable(), Is.EqualTo(new byte[] { 1, 2, 3, 4, 5 }));
     }
 
@@ -78,15 +78,15 @@ public class StreamReceiveBufferTests
     public void ExceedingFlowControlLimit_ReportsError()
     {
         var buf = new StreamReceiveBuffer { MaxData = 4 };
-        Assert.That(buf.Receive(2, [1, 2, 3], false), Is.EqualTo(StreamReceiveResult.FlowControlError)); // Ende bei 5 > 4
+        Assert.That(buf.Receive(2, [1, 2, 3], false), Is.EqualTo(StreamReceiveResult.FlowControlError)); // end at 5 > 4
     }
 
     [Test]
     public void ConflictingFinalSize_ReportsError()
     {
         var buf = new StreamReceiveBuffer();
-        buf.Receive(0, [1, 2, 3], fin: true);          // Final Size = 3
-        Assert.That(buf.Receive(3, [4, 5], fin: true), Is.EqualTo(StreamReceiveResult.FinalSizeError)); // Final Size = 5
+        buf.Receive(0, [1, 2, 3], fin: true);          // final size = 3
+        Assert.That(buf.Receive(3, [4, 5], fin: true), Is.EqualTo(StreamReceiveResult.FinalSizeError)); // final size = 5
     }
 }
 
@@ -100,11 +100,11 @@ public class StreamSendBufferTests
 
         StreamFrame? f1 = send.NextFrame(maxPayload: 10);
         Assert.That(f1, Is.Not.Null);
-        Assert.That(f1!.Data.ToArray(), Is.EqualTo(new byte[] { 1, 2, 3 })); // durch MaxData=3 begrenzt
+        Assert.That(f1!.Data.ToArray(), Is.EqualTo(new byte[] { 1, 2, 3 })); // limited by MaxData=3
         Assert.That(f1.Offset, Is.EqualTo(0UL));
-        Assert.That(send.IsBlocked, Is.True);                              // Rest wartet auf Kredit
+        Assert.That(send.IsBlocked, Is.True);                              // the rest waits for credit
 
-        send.MaxData = 5; // MAX_STREAM_DATA erhöht das Fenster
+        send.MaxData = 5; // MAX_STREAM_DATA raises the window
         StreamFrame? f2 = send.NextFrame(10);
         Assert.That(f2!.Data.ToArray(), Is.EqualTo(new byte[] { 4, 5 }));
         Assert.That(f2.Offset, Is.EqualTo(3UL));
@@ -123,7 +123,7 @@ public class StreamSendBufferTests
 
         StreamFrame? f2 = send.NextFrame(maxPayload: 100);
         Assert.That(f2!.Data.ToArray(), Is.EqualTo(new byte[] { 3, 4 }));
-        Assert.That(f2.Fin, Is.True); // letztes Frame trägt das FIN
+        Assert.That(f2.Fin, Is.True); // the last frame carries the FIN
         Assert.That(send.NextFrame(100), Is.Null);
     }
 }

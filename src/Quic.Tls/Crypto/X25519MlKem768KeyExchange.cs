@@ -24,33 +24,33 @@ using System.Security.Cryptography;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// Post-Quantum-Hybrid <c>X25519MLKEM768</c> (Named Group 0x11EC, draft-ietf-tls-ecdhe-mlkem): kombiniert
-/// den klassischen X25519-Schlüsselaustausch (BouncyCastle) mit dem ML-KEM-768-KEM (FIPS 203, in der BCL von
-/// .NET 10 nativ als <see cref="MLKem"/>). Motivation: „harvest now, decrypt later" — selbst wenn X25519
-/// später durch einen Quantencomputer fällt, schützt ML-KEM das Geheimnis; und selbst wenn ML-KEM eine
-/// klassische Schwäche hätte, schützt X25519. Chrome/Firefox/Cloudflare fahren den Hybrid seit 2024/25.
+/// Post-quantum hybrid <c>X25519MLKEM768</c> (named group 0x11EC, draft-ietf-tls-ecdhe-mlkem): combines
+/// the classic X25519 key exchange (BouncyCastle) with the ML-KEM-768 KEM (FIPS 203, native in the BCL
+/// of .NET 10 as <see cref="MLKem"/>). Motivation: "harvest now, decrypt later" — even if X25519
+/// later falls to a quantum computer, ML-KEM protects the secret; and even if ML-KEM had a
+/// classical weakness, X25519 protects it. Chrome/Firefox/Cloudflare have run the hybrid since 2024/25.
 /// <para>
-/// Anders als reines (EC)DHE ist ein KEM asymmetrisch: der Client sendet einen ML-KEM-Encapsulation-Key und
-/// <b>decapsuliert</b> später den Ciphertext des Servers; der Server <b>encapsuliert</b> gegen den Client-Key
-/// (<see cref="Encapsulate"/>). Reihenfolge laut Draft für <c>X25519MLKEM768</c>: ML-KEM-Teil zuerst, dann
-/// X25519 — sowohl in den Key Shares als auch im gemeinsamen Geheimnis.
+/// Unlike pure (EC)DHE, a KEM is asymmetric: the client sends an ML-KEM encapsulation key and later
+/// <b>decapsulates</b> the server's ciphertext; the server <b>encapsulates</b> against the client key
+/// (<see cref="Encapsulate"/>). Order per the draft for <c>X25519MLKEM768</c>: ML-KEM part first, then
+/// X25519 — both in the key shares and in the shared secret.
 /// </para>
 /// </summary>
 public sealed class X25519MlKem768KeyExchange : IKeyExchange
 {
-    // Feste Größen für ML-KEM-768 (FIPS 203) und X25519.
+    // Fixed sizes for ML-KEM-768 (FIPS 203) and X25519.
     private const int MlKemEncapsulationKeyLength = 1184;
     private const int MlKemCiphertextLength = 1088;
     private const int MlKemSharedSecretLength = 32;
     private const int X25519KeyLength = 32;
 
-    private readonly MLKem _mlKem;                 // Client-Rolle: hält den Decapsulation-Key
+    private readonly MLKem _mlKem;                 // client role: holds the decapsulation key
     private readonly X25519KeyExchange _x25519;
 
     public NamedGroup Group => NamedGroup.X25519MlKem768;
 
     /// <summary>
-    /// Der angebotene Key Share des Clients: ML-KEM-Encapsulation-Key (1184) ‖ X25519-Public-Key (32) = 1216 Byte.
+    /// The client's offered key share: ML-KEM encapsulation key (1184) ‖ X25519 public key (32) = 1216 bytes.
     /// </summary>
     public byte[] PublicKey { get; }
 
@@ -65,14 +65,14 @@ public sealed class X25519MlKem768KeyExchange : IKeyExchange
     }
 
     /// <summary>
-    /// Client-Seite: aus dem Server-Share (ML-KEM-Ciphertext ‖ X25519-Public-Key) das Geheimnis ableiten —
-    /// ML-KEM decapsulieren und X25519 rechnen. Ergebnis: ML-KEM-Secret (32) ‖ X25519-Secret (32) = 64 Byte.
+    /// Client side: derive the secret from the server share (ML-KEM ciphertext ‖ X25519 public key) —
+    /// decapsulate ML-KEM and compute X25519. Result: ML-KEM secret (32) ‖ X25519 secret (32) = 64 bytes.
     /// </summary>
     public byte[] DeriveSharedSecret(ReadOnlySpan<byte> peerShare)
     {
         if (peerShare.Length != MlKemCiphertextLength + X25519KeyLength)
             throw new ArgumentException(
-                $"X25519MLKEM768-Server-Share muss {MlKemCiphertextLength + X25519KeyLength} Byte lang sein.", nameof(peerShare));
+                $"X25519MLKEM768 server share must be {MlKemCiphertextLength + X25519KeyLength} bytes long.", nameof(peerShare));
 
         byte[] mlKemSecret = _mlKem.Decapsulate(peerShare[..MlKemCiphertextLength].ToArray());
         byte[] x25519Secret = _x25519.DeriveSharedSecret(peerShare[MlKemCiphertextLength..]);
@@ -80,15 +80,15 @@ public sealed class X25519MlKem768KeyExchange : IKeyExchange
     }
 
     /// <summary>
-    /// Server-Seite: gegen den Client-Share (ML-KEM-Encapsulation-Key ‖ X25519-Public-Key) encapsulieren.
-    /// Liefert die Antwort (ML-KEM-Ciphertext (1088) ‖ eigener X25519-Public-Key (32) = 1120 Byte) und das
-    /// Geheimnis (ML-KEM-Secret (32) ‖ X25519-Secret (32) = 64 Byte).
+    /// Server side: encapsulate against the client share (ML-KEM encapsulation key ‖ X25519 public key).
+    /// Returns the response (ML-KEM ciphertext (1088) ‖ own X25519 public key (32) = 1120 bytes) and the
+    /// secret (ML-KEM secret (32) ‖ X25519 secret (32) = 64 bytes).
     /// </summary>
     public (byte[] ResponseShare, byte[] SharedSecret) Encapsulate(ReadOnlySpan<byte> peerShare)
     {
         if (peerShare.Length != MlKemEncapsulationKeyLength + X25519KeyLength)
             throw new ArgumentException(
-                $"X25519MLKEM768-Client-Share muss {MlKemEncapsulationKeyLength + X25519KeyLength} Byte lang sein.", nameof(peerShare));
+                $"X25519MLKEM768 client share must be {MlKemEncapsulationKeyLength + X25519KeyLength} bytes long.", nameof(peerShare));
 
         using MLKem peerKem = MLKem.ImportEncapsulationKey(
             MLKemAlgorithm.MLKem768, peerShare[..MlKemEncapsulationKeyLength]);

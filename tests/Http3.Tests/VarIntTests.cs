@@ -26,13 +26,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 [TestFixture]
 public class VarIntTests
 {
-    // Testvektoren aus RFC 9000, Appendix A.1 ("Sample Variable-Length Integer Decoding").
-    // Format: Hex-Wire-Bytes -> erwarteter Dezimalwert.
-        [TestCase("c2197c5eff14e88c", 151288809941952652UL)] // 8-Byte
-    [TestCase("9d7f3e7d", 494878333UL)]                    // 4-Byte
-    [TestCase("7bbd", 15293UL)]                             // 2-Byte
-    [TestCase("25", 37UL)]                                  // 1-Byte
-    [TestCase("4025", 37UL)]                                // 2-Byte, aber Wert 37 (nicht-minimale Kodierung)
+    // Test vectors from RFC 9000, Appendix A.1 ("Sample Variable-Length Integer Decoding").
+    // Format: hex wire bytes -> expected decimal value.
+        [TestCase("c2197c5eff14e88c", 151288809941952652UL)] // 8-byte
+    [TestCase("9d7f3e7d", 494878333UL)]                    // 4-byte
+    [TestCase("7bbd", 15293UL)]                             // 2-byte
+    [TestCase("25", 37UL)]                                  // 1-byte
+    [TestCase("4025", 37UL)]                                // 2-byte, but value 37 (non-minimal encoding)
     public void Decode_RfcSampleVectors(string hex, ulong expected)
     {
         byte[] bytes = Convert.FromHexString(hex);
@@ -92,7 +92,7 @@ public class VarIntTests
     [Test]
     public void TryRead_ReturnsFalse_WhenTruncated()
     {
-        // Erstes Byte kündigt 4 Bytes an, es liegt aber nur eines vor.
+        // The first byte announces 4 bytes, but only one is present.
         byte[] truncated = [0x9d];
 
         Assert.That(VarInt.TryRead(truncated, out _, out _), Is.False);

@@ -24,15 +24,15 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// STREAM-Frame (Typ 0x08..0x0f, RFC 9000 §19.8): trägt Anwendungs-Stream-Daten. Die unteren drei
-/// Bits des Typs sind Flags: OFF (0x04) = Offset-Feld vorhanden, LEN (0x02) = Length-Feld vorhanden,
-/// FIN (0x01) = Stream-Ende.
+/// STREAM frame (type 0x08..0x0f, RFC 9000 §19.8): carries application stream data. The lower three
+/// bits of the type are flags: OFF (0x04) = offset field present, LEN (0x02) = length field present,
+/// FIN (0x01) = end of stream.
 /// </summary>
 public sealed record StreamFrame(ulong StreamId, ulong Offset, ReadOnlyMemory<byte> Data, bool Fin) : Frame
 {
     public override void Write(ref BufferWriter writer)
     {
-        // Wir schreiben stets mit LEN-Bit (explizite Länge) – robust auch bei Coalescing mit Folge-Frames.
+        // We always write with the LEN bit (explicit length) – robust even when coalescing with following frames.
         byte type = (byte)FrameType.StreamBase;
         if (Offset != 0) type |= FrameType.StreamOffBit;
         type |= FrameType.StreamLenBit;
@@ -47,7 +47,7 @@ public sealed record StreamFrame(ulong StreamId, ulong Offset, ReadOnlyMemory<by
     }
 
     /// <summary>
-    /// Parst den Frame-Rumpf. <paramref name="type"/> ist das bereits gelesene Typ-Byte (mit Flags).
+    /// Parses the frame body. <paramref name="type"/> is the already-read type byte (with flags).
     /// </summary>
     public static bool TryReadBody(ref BufferReader reader, byte type, out StreamFrame? frame)
     {
@@ -72,7 +72,7 @@ public sealed record StreamFrame(ulong StreamId, ulong Offset, ReadOnlyMemory<by
         }
         else
         {
-            // Ohne LEN-Bit reicht die Stream-Data bis zum Paketende.
+            // Without the LEN bit, the stream data extends to the end of the packet.
             length = reader.Remaining;
         }
 

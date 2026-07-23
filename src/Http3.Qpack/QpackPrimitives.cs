@@ -25,14 +25,14 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// Die Kodier-Primitive von QPACK/HPACK: Integer mit N-Bit-Präfix (RFC 7541 §5.1) und
-/// längenpräfigierte Strings mit optionaler Huffman-Kodierung (§5.2).
+/// The encoding primitives of QPACK/HPACK: integers with an N-bit prefix (RFC 7541 §5.1) and
+/// length-prefixed strings with optional Huffman encoding (§5.2).
 /// </summary>
 internal static class QpackPrimitives
 {
     /// <summary>
-    /// Kodiert eine Ganzzahl mit <paramref name="prefixBits"/>-Bit-Präfix. <paramref name="prefixPattern"/>
-    /// enthält die höherwertigen Typ-Bits, die im ersten Byte über dem Präfix stehen.
+    /// Encodes an integer with an <paramref name="prefixBits"/>-bit prefix. <paramref name="prefixPattern"/>
+    /// contains the higher-order type bits that sit above the prefix in the first byte.
     /// </summary>
     public static void EncodeInteger(ref BufferWriter writer, ulong value, int prefixBits, byte prefixPattern)
     {
@@ -54,8 +54,8 @@ internal static class QpackPrimitives
     }
 
     /// <summary>
-    /// Dekodiert eine Ganzzahl mit N-Bit-Präfix. <paramref name="firstByte"/> ist das bereits gelesene
-    /// erste Byte; die niederwertigen <paramref name="prefixBits"/> Bits bilden den Startwert.
+    /// Decodes an integer with an N-bit prefix. <paramref name="firstByte"/> is the already-read
+    /// first byte; the low-order <paramref name="prefixBits"/> bits form the starting value.
     /// </summary>
     public static bool TryDecodeInteger(ref BufferReader reader, byte firstByte, int prefixBits, out ulong value)
     {
@@ -74,20 +74,20 @@ internal static class QpackPrimitives
                 return true;
             shift += 7;
             if (shift > 62)
-                return false; // Schutz gegen überlange Kodierung
+                return false; // protection against overlong encoding
         }
     }
 
     /// <summary>
-    /// Schreibt einen String (Name oder Wert): 1 Bit Huffman-Flag + <paramref name="prefixBits"/>-Bit-
-    /// Längenpräfix, dann die (ggf. Huffman-kodierten) Bytes. Huffman wird gewählt, wenn es kürzer ist.
+    /// Writes a string (name or value): 1 Huffman flag bit + an <paramref name="prefixBits"/>-bit
+    /// length prefix, then the (possibly Huffman-encoded) bytes. Huffman is chosen when it is shorter.
     /// </summary>
     public static void EncodeString(ref BufferWriter writer, string value, int prefixBits, byte prefixPattern)
     {
         byte[] raw = Encoding.ASCII.GetBytes(value);
         int huffmanLength = Huffman.EncodedLength(raw);
 
-        byte huffmanBit = (byte)(1 << prefixBits); // das Bit direkt über dem Längenpräfix
+        byte huffmanBit = (byte)(1 << prefixBits); // the bit directly above the length prefix
         if (huffmanLength < raw.Length)
         {
             EncodeInteger(ref writer, (ulong)huffmanLength, prefixBits, (byte)(prefixPattern | huffmanBit));
@@ -101,7 +101,7 @@ internal static class QpackPrimitives
     }
 
     /// <summary>
-    /// Liest einen String. <paramref name="firstByte"/> ist bereits gelesen (enthält Huffman-Bit + Länge).
+    /// Reads a string. <paramref name="firstByte"/> is already read (contains the Huffman bit + length).
     /// </summary>
     public static bool TryDecodeString(ref BufferReader reader, byte firstByte, int prefixBits, out string value)
     {

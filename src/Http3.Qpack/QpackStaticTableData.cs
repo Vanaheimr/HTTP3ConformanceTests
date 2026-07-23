@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// Die QPACK-Static-Table (RFC 9204, Anhang A). 99 Einträge (Index 0..98).
+/// The QPACK static table (RFC 9204, appendix A). 99 entries (index 0..98).
 /// </summary>
 internal static partial class QpackStaticTable
 {

@@ -24,17 +24,17 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Ein rohes HTTP/3-Frame: Typ + Nutzlast (RFC 9114 §7.1: Type(i) ‖ Length(i) ‖ Payload).
+/// A raw HTTP/3 frame: type + payload (RFC 9114 §7.1: Type(i) ‖ Length(i) ‖ Payload).
 /// </summary>
 public readonly record struct Http3Frame(ulong Type, ReadOnlyMemory<byte> Payload);
 
 /// <summary>
-/// Serialisieren und (inkrementelles) Parsen von HTTP/3-Frames.
+/// Serialising and (incremental) parsing of HTTP/3 frames.
 /// </summary>
 public static class Http3Frames
 {
     /// <summary>
-    /// Schreibt ein HTTP/3-Frame (Typ, Länge, Nutzlast) in <paramref name="writer"/>.
+    /// Writes an HTTP/3 frame (type, length, payload) into <paramref name="writer"/>.
     /// </summary>
     public static void Write(ref BufferWriter writer, ulong type, ReadOnlySpan<byte> payload)
     {
@@ -44,7 +44,7 @@ public static class Http3Frames
     }
 
     /// <summary>
-    /// Baut ein einzelnes HTTP/3-Frame als Byte-Array.
+    /// Builds a single HTTP/3 frame as a byte array.
     /// </summary>
     public static byte[] Build(ulong type, ReadOnlySpan<byte> payload)
     {
@@ -58,9 +58,9 @@ public static class Http3Frames
     }
 
     /// <summary>
-    /// Liest so viele vollständige Frames wie möglich aus <paramref name="buffer"/>.
-    /// <paramref name="consumed"/> gibt an, wie viele Bytes verbraucht wurden – der Rest ist ein
-    /// noch unvollständiges Frame (auf weitere Stream-Daten warten).
+    /// Reads as many complete frames as possible from <paramref name="buffer"/>.
+    /// <paramref name="consumed"/> indicates how many bytes were consumed – the rest is a
+    /// still-incomplete frame (wait for more stream data).
     /// </summary>
     public static bool TryReadAll(ReadOnlyMemory<byte> buffer, out List<Http3Frame> frames, out int consumed)
     {
@@ -71,9 +71,9 @@ public static class Http3Frames
         while (!reader.IsEmpty)
         {
             if (!reader.TryReadVarInt(out ulong type) || !reader.TryReadVarInt(out ulong length))
-                break; // Frame-Kopf unvollständig
+                break; // frame header incomplete
             if (length > (ulong)reader.Remaining)
-                break; // Nutzlast noch nicht vollständig
+                break; // payload not yet complete
 
             int payloadStart = reader.Position;
             if (!reader.TrySkip((int)length))

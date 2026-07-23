@@ -29,10 +29,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Trailer-Sektionen und Interim-Responses (1xx) — RFC 9114 §4.1: eine Nachricht besteht aus
-/// Header-Sektion, optionalem Content (DATA) und optionaler Trailer-Sektion; einer finalen Antwort
-/// können Interim-Responses (1xx, z. B. 103 Early Hints) vorausgehen, die weder Content noch Trailer
-/// tragen.
+/// Trailer sections and interim responses (1xx) — RFC 9114 §4.1: a message consists of a header
+/// section, optional content (DATA) and an optional trailer section; a final response may be
+/// preceded by interim responses (1xx, e.g. 103 Early Hints), which carry neither content nor
+/// trailers.
 /// </summary>
 [TestFixture]
 public class Http3TrailerTests
@@ -45,17 +45,17 @@ public class Http3TrailerTests
             {
                 Status = 200,
                 Headers = [new HeaderField("content-type", "text/plain")],
-                Body = System.Text.Encoding.UTF8.GetBytes("Rumpf"),
+                Body = System.Text.Encoding.UTF8.GetBytes("body"),
                 Trailers = [new HeaderField("checksum", "abc123"), new HeaderField("server-timing", "app;dur=7")],
             },
             Http3Request.Get("localhost", "/"));
 
         Assert.That(response, Is.Not.Null);
         Assert.That(response!.Status, Is.EqualTo(200));
-        Assert.That(response.BodyText, Is.EqualTo("Rumpf"));
+        Assert.That(response.BodyText, Is.EqualTo("body"));
         Assert.That(response.Trailers.Count, Is.EqualTo(2));
         Assert.That(response.Trailers.First(t => t.Name == "checksum").Value, Is.EqualTo("abc123"));
-        // Trailer sind NICHT Teil der Header-Sektion.
+        // Trailers are NOT part of the header section.
         Assert.That(response.GetHeader("checksum"), Is.Null);
     }
 
@@ -66,14 +66,14 @@ public class Http3TrailerTests
             request => new Http3Response
             {
                 Status = 204,
-                Trailers = [new HeaderField("checksum", "leer")],
+                Trailers = [new HeaderField("checksum", "empty")],
             },
             Http3Request.Get("localhost", "/"));
 
         Assert.That(response, Is.Not.Null);
         Assert.That(response!.Status, Is.EqualTo(204));
         Assert.That(response.Body, Is.Empty);
-        Assert.That(response.Trailers.Single().Value, Is.EqualTo("leer"));
+        Assert.That(response.Trailers.Single().Value, Is.EqualTo("empty"));
     }
 
     [Test]
@@ -82,16 +82,16 @@ public class Http3TrailerTests
         Http3Request? seen = null;
         Http3Response? response = RoundTrip(
             request => { seen = request; return new Http3Response { Status = 200, Body = [] }; },
-            Http3Request.Post("localhost", "/upload", System.Text.Encoding.UTF8.GetBytes("Daten"), "text/plain") with
+            Http3Request.Post("localhost", "/upload", System.Text.Encoding.UTF8.GetBytes("data"), "text/plain") with
             {
                 Trailers = [new HeaderField("upload-checksum", "xyz789")],
             });
 
         Assert.That(response, Is.Not.Null);
         Assert.That(seen, Is.Not.Null);
-        Assert.That(System.Text.Encoding.UTF8.GetString(seen!.Body), Is.EqualTo("Daten"));
+        Assert.That(System.Text.Encoding.UTF8.GetString(seen!.Body), Is.EqualTo("data"));
         Assert.That(seen.Trailers.Single(t => t.Name == "upload-checksum").Value, Is.EqualTo("xyz789"));
-        // Trailer landen NICHT in den regulären Headern.
+        // Trailers do NOT end up in the regular headers.
         Assert.That(seen.AdditionalHeaders, Has.None.Matches<HeaderField>(h => h.Name == "upload-checksum"));
     }
 
@@ -118,16 +118,16 @@ public class Http3TrailerTests
         Assert.That(response.InterimResponses.Count, Is.EqualTo(2));
         Assert.That(response.InterimResponses, Has.All.Property("Status").EqualTo(103));
         Assert.That(response.InterimResponses[0].Headers.Single(h => h.Name == "link").Value, Does.Contain("style.css"));
-        // Die 1xx-Header sind KEIN Teil der finalen Header-Sektion (§4.1).
+        // The 1xx headers are NOT part of the final header section (§4.1).
         Assert.That(response.GetHeader("link"), Is.Null);
     }
 
     [Test]
     public void DataAfterInterimResponse_IsMalformed_StreamErrorMessageError()
     {
-        // Interim-Responses tragen KEINEN Content (§4.1) — ein „böser" Roh-Server sendet trotzdem
-        // 103 + DATA. Der Client MUSS die Antwort als malformed ablehnen (§4.1.2): STREAM-Fehler
-        // H3_MESSAGE_ERROR, die Verbindung bleibt am Leben.
+        // Interim responses carry NO content (§4.1) — an "evil" raw server sends 103 + DATA
+        // anyway. The client MUST reject the response as malformed (§4.1.2): STREAM error
+        // H3_MESSAGE_ERROR, the connection stays alive.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         using var client = new Http3ClientConnection("localhost", certificateValidation: validation);
@@ -153,20 +153,20 @@ public class Http3TrailerTests
         for (int round = 0; round < 10 && !client.IsResponseMalformed(streamId); round++)
             Pump(client, server);
 
-        Assert.That(client.IsResponseMalformed(streamId), Is.True, "Die Antwort muss als malformed verworfen werden.");
+        Assert.That(client.IsResponseMalformed(streamId), Is.True, "The response must be discarded as malformed.");
         Assert.That(client.TryGetResponse(streamId, out _), Is.False);
-        Assert.That(client.IsClosing, Is.False, "Malformed ist ein STREAM-Fehler, kein Verbindungsfehler (§4.1.2).");
-        // Der Stream wurde mit H3_MESSAGE_ERROR abgebrochen — beim Roh-Server sichtbar.
+        Assert.That(client.IsClosing, Is.False, "Malformed is a STREAM error, not a connection error (§4.1.2).");
+        // The stream was aborted with H3_MESSAGE_ERROR — visible at the raw server.
         for (int round = 0; round < 10 && !serverStream.IsResetByPeer; round++)
             Pump(client, server);
         Assert.That(serverStream.IsResetByPeer, Is.True);
         Assert.That(serverStream.PeerResetErrorCode, Is.EqualTo(Http3Error.MessageError));
     }
 
-    // ---- Helfer ---------------------------------------------------------------------------
+    // ---- Helpers --------------------------------------------------------------------------
 
     /// <summary>
-    /// Voller In-Process-Round-Trip: eigener Client ↔ eigener Server, ein Request, eine Antwort.
+    /// Full in-process round trip: our own client ↔ our own server, one request, one response.
     /// </summary>
     private static Http3Response? RoundTrip(Func<Http3Request, Http3Response> handler, Http3Request request)
     {

@@ -18,41 +18,41 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 
 /// <summary>
-/// Ein (EC)DHE-Schlüsselaustausch für TLS 1.3 (RFC 8446 §4.2.8). Abstrahiert über die konkrete Gruppe,
-/// sodass Transport/Handshake unverändert bleiben, egal ob P-256 (BCL) oder X25519 (BouncyCastle).
+/// An (EC)DHE key exchange for TLS 1.3 (RFC 8446 §4.2.8). Abstracts over the concrete group so
+/// that transport/handshake stay unchanged, whether P-256 (BCL) or X25519 (BouncyCastle).
 /// </summary>
 public interface IKeyExchange : IDisposable
 {
     NamedGroup Group { get; }
 
     /// <summary>
-    /// Der öffentliche Schlüssel im Wire-Format der Gruppe (P-256: 0x04‖X‖Y; X25519: 32 Byte).
+    /// The public key in the group's wire format (P-256: 0x04‖X‖Y; X25519: 32 bytes).
     /// </summary>
     byte[] PublicKey { get; }
 
     /// <summary>
-    /// Leitet das gemeinsame Geheimnis aus dem öffentlichen Schlüssel der Gegenseite ab (Client-Seite).
+    /// Derives the shared secret from the peer's public key (client side).
     /// </summary>
     byte[] DeriveSharedSecret(ReadOnlySpan<byte> peerPublicKey);
 
     /// <summary>
-    /// Server-Seite: erzeugt aus dem Key Share des Clients die eigene Antwort (Key Share) und das gemeinsame
-    /// Geheimnis. Für klassisches (EC)DHE ist die Antwort schlicht der eigene öffentliche Schlüssel (und das
-    /// Geheimnis das DH-Produkt); für einen KEM-Hybrid (X25519MLKEM768) ist die Antwort der ML-KEM-Ciphertext
-    /// (‖ X25519) aus der Encapsulation gegen den Client-Schlüssel. Diese Asymmetrie ist der Grund für die
-    /// getrennten Client-/Server-Methoden — beim KEM hängt die Server-Antwort vom Client-Share ab.
+    /// Server side: produces from the client's key share our own response (key share) and the shared
+    /// secret. For classic (EC)DHE the response is simply our own public key (and the secret the
+    /// DH product); for a KEM hybrid (X25519MLKEM768) the response is the ML-KEM ciphertext
+    /// (‖ X25519) from the encapsulation against the client key. This asymmetry is the reason for
+    /// the separate client/server methods — with a KEM, the server response depends on the client share.
     /// </summary>
     (byte[] ResponseShare, byte[] SharedSecret) Encapsulate(ReadOnlySpan<byte> peerShare)
         => (PublicKey, DeriveSharedSecret(peerShare));
 }
 
 /// <summary>
-/// Erzeugt den passenden Schlüsselaustausch für eine Named Group.
+/// Creates the matching key exchange for a named group.
 /// </summary>
 public static class KeyExchange
 {
     /// <summary>
-    /// Standard-Reihenfolge der angebotenen Gruppen: zuerst X25519 (Feld-Standard), dann P-256.
+    /// Default order of the offered groups: X25519 first (the field standard), then P-256.
     /// </summary>
     public static IReadOnlyList<NamedGroup> DefaultGroups { get; } = [NamedGroup.X25519, NamedGroup.Secp256r1];
 
@@ -62,7 +62,7 @@ public static class KeyExchange
         NamedGroup.X448 => new X448KeyExchange(),
         NamedGroup.X25519MlKem768 => new X25519MlKem768KeyExchange(),
         NamedGroup.Secp256r1 or NamedGroup.Secp384r1 => EcdheKeyExchange.Create(group),
-        _ => throw new NotSupportedException($"Named Group {group} wird nicht unterstützt."),
+        _ => throw new NotSupportedException($"Named group {group} is not supported."),
     };
 
     public static bool IsSupported(NamedGroup group)

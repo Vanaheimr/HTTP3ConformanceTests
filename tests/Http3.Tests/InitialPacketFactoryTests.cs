@@ -36,7 +36,7 @@ public class InitialPacketFactoryTests
         var secrets = InitialSecrets.DeriveV1(dcid.Span);
         using var clientProt = new PacketProtection(secrets.Client);
 
-        // Kleiner "ClientHello"-Platzhalter -> muss auf >= 1200 gepolstert werden.
+        // Small "ClientHello" placeholder -> must be padded to >= 1200.
         byte[] cryptoData = new byte[80];
         new Random(7).NextBytes(cryptoData);
 
@@ -44,14 +44,14 @@ public class InitialPacketFactoryTests
             clientProt, 0x0000_0001, dcid, scid, token: default,
             packetNumber: 0, packetNumberLength: 4, cryptoData);
 
-        Assert.That(packet.Length >= InitialPacketFactory.MinimumClientInitialSize, Is.True, $"Paket war nur {packet.Length} Bytes.");
+        Assert.That(packet.Length >= InitialPacketFactory.MinimumClientInitialSize, Is.True, $"Packet was only {packet.Length} bytes.");
 
-        // Empfängerseitig: parsen -> entschützen -> Frames -> CRYPTO-Daten zurückgewinnen.
+        // Receiver side: parse -> unprotect -> frames -> recover the CRYPTO data.
         Assert.That(LongHeader.TryParse(packet, out LongHeaderPrefix? prefix), Is.True);
         Assert.That(prefix!.DestinationConnectionId, Is.EqualTo(dcid));
         Assert.That(prefix.SourceConnectionId, Is.EqualTo(scid));
 
-        using var serverView = new PacketProtection(secrets.Client); // gleiche Richtung (Selbsttest)
+        using var serverView = new PacketProtection(secrets.Client); // same direction (self-test)
         byte[] plaintext = new byte[packet.Length];
         Assert.That(serverView.UnprotectPacket(packet, prefix.PacketNumberOffset, -1, longHeader: true,
             plaintext, out ulong pn, out int len), Is.True);
@@ -60,6 +60,6 @@ public class InitialPacketFactoryTests
         Assert.That(FrameParser.TryParseAll(plaintext.AsSpan(0, len), out List<Frame> frames), Is.EqualTo(FrameParseResult.Ok));
         var crypto = Expect.Type<CryptoFrame>(frames[0]);
         Assert.That(crypto.Data.ToArray(), Is.EqualTo(cryptoData));
-        Expect.Type<PaddingFrame>(frames[1]); // Rest ist PADDING
+        Expect.Type<PaddingFrame>(frames[1]); // the rest is PADDING
     }
 }

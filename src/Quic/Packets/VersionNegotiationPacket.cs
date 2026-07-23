@@ -25,23 +25,23 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Version-Negotiation-Paket (RFC 9000 §17.2.1). Ein Server sendet es, wenn er die vom Client gewählte
-/// Version nicht unterstützt; es listet die vom Server unterstützten Versionen. Erkennbar am Versionsfeld
-/// 0. Trägt keine Paketnummer, keine Verschlüsselung. Beim Antworten vertauscht der Server DCID/SCID:
-/// die SCID des Clients wird zur DCID des VN-Pakets und umgekehrt.
+/// Version-negotiation packet (RFC 9000 §17.2.1). A server sends it when it does not support the
+/// version chosen by the client; it lists the versions the server supports. Recognisable by version
+/// field 0. Carries no packet number, no encryption. When answering, the server swaps DCID/SCID:
+/// the client's SCID becomes the VN packet's DCID and vice versa.
 /// </summary>
 public static class VersionNegotiationPacket
 {
     /// <summary>
-    /// Baut ein Version-Negotiation-Paket mit der Liste unterstützter Versionen.
+    /// Builds a version-negotiation packet with the list of supported versions.
     /// </summary>
     public static byte[] Build(ConnectionId destinationConnectionId, ConnectionId sourceConnectionId, IReadOnlyList<uint> supportedVersions)
     {
         using var w = new BufferWriter(16 + supportedVersions.Count * 4);
-        // Erstes Byte: nur die Long-Header-Form ist bedeutsam; die übrigen 7 Bits werden zufällig gesetzt
-        // (RFC 9000 §17.2.1 – erschwert Ossifizierung). Der Empfänger erkennt VN am Versionsfeld 0.
+        // First byte: only the long-header form matters; the remaining 7 bits are set randomly
+        // (RFC 9000 §17.2.1 – hampers ossification). The receiver recognises VN by version field 0.
         w.WriteByte((byte)(0x80 | (RandomNumberGenerator.GetBytes(1)[0] & 0x7f)));
-        w.WriteUInt32(0); // Version = 0 kennzeichnet Version Negotiation
+        w.WriteUInt32(0); // version = 0 marks version negotiation
         w.WriteByte((byte)destinationConnectionId.Length);
         w.WriteBytes(destinationConnectionId.Span);
         w.WriteByte((byte)sourceConnectionId.Length);
@@ -52,7 +52,7 @@ public static class VersionNegotiationPacket
     }
 
     /// <summary>
-    /// Parst ein Version-Negotiation-Paket. Setzt <paramref name="supportedVersions"/> auf die Liste.
+    /// Parses a version-negotiation packet. Sets <paramref name="supportedVersions"/> to the list.
     /// </summary>
     public static bool TryParse(ReadOnlySpan<byte> datagram, out ConnectionId dcid, out ConnectionId scid, out List<uint> supportedVersions)
     {
@@ -68,7 +68,7 @@ public static class VersionNegotiationPacket
         if (!TryReadCid(ref r, out dcid) || !TryReadCid(ref r, out scid))
             return false;
 
-        // Der Rest ist eine Folge von 4-Byte-Versionen (mind. eine).
+        // The rest is a sequence of 4-byte versions (at least one).
         while (r.Remaining >= 4)
         {
             r.TryReadUInt32(out uint v);

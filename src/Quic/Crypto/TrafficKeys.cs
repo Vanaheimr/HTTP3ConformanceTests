@@ -25,28 +25,28 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 
 /// <summary>
-/// Ein Satz Schlüssel für eine Richtung/Encryption-Level, abgeleitet aus einem Traffic Secret
-/// (RFC 9001, §5.1): Packet-Protection-Key, IV und Header-Protection-Key.
+/// A set of keys for one direction/encryption level, derived from a traffic secret
+/// (RFC 9001, §5.1): packet-protection key, IV and header-protection key.
 /// </summary>
 public sealed class TrafficKeys
 {
     /// <summary>
-    /// Der zugrunde liegende Traffic Secret (für spätere Key Updates).
+    /// The underlying traffic secret (for later key updates).
     /// </summary>
     public byte[] Secret { get; }
 
     /// <summary>
-    /// AEAD-Schlüssel für die Packet Protection ("quic key").
+    /// AEAD key for packet protection ("quic key").
     /// </summary>
     public byte[] Key { get; }
 
     /// <summary>
-    /// IV für die AEAD-Nonce ("quic iv"), 12 Bytes.
+    /// IV for the AEAD nonce ("quic iv"), 12 bytes.
     /// </summary>
     public byte[] Iv { get; }
 
     /// <summary>
-    /// Schlüssel für die Header Protection ("quic hp").
+    /// Key for header protection ("quic hp").
     /// </summary>
     public byte[] HeaderProtectionKey { get; }
 
@@ -59,14 +59,14 @@ public sealed class TrafficKeys
     }
 
     /// <summary>
-    /// Leitet Key/IV/HP aus einem Traffic Secret ab.
+    /// Derives key/IV/HP from a traffic secret.
     /// </summary>
-    /// <param name="hash">Hash der Cipher Suite (SHA-256 für die Initial-Suite).</param>
-    /// <param name="secret">Der Traffic Secret.</param>
-    /// <param name="keyLength">AEAD-Schlüssellänge in Bytes (16 für AES-128, 32 für AES-256/ChaCha20).</param>
+    /// <param name="hash">Hash of the cipher suite (SHA-256 for the Initial suite).</param>
+    /// <param name="secret">The traffic secret.</param>
+    /// <param name="keyLength">AEAD key length in bytes (16 for AES-128, 32 for AES-256/ChaCha20).</param>
     public static TrafficKeys FromSecret(HashAlgorithmName hash, ReadOnlySpan<byte> secret, int keyLength)
     {
-        // RFC 9001 §5.1: IV ist immer 12 Bytes; HP-Key hat dieselbe Länge wie der AEAD-Key.
+        // RFC 9001 §5.1: the IV is always 12 bytes; the HP key has the same length as the AEAD key.
         byte[] key = TlsHkdf.ExpandLabel(hash, secret, "quic key", keyLength);
         byte[] iv = TlsHkdf.ExpandLabel(hash, secret, "quic iv", 12);
         byte[] hp = TlsHkdf.ExpandLabel(hash, secret, "quic hp", keyLength);
@@ -74,12 +74,12 @@ public sealed class TrafficKeys
     }
 
     /// <summary>
-    /// Leitet die nächste Generation für ein Key Update ab (RFC 9001 §6.1):
+    /// Derives the next generation for a key update (RFC 9001 §6.1):
     /// <c>secret_&lt;n+1&gt; = HKDF-Expand-Label(secret_&lt;n&gt;, "quic ku", "", Hash.length)</c>,
-    /// daraus neuer Key und IV. Der <b>Header-Protection-Key bleibt unverändert</b>.
+    /// from which new key and IV follow. The <b>header-protection key stays unchanged</b>.
     /// </summary>
-    /// <param name="hash">Hash der Suite.</param>
-    /// <param name="hashLength">Länge des Hash-Ausgangs (= Secret-Länge; 32 für SHA-256).</param>
+    /// <param name="hash">Hash of the suite.</param>
+    /// <param name="hashLength">Length of the hash output (= secret length; 32 for SHA-256).</param>
     public TrafficKeys Next(HashAlgorithmName hash, int hashLength)
     {
         byte[] nextSecret = TlsHkdf.ExpandLabel(hash, Secret, "quic ku", hashLength);

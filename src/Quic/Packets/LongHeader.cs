@@ -25,12 +25,12 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 
 /// <summary>
-/// Die im Klartext lesbaren Felder eines Long-Header-Pakets mit Paketnummer
-/// (Initial / Handshake / 0-RTT), bis unmittelbar vor die Header-geschützten Bytes.
+/// The cleartext-readable fields of a long-header packet with a packet number
+/// (Initial / Handshake / 0-RTT), up to just before the header-protected bytes.
 /// <para>
-/// Alle Felder außer den unteren Bits des ersten Bytes und der Paketnummer selbst liegen
-/// unverschlüsselt vor. Aus diesem Prefix ergibt sich <see cref="PacketNumberOffset"/>, den die
-/// <see cref="PacketProtection"/> zum Entfernen der Header Protection braucht.
+/// All fields except the lower bits of the first byte and the packet number itself are
+/// unencrypted. From this prefix follows <see cref="PacketNumberOffset"/>, which
+/// <see cref="PacketProtection"/> needs to remove the header protection.
 /// </para>
 /// </summary>
 public sealed class LongHeaderPrefix
@@ -41,37 +41,37 @@ public sealed class LongHeaderPrefix
     public required ConnectionId SourceConnectionId { get; init; }
 
     /// <summary>
-    /// Retry-/NEW_TOKEN-Token; nur bei Initial-Paketen vorhanden (sonst leer).
+    /// Retry/NEW_TOKEN token; only present in Initial packets (otherwise empty).
     /// </summary>
     public required byte[] Token { get; init; }
 
     /// <summary>
-    /// Länge von Paketnummer + Payload (inkl. AEAD-Tag) laut Length-Feld.
+    /// Length of packet number + payload (incl. AEAD tag) per the length field.
     /// </summary>
     public required long Length { get; init; }
 
     /// <summary>
-    /// Offset des Paketnummernfelds innerhalb des Datagramms.
+    /// Offset of the packet-number field within the datagram.
     /// </summary>
     public required int PacketNumberOffset { get; init; }
 
     /// <summary>
-    /// Offset des ersten Bytes nach diesem Paket (für Coalesced Packets): <c>PacketNumberOffset + Length</c>.
+    /// Offset of the first byte after this packet (for coalesced packets): <c>PacketNumberOffset + Length</c>.
     /// </summary>
     public int PacketEndOffset => PacketNumberOffset + (int)Length;
 }
 
 /// <summary>
-/// Parsen und Serialisieren von Long-Header-Paketen (RFC 9000, §17.2).
+/// Parsing and serialising of long-header packets (RFC 9000, §17.2).
 /// </summary>
 public static class LongHeader
 {
     /// <summary>
-    /// Parst die Klartext-Felder eines Long-Header-Pakets mit Paketnummer (Initial/Handshake/0-RTT).
-    /// Header- und Packet Protection werden hier <em>nicht</em> entfernt – dafür anschließend
-    /// <see cref="PacketProtection.UnprotectPacket"/> mit <see cref="LongHeaderPrefix.PacketNumberOffset"/> aufrufen.
+    /// Parses the cleartext fields of a long-header packet with a packet number (Initial/Handshake/0-RTT).
+    /// Header and packet protection are <em>not</em> removed here – call
+    /// <see cref="PacketProtection.UnprotectPacket"/> with <see cref="LongHeaderPrefix.PacketNumberOffset"/> afterwards.
     /// </summary>
-    /// <returns><c>true</c> bei wohlgeformtem Prefix; <c>false</c> bei zu kurzen/ungültigen Daten (Paket verwerfen).</returns>
+    /// <returns><c>true</c> for a well-formed prefix; <c>false</c> for too-short/invalid data (drop the packet).</returns>
     public static bool TryParse(ReadOnlySpan<byte> datagram, out LongHeaderPrefix? prefix)
     {
         prefix = null;
@@ -84,12 +84,12 @@ public static class LongHeader
 
         if (!reader.TryReadUInt32(out uint version))
             return false;
-        // Version 0 = Version Negotiation: anderes Format, hier nicht behandelt.
+        // Version 0 = version negotiation: different format, not handled here.
         if (version == 0)
             return false;
 
         LongPacketType type = PacketFormat.GetLongPacketType(first);
-        // Retry trägt keine Länge/Paketnummer – separat behandeln.
+        // Retry carries no length/packet number – handled separately.
         if (type == LongPacketType.Retry)
             return false;
 
@@ -111,7 +111,7 @@ public static class LongHeader
             return false;
 
         int pnOffset = reader.Position;
-        // Das Length-Feld muss vollständig im Datagramm liegen.
+        // The length field must lie fully within the datagram.
         if (length > (ulong)reader.Remaining)
             return false;
 
@@ -129,9 +129,9 @@ public static class LongHeader
     }
 
     /// <summary>
-    /// Liest die <em>versionsunabhängigen</em> Felder eines Long Headers (RFC 8999): erstes Byte,
-    /// Version, Destination und Source Connection ID. Funktioniert auch für unbekannte Versionen und
-    /// Version-Negotiation-/Retry-Pakete, da dieses Prefix in allen QUIC-Versionen identisch aufgebaut ist.
+    /// Reads the <em>version-independent</em> fields of a long header (RFC 8999): first byte,
+    /// version, destination and source connection ID. Also works for unknown versions and
+    /// version-negotiation/Retry packets, since this prefix is laid out identically in all QUIC versions.
     /// </summary>
     public static bool TryParseInvariant(ReadOnlySpan<byte> datagram, out uint version, out ConnectionId dcid, out ConnectionId scid)
     {
@@ -153,7 +153,7 @@ public static class LongHeader
         if (!reader.TryReadByte(out byte len))
             return false;
         if (len > ConnectionId.MaxLength)
-            return false; // RFC 9000 §17.2: > 20 Bytes -> Paket verwerfen.
+            return false; // RFC 9000 §17.2: > 20 bytes -> drop the packet.
         if (!reader.TryReadBytes(len, out ReadOnlySpan<byte> bytes))
             return false;
         cid = new ConnectionId(bytes);
@@ -161,13 +161,13 @@ public static class LongHeader
     }
 
     /// <summary>
-    /// Baut ein vollständiges, geschütztes Initial-, Handshake- oder 0-RTT-Paket aus strukturierten Feldern.
+    /// Builds a complete, protected Initial, Handshake or 0-RTT packet from structured fields.
     /// </summary>
-    /// <param name="protection">Packet/Header Protection der sendenden Seite/des Levels.</param>
-    /// <param name="type"><see cref="LongPacketType.Initial"/>, <see cref="LongPacketType.Handshake"/> oder
-    /// <see cref="LongPacketType.ZeroRtt"/> (0-RTT hat wie Handshake kein Token-Feld).</param>
-    /// <param name="token">Initial-Token (leer, falls keins); bei Handshake/0-RTT ignoriert.</param>
-    /// <param name="packetNumberLength">Länge der Paketnummer auf dem Draht (1–4).</param>
+    /// <param name="protection">Packet/header protection of the sending side/level.</param>
+    /// <param name="type"><see cref="LongPacketType.Initial"/>, <see cref="LongPacketType.Handshake"/> or
+    /// <see cref="LongPacketType.ZeroRtt"/> (0-RTT, like Handshake, has no token field).</param>
+    /// <param name="token">Initial token (empty if none); ignored for Handshake/0-RTT.</param>
+    /// <param name="packetNumberLength">Length of the packet number on the wire (1–4).</param>
     public static byte[] Build(
         PacketProtection protection,
         LongPacketType type,
@@ -180,11 +180,11 @@ public static class LongHeader
         ReadOnlySpan<byte> payload)
     {
         if (type is not (LongPacketType.Initial or LongPacketType.Handshake or LongPacketType.ZeroRtt))
-            throw new ArgumentException("Build unterstützt nur Initial, Handshake und 0-RTT.", nameof(type));
+            throw new ArgumentException("Build only supports Initial, Handshake and 0-RTT.", nameof(type));
         if (packetNumberLength is < 1 or > 4)
             throw new ArgumentOutOfRangeException(nameof(packetNumberLength));
 
-        // Kleine Nutzlast (z. B. nur ein ACK) mit PADDING auffüllen, damit das Sample passt (RFC 9001 §5.4.2).
+        // Pad a small payload (e.g. only an ACK) with PADDING so the sample fits (RFC 9001 §5.4.2).
         payload = PacketPadding.ForSampling(payload, packetNumberLength);
 
         using var header = new BufferWriter();
@@ -200,7 +200,7 @@ public static class LongHeader
             header.WriteBytes(token);
         }
 
-        // Length = Paketnummer + Payload + 16-Byte-AEAD-Tag.
+        // Length = packet number + payload + 16-byte AEAD tag.
         long lengthField = packetNumberLength + payload.Length + 16;
         header.WriteVarInt((ulong)lengthField);
 

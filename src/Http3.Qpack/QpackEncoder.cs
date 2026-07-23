@@ -24,15 +24,15 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// QPACK-Encoder ohne dynamische Tabelle (RFC 9204). Kodiert Header-Feld-Sektionen ausschließlich mit
-/// der statischen Tabelle und Literalen – spec-konform und interop-fähig, wenn
-/// <c>SETTINGS_QPACK_MAX_TABLE_CAPACITY = 0</c> angesagt wird (dann verzichtet auch der Peer auf die
-/// dynamische Tabelle). Erzeugt keine Encoder-Stream-Instruktionen.
+/// QPACK encoder without a dynamic table (RFC 9204). Encodes header field sections exclusively with
+/// the static table and literals – spec-conformant and interop-capable when
+/// <c>SETTINGS_QPACK_MAX_TABLE_CAPACITY = 0</c> is announced (then the peer also forgoes the
+/// dynamic table). Produces no encoder-stream instructions.
 /// </summary>
 public static class QpackEncoder
 {
     /// <summary>
-    /// Kodiert eine Header-Liste als Encoded Field Section (inklusive Prefix).
+    /// Encodes a header list as an encoded field section (including the prefix).
     /// </summary>
     public static byte[] Encode(IReadOnlyList<HeaderField> headers)
     {
@@ -56,25 +56,25 @@ public static class QpackEncoder
 
     private static void EncodeField(ref BufferWriter writer, string name, string value)
     {
-        // 1) Exaktes (Name,Wert)-Paar in der Static Table → Indexed Field Line.
+        // 1) Exact (name,value) pair in the static table → indexed field line.
         if (QpackStaticTable.TryGetPairIndex(name, value, out int pairIndex))
         {
-            // 1 T=1 Index(6+)  → Muster 0b1100_0000
+            // 1 T=1 Index(6+)  → pattern 0b1100_0000
             QpackPrimitives.EncodeInteger(ref writer, (ulong)pairIndex, 6, 0b1100_0000);
             return;
         }
 
-        // 2) Name in der Static Table → Literal Field Line with Name Reference.
+        // 2) Name in the static table → literal field line with name reference.
         if (QpackStaticTable.TryGetNameIndex(name, out int nameIndex))
         {
-            // 0 1 N=0 T=1 NameIndex(4+)  → Muster 0b0101_0000
+            // 0 1 N=0 T=1 NameIndex(4+)  → pattern 0b0101_0000
             QpackPrimitives.EncodeInteger(ref writer, (ulong)nameIndex, 4, 0b0101_0000);
             QpackPrimitives.EncodeString(ref writer, value, 7, 0x00);
             return;
         }
 
-        // 3) Sonst → Literal Field Line with Literal Name.
-        // 0 0 1 N=0 H NameLen(3+)  → Muster 0b0010_0000, Huffman-Bit = 0x08
+        // 3) Otherwise → literal field line with literal name.
+        // 0 0 1 N=0 H NameLen(3+)  → pattern 0b0010_0000, Huffman bit = 0x08
         QpackPrimitives.EncodeString(ref writer, name, 3, 0b0010_0000);
         QpackPrimitives.EncodeString(ref writer, value, 7, 0x00);
     }

@@ -18,11 +18,11 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// Die HPACK/QPACK-Huffman-Codetabelle (RFC 7541, Anhang B). 257 Symbole (0..255 + EOS=256).
+/// The HPACK/QPACK Huffman code table (RFC 7541, appendix B). 257 symbols (0..255 + EOS=256).
 /// </summary>
 internal static partial class Huffman
 {
-    // (Code LSB-ausgerichtet, Bitlänge), Index = Symbol.
+    // (code LSB-aligned, bit length), index = symbol.
     internal static readonly (uint Code, byte Bits)[] Table =
     [
         (0x00001ff8, 13),

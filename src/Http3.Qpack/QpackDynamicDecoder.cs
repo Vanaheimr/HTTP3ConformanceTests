@@ -24,23 +24,23 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 
 /// <summary>
-/// QPACK-Decoder mit dynamischer Tabelle (RFC 9204). Zustandsbehaftet: verarbeitet die Encoder-Stream-
-/// Instruktionen (Set Capacity, Insert With Name Reference, Insert With Literal Name, Duplicate) in seine
-/// dynamische Tabelle und dekodiert anschließend Field Sections, die statische wie dynamische Einträge
-/// referenzieren (inkl. Post-Base-Indizierung). Reihenfolge: erst die Encoder-Instruktionen, dann die
-/// Field Section; verlangt Letztere mehr Inserts als vorhanden, ist der Stream <see cref="QpackResult.Blocked"/>.
+/// QPACK decoder with a dynamic table (RFC 9204). Stateful: processes the encoder-stream
+/// instructions (Set Capacity, Insert With Name Reference, Insert With Literal Name, Duplicate)
+/// into its dynamic table and then decodes field sections that reference static as well as dynamic
+/// entries (incl. post-base indexing). Order: first the encoder instructions, then the field
+/// section; if the latter requires more inserts than present, the stream is <see cref="QpackResult.Blocked"/>.
 /// </summary>
 public sealed class QpackDynamicDecoder
 {
     private readonly QpackDynamicTable _table = new();
 
     /// <summary>
-    /// Die dynamische Tabelle des Decoders (Diagnose/Test).
+    /// The decoder's dynamic table (diagnostics/test).
     /// </summary>
     public QpackDynamicTable Table => _table;
 
     /// <summary>
-    /// Kodiert eine Section-Acknowledgment (RFC 9204 §4.4.1): <c>1 StreamID(7+)</c>.
+    /// Encodes a section acknowledgment (RFC 9204 §4.4.1): <c>1 StreamID(7+)</c>.
     /// </summary>
     public static byte[] EncodeSectionAcknowledgment(ulong streamId)
     {
@@ -50,7 +50,7 @@ public sealed class QpackDynamicDecoder
     }
 
     /// <summary>
-    /// Kodiert ein Insert Count Increment (RFC 9204 §4.4.3): <c>0 0 Increment(6+)</c>.
+    /// Encodes an insert count increment (RFC 9204 §4.4.3): <c>0 0 Increment(6+)</c>.
     /// </summary>
     public static byte[] EncodeInsertCountIncrement(ulong increment)
     {
@@ -60,8 +60,8 @@ public sealed class QpackDynamicDecoder
     }
 
     /// <summary>
-    /// Verarbeitet einen Abschnitt des QPACK-Encoder-Streams in die dynamische Tabelle und gibt zurück, ob
-    /// alle Bytes vollständige Instruktionen bildeten (<see cref="QpackResult.Ok"/>).
+    /// Processes a section of the QPACK encoder stream into the dynamic table and returns whether
+    /// all bytes formed complete instructions (<see cref="QpackResult.Ok"/>).
     /// </summary>
     public QpackResult ProcessEncoderInstructions(ReadOnlySpan<byte> data)
         => ProcessEncoderInstructions(data, out int consumed) && consumed == data.Length
@@ -69,9 +69,9 @@ public sealed class QpackDynamicDecoder
             : QpackResult.DecompressionFailed;
 
     /// <summary>
-    /// Streamende Variante: verarbeitet so viele <b>vollständige</b> Instruktionen wie möglich und setzt
-    /// <paramref name="consumed"/> auf die Anzahl verbrauchter Bytes (eine angeschnittene Instruktion am Ende
-    /// bleibt liegen). Rückgabe <c>false</c> nur bei einer strukturell ungültigen Instruktion.
+    /// Streaming variant: processes as many <b>complete</b> instructions as possible and sets
+    /// <paramref name="consumed"/> to the number of consumed bytes (a truncated instruction at the
+    /// end is left in place). Returns <c>false</c> only for a structurally invalid instruction.
     /// </summary>
     public bool ProcessEncoderInstructions(ReadOnlySpan<byte> data, out int consumed)
     {
@@ -81,7 +81,7 @@ public sealed class QpackDynamicDecoder
         {
             if (!TryProcessOneInstruction(ref reader, out bool incomplete))
             {
-                // Angeschnittene Instruktion am Puffer-Ende: auf mehr Daten warten (kein Fehler).
+                // Truncated instruction at the end of the buffer: wait for more data (no error).
                 return incomplete;
             }
             consumed = reader.Position;
@@ -102,7 +102,7 @@ public sealed class QpackDynamicDecoder
                 !TryReadString(ref reader, 7, out string value))
                 return false;
             if (!TryResolveName(isStatic, nameIndex, out string name) || !_table.Insert(name, value))
-            { incomplete = false; return false; } // struktureller Fehler
+            { incomplete = false; return false; } // structural error
         }
         else if ((first & 0x40) != 0) // Insert with Literal Name: 0 1 H NameLen(5+) + Name + Value
         {
@@ -133,14 +133,14 @@ public sealed class QpackDynamicDecoder
     }
 
     /// <summary>
-    /// Dekodiert eine Field Section (mit Prefix). Encoder-Instruktionen müssen zuvor verarbeitet sein.
+    /// Decodes a field section (with prefix). Encoder instructions must be processed beforehand.
     /// </summary>
     public QpackResult Decode(ReadOnlySpan<byte> encoded, out List<HeaderField> headers)
         => Decode(encoded, out headers, out _);
 
     /// <summary>
-    /// Wie <see cref="Decode(ReadOnlySpan{byte}, out List{HeaderField})"/>, meldet zusätzlich den Required
-    /// Insert Count der Sektion – ist er &gt; 0, sollte der Aufrufer eine Section-Acknowledgment senden.
+    /// Like <see cref="Decode(ReadOnlySpan{byte}, out List{HeaderField})"/>, but additionally reports
+    /// the section's required insert count – if it is &gt; 0, the caller should send a section acknowledgment.
     /// </summary>
     public QpackResult Decode(ReadOnlySpan<byte> encoded, out List<HeaderField> headers, out ulong requiredInsertCount)
     {
@@ -148,7 +148,7 @@ public sealed class QpackDynamicDecoder
         requiredInsertCount = 0;
         var reader = new BufferReader(encoded);
 
-        // Field Section Prefix: Required Insert Count (8+) und Sign+Delta Base (7+).
+        // Field section prefix: required insert count (8+) and sign+delta base (7+).
         if (!reader.TryReadByte(out byte ricByte) ||
             !QpackPrimitives.TryDecodeInteger(ref reader, ricByte, 8, out ulong encodedInsertCount) ||
             !TryReconstructRequiredInsertCount(encodedInsertCount, out requiredInsertCount) ||
@@ -170,7 +170,7 @@ public sealed class QpackDynamicDecoder
         }
 
         if (requiredInsertCount > _table.InsertCount)
-            return QpackResult.Blocked; // die referenzierten Einträge sind noch nicht eingetroffen
+            return QpackResult.Blocked; // the referenced entries have not yet arrived
 
         while (!reader.IsEmpty)
         {
@@ -195,7 +195,7 @@ public sealed class QpackDynamicDecoder
         return QpackResult.Ok;
     }
 
-    // ---- Field-Line-Repräsentationen -------------------------------------------------------
+    // ---- Field-line representations --------------------------------------------------------
 
     private QpackResult DecodeIndexed(ref BufferReader reader, byte first, ulong baseValue, List<HeaderField> headers)
     {
@@ -212,7 +212,7 @@ public sealed class QpackDynamicDecoder
             return QpackResult.Ok;
         }
 
-        // Dynamisch (pre-base): Abs = Base - 1 - RelIndex.
+        // Dynamic (pre-base): abs = base - 1 - relIndex.
         if (baseValue < 1 + index || !_table.TryGetByAbsolute(baseValue - 1 - index, out (string Name, string Value) e))
             return QpackResult.DecompressionFailed;
         headers.Add(new HeaderField(e.Name, e.Value));
@@ -275,7 +275,7 @@ public sealed class QpackDynamicDecoder
         return QpackResult.Ok;
     }
 
-    // ---- Hilfen ----------------------------------------------------------------------------
+    // ---- Helpers ---------------------------------------------------------------------------
 
     private bool TryResolveName(bool isStatic, ulong nameIndex, out string name)
     {
@@ -293,7 +293,7 @@ public sealed class QpackDynamicDecoder
         return true;
     }
 
-    // Encoder-Stream: relativer Index bezieht sich auf den zuletzt eingefügten Eintrag.
+    // Encoder stream: the relative index refers to the most recently inserted entry.
     private bool TryRelativeToAbsolute(ulong relativeIndex, out ulong absolute)
     {
         absolute = 0;
@@ -303,7 +303,7 @@ public sealed class QpackDynamicDecoder
         return true;
     }
 
-    // Required Insert Count aus dem kodierten Wert rekonstruieren (RFC 9204 §4.5.1).
+    // Reconstruct the required insert count from the encoded value (RFC 9204 §4.5.1).
     private bool TryReconstructRequiredInsertCount(ulong encoded, out ulong requiredInsertCount)
     {
         requiredInsertCount = 0;

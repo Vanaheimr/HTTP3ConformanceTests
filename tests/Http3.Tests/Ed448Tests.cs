@@ -24,14 +24,14 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 
 /// <summary>
-/// Ed448 (RFC 8032, PureEdDSA über Edwards448/SHAKE256, leerer Kontext) — verifiziert das
-/// BouncyCastle-Primitiv byte-genau gegen die Testvektoren aus RFC 8032 §7.4 (öffentlicher Schlüssel
-/// <b>und</b> Signatur) und prüft, dass die Verifikation manipulierte Signaturen ablehnt.
+/// Ed448 (RFC 8032, PureEdDSA over Edwards448/SHAKE256, empty context) — verifies the
+/// BouncyCastle primitive byte for byte against the test vectors from RFC 8032 §7.4 (public key
+/// <b>and</b> signature) and checks that verification rejects tampered signatures.
 /// </summary>
 [TestFixture]
 public class Ed448Tests
 {
-    // RFC 8032 §7.4 — Test "Blank" (leere Nachricht, leerer Kontext).
+    // RFC 8032 §7.4 — test "Blank" (empty message, empty context).
     private const string BlankSeed =
         "6c82a562cb808d10d632be89c8513ebf6c929f34ddfa8c9f63c9960ef6e348a3528c8a3fcc2f044e39a3fc5b94492f8f032e7549a20098f95b";
     private const string BlankPublicKey =
@@ -40,7 +40,7 @@ public class Ed448Tests
         "533a37f6bbe457251f023c0d88f976ae2dfb504a843e34d2074fd823d41a591f2b233f034f628281f2fd7a22ddd47d7828c59bd0a21bfd39" +
         "80ff0d2028d4b18a9df63e006c5d1c2d345b925d8dc00b4104852db99ac5c7cdda8530a113a0f4dbb61149f05a7363268c71d95808ff2e652600";
 
-    // RFC 8032 §7.4 — Test "1 octet" (Nachricht = 0x03, leerer Kontext).
+    // RFC 8032 §7.4 — test "1 octet" (message = 0x03, empty context).
     private const string OneOctetSeed =
         "c4eab05d357007c632f3dbb48489924d552b08fe0c353a0d4a1f00acda2c463afbea67c5e8d2877c5e3bc397a659949ef8021e954e0a12274e";
     private const string OneOctetPublicKey =

@@ -30,10 +30,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Ein HTTP/3-Client (RFC 9114) über einer <see cref="QuicClientConnection"/>. Öffnet den Control-Stream
-/// (mit SETTINGS) und die QPACK-Encoder/Decoder-Streams, sendet Requests als HEADERS-Frame auf einem
-/// bidirektionalen Stream und setzt die Antwort (HEADERS + DATA) wieder zusammen. Transport-agnostisch:
-/// Datagramme kommen über <see cref="GetDatagramsToSend"/> / <see cref="ProcessDatagram"/> herein/heraus.
+/// An HTTP/3 client (RFC 9114) on top of a <see cref="QuicClientConnection"/>. Opens the control
+/// stream (with SETTINGS) and the QPACK encoder/decoder streams, sends requests as a HEADERS frame
+/// on a bidirectional stream and reassembles the response (HEADERS + DATA). Transport-agnostic:
+/// datagrams flow in/out via <see cref="GetDatagramsToSend"/> / <see cref="ProcessDatagram"/>.
 /// </summary>
 public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
 {
@@ -42,21 +42,21 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     private readonly Http3Qpack _qpack;
     private bool _http3Initialized;
     private readonly WebTransportManager _webTransport = new(weAreClient: true);
-    private readonly ulong _wtMaxSessions; // draft-webtrans-http3 §9.2 (0 = WebTransport aus)
+    private readonly ulong _wtMaxSessions; // draft-webtrans-http3 §9.2 (0 = WebTransport off)
 
     /// <param name="qpackMaxTableCapacity">
-    /// Angekündigte maximale QPACK-Tabellenkapazität (RFC 9204). <c>0</c> (Standard) = rein statisch
-    /// (interop-sicher); &gt; 0 aktiviert die dynamische Tabelle, sobald auch der Peer eine ankündigt.
+    /// Announced maximum QPACK table capacity (RFC 9204). <c>0</c> (default) = purely static
+    /// (interop-safe); &gt; 0 activates the dynamic table once the peer announces one too.
     /// </param>
     /// <param name="maxFieldSectionSize">
-    /// Optionales Limit für die Größe angenommener Field Sections (RFC 9114 §4.2.2, unkomprimiert:
-    /// Name + Wert + 32 je Feld). Wird per SETTINGS_MAX_FIELD_SECTION_SIZE angekündigt; größere
-    /// Antwort-Header-Sektionen werden verworfen (<see cref="IsResponseTooLarge"/>). <c>null</c> = unbegrenzt.
+    /// Optional limit for the size of accepted field sections (RFC 9114 §4.2.2, uncompressed:
+    /// name + value + 32 per field). Announced via SETTINGS_MAX_FIELD_SECTION_SIZE; larger
+    /// response header sections are discarded (<see cref="IsResponseTooLarge"/>). <c>null</c> = unlimited.
     /// </param>
     /// <param name="enableDatagrams">
-    /// HTTP-Datagramme (RFC 9297/9221) aktivieren: kündigt max_datagram_frame_size = 65535 (QUIC-TP)
-    /// und SETTINGS_H3_DATAGRAM = 1 an. Nutzbar, sobald der Peer beides ebenfalls angekündigt hat
-    /// (<see cref="DatagramsNegotiated"/>) — Datagramme laufen über Extended-CONNECT-Tunnel.
+    /// Enable HTTP datagrams (RFC 9297/9221): announces max_datagram_frame_size = 65535 (QUIC TP)
+    /// and SETTINGS_H3_DATAGRAM = 1. Usable once the peer has announced both as well
+    /// (<see cref="DatagramsNegotiated"/>) — datagrams run over Extended-CONNECT tunnels.
     /// </param>
     public Http3ClientConnection(
         string serverName,
@@ -68,10 +68,11 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
         Quic.Tls.ResumptionTicket? resumptionTicket = null,
         ulong? maxFieldSectionSize = null,
         bool enableDatagrams = false,
-        ulong webTransportMaxSessions = 0)
+        ulong webTransportMaxSessions = 0,
+        TimeProvider? timeProvider = null)
     {
         _wtMaxSessions = webTransportMaxSessions;
-        if (webTransportMaxSessions > 0) // WebTransport setzt HTTP/3-Datagramme voraus (draft §3.1)
+        if (webTransportMaxSessions > 0) // WebTransport requires HTTP/3 datagrams (draft §3.1)
             enableDatagrams = true;
         _localDatagramsEnabled = enableDatagrams;
         if (enableDatagrams)
@@ -79,7 +80,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
             transportParameters ??= new TransportParameters();
             transportParameters.MaxDatagramFrameSizeValue = 65535; // RFC 9221 §3 RECOMMENDED
         }
-        _quic = new QuicClientConnection(serverName, transportParameters, certificateValidation: certificateValidation, cipherSuites: cipherSuites, keyExchangeGroups: keyExchangeGroups, resumptionTicket: resumptionTicket);
+        _quic = new QuicClientConnection(serverName, transportParameters, certificateValidation: certificateValidation, cipherSuites: cipherSuites, keyExchangeGroups: keyExchangeGroups, resumptionTicket: resumptionTicket, timeProvider: timeProvider);
         _qpack = new Http3Qpack(qpackMaxTableCapacity, weAreClient: true, FatalConnectionError)
         {
             OnWebTransportUniStream = (stream, sessionId, leftover) =>
@@ -88,25 +89,25 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
         _localMaxFieldSectionSize = maxFieldSectionSize;
     }
 
-    private readonly ulong? _localMaxFieldSectionSize; // unser angekündigtes Limit (RFC 9114 §4.2.2)
-    private readonly bool _localDatagramsEnabled;      // HTTP-Datagramme lokal aktiviert (RFC 9297)
+    private readonly ulong? _localMaxFieldSectionSize; // our announced limit (RFC 9114 §4.2.2)
+    private readonly bool _localDatagramsEnabled;      // HTTP datagrams enabled locally (RFC 9297)
 
     /// <summary>
-    /// HTTP-Datagramme sind beidseitig ausgehandelt (RFC 9297 §2.1.1: SETTINGS_H3_DATAGRAM gesendet
-    /// UND empfangen; RFC 9221 §3: Peer hat max_datagram_frame_size angekündigt).
+    /// HTTP datagrams are negotiated on both sides (RFC 9297 §2.1.1: SETTINGS_H3_DATAGRAM sent
+    /// AND received; RFC 9221 §3: the peer announced max_datagram_frame_size).
     /// </summary>
     public bool DatagramsNegotiated
         => _localDatagramsEnabled && _qpack.PeerH3Datagram && _quic.PeerMaxDatagramFrameSize > 0;
 
     /// <summary>
-    /// Sendet ein HTTP-Datagramm zum Request-Stream <paramref name="streamId"/> (RFC 9297 §2.1:
-    /// Quarter Stream ID + Payload in einem QUIC-DATAGRAM-Frame; unzuverlässig).
+    /// Sends an HTTP datagram for the request stream <paramref name="streamId"/> (RFC 9297 §2.1:
+    /// quarter stream ID + payload in a QUIC DATAGRAM frame; unreliable).
     /// </summary>
     public bool TrySendHttpDatagram(ulong streamId, byte[] payload)
     {
         if (!DatagramsNegotiated ||
             !_requests.TryGetValue(streamId, out RequestState? state) || state.Stream.Send.IsReset)
-            return false; // §2.1: nur bei offener Sendeseite
+            return false; // §2.1: only with an open send side
 
         var writer = new BufferWriter(payload.Length + 8);
         try
@@ -119,7 +120,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Ordnet empfangene QUIC-DATAGRAMs ihren Request-Streams zu (RFC 9297 §2.1).
+    /// Matches received QUIC DATAGRAMs to their request streams (RFC 9297 §2.1).
     /// </summary>
     private void DispatchReceivedDatagrams()
     {
@@ -137,22 +138,22 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 return;
             }
 
-            // WebTransport-Datagramm (draft §4.4): Quarter Stream ID adressiert den CONNECT-Stream = Session.
+            // WebTransport datagram (draft §4.4): the quarter stream ID addresses the CONNECT stream = session.
             if (_webTransport.TryDeliverDatagram(quarter * 4, datagram[reader.Position..]))
                 continue;
 
             if (!_requests.TryGetValue(quarter * 4, out RequestState? state))
-                continue; // Stream unbekannt ⇒ still verwerfen (§2.1 SHALL drop or buffer)
+                continue; // unknown stream ⇒ drop silently (§2.1 SHALL drop or buffer)
 
             if (state.Tunnel is { } tunnel)
             {
-                if (!state.Stream.IsResetByPeer) // Empfangsseite zu ⇒ still verwerfen (§2.1)
+                if (!state.Stream.IsResetByPeer) // receive side closed ⇒ drop silently (§2.1)
                     tunnel.DeliverDatagram(datagram[reader.Position..]);
             }
             else if (!state.Cancelled)
             {
-                // §2: Datagramm zu einem Request ohne Datagram-Semantik ⇒ Request beenden
-                // (STREAM-Fehler H3_DATAGRAM_ERROR, kein Verbindungsfehler).
+                // §2: a datagram for a request without datagram semantics ⇒ end the request
+                // (STREAM error H3_DATAGRAM_ERROR, no connection error).
                 state.Cancelled = true;
                 state.Stream.Reset(Http3Error.DatagramError);
                 state.Stream.AbortRead(Http3Error.DatagramError);
@@ -161,86 +162,86 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Meldet einen HTTP/3-Verbindungsfehler (RFC 9114 §8): CONNECTION_CLOSE Typ 0x1d mit H3-Fehlercode.
+    /// Reports an HTTP/3 connection error (RFC 9114 §8): CONNECTION_CLOSE type 0x1d with an H3 error code.
     /// </summary>
     private void FatalConnectionError(ulong errorCode, string reason) => _quic.CloseApplication(errorCode, reason);
 
     /// <summary>
-    /// Die vom Server ausgestellten Session-Tickets (RFC 8446 §4.6.1) für spätere Resumption.
+    /// The session tickets issued by the server (RFC 8446 §4.6.1) for later resumption.
     /// </summary>
     public IReadOnlyList<Quic.Tls.ResumptionTicket> NewSessionTickets => _quic.NewSessionTickets;
 
     /// <summary>
-    /// <c>true</c>, wenn diese Verbindung per Session Resumption (PSK) aufgebaut wurde.
+    /// <c>true</c> when this connection was established via session resumption (PSK).
     /// </summary>
     public bool ResumptionAccepted => _quic.ResumptionAccepted;
 
     /// <summary>
-    /// <c>true</c>, wenn 0-RTT (early_data) vom Server akzeptiert wurde.
+    /// <c>true</c> when 0-RTT (early_data) was accepted by the server.
     /// </summary>
     public bool EarlyDataAccepted => _quic.EarlyDataAccepted;
 
     /// <summary>
-    /// Das vom Server per SETTINGS_MAX_FIELD_SECTION_SIZE angekündigte Limit (RFC 9114 §4.2.2);
-    /// <c>null</c> = nicht angekündigt (unbegrenzt). Größere Field Sections senden wir nicht.
+    /// The limit announced by the server via SETTINGS_MAX_FIELD_SECTION_SIZE (RFC 9114 §4.2.2);
+    /// <c>null</c> = not announced (unlimited). We do not send larger field sections.
     /// </summary>
     public ulong? ServerMaxFieldSectionSize => _qpack.PeerMaxFieldSectionSize;
 
     /// <summary>
-    /// Insert Count der QPACK-Encoder-Tabelle (Diagnose: &gt; 0 ⇒ dynamische Tabelle genutzt).
+    /// Insert count of the QPACK encoder table (diagnostics: &gt; 0 ⇒ the dynamic table was used).
     /// </summary>
     public ulong QpackEncoderInsertCount => _qpack.EncoderInsertCount;
 
     /// <summary>
-    /// Insert Count der QPACK-Decoder-Tabelle (Diagnose).
+    /// Insert count of the QPACK decoder table (diagnostics).
     /// </summary>
     public ulong QpackDecoderInsertCount => _qpack.DecoderInsertCount;
 
     public bool HandshakeConfirmed => _quic.HandshakeConfirmed;
 
     /// <summary>
-    /// <c>true</c>, sobald die Verbindung wegen Idle-Timeout still geschlossen wurde (RFC 9000 §10.1).
+    /// <c>true</c> once the connection was closed silently due to the idle timeout (RFC 9000 §10.1).
     /// </summary>
     public bool IsIdleTimedOut => _quic.IsIdleTimedOut;
 
     /// <summary>
-    /// <c>true</c>, wenn ein Retry des Servers verarbeitet und der ClientHello erneut gesendet wurde.
+    /// <c>true</c> when a server Retry was processed and the ClientHello was resent.
     /// </summary>
     public bool RetryHandled => _quic.RetryHandled;
 
     /// <summary>
-    /// <c>true</c>, während die Verbindung nach einem eigenen CONNECTION_CLOSE schließt (RFC 9000 §10.2).
+    /// <c>true</c> while the connection is closing after our own CONNECTION_CLOSE (RFC 9000 §10.2).
     /// </summary>
     public bool IsClosing => _quic.IsClosing;
 
     /// <summary>
-    /// <c>true</c>, nachdem ein CONNECTION_CLOSE des Peers empfangen wurde (Draining-Zustand).
+    /// <c>true</c> after a peer CONNECTION_CLOSE was received (draining state).
     /// </summary>
     public bool IsDraining => _quic.IsDraining;
 
     /// <summary>
-    /// <c>true</c>, sobald die Verbindung endgültig geschlossen ist (Closing/Draining nach 3·PTO abgelaufen).
+    /// <c>true</c> once the connection is finally closed (closing/draining expired after 3·PTO).
     /// </summary>
     public bool IsClosed => _quic.IsClosed;
 
     /// <summary>
-    /// Das vom Peer empfangene CONNECTION_CLOSE (Fehlercode + Grund), falls vorhanden.
+    /// The CONNECTION_CLOSE received from the peer (error code + reason), if any.
     /// </summary>
     public Quic.Frames.ConnectionCloseFrame? PeerCloseFrame => _quic.PeerCloseFrame;
 
     /// <summary>
-    /// Schließt die Verbindung sofort mit einem CONNECTION_CLOSE (RFC 9000 §10.2; Standard: NO_ERROR).
+    /// Closes the connection immediately with a CONNECTION_CLOSE (RFC 9000 §10.2; default: NO_ERROR).
     /// </summary>
     public void Close(TransportError error = TransportError.NoError, string reason = "") => _quic.Close(error, reason);
 
     /// <summary>
-    /// Schließt die Verbindung HTTP/3-konform ohne Fehler (RFC 9114 §5.2 SHOULD: CONNECTION_CLOSE
-    /// Typ 0x1d mit H3_NO_ERROR) — z. B. nachdem der Server per GOAWAY den Abbau eingeleitet hat.
+    /// Closes the connection HTTP/3-conformantly without an error (RFC 9114 §5.2 SHOULD:
+    /// CONNECTION_CLOSE type 0x1d with H3_NO_ERROR) — e.g. after the server initiated the teardown via GOAWAY.
     /// </summary>
     public void CloseGracefully() => _quic.CloseApplication(Http3Error.NoError, "graceful shutdown");
 
     /// <summary>
-    /// Keep-Alive-Intervall (RFC 9000 §10.1.2): sendet PINGs gegen den Idle-Timeout. <c>null</c> = aus.
+    /// Keep-alive interval (RFC 9000 §10.1.2): sends PINGs against the idle timeout. <c>null</c> = off.
     /// </summary>
     public TimeSpan? KeepAliveInterval
     {
@@ -249,29 +250,29 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Startet eine Pfadvalidierung (RFC 9000 §8.2), Grundlage der Connection Migration.
+    /// Starts a path validation (RFC 9000 §8.2), the basis of connection migration.
     /// </summary>
     public void InitiatePathValidation() => _quic.InitiatePathValidation();
 
     /// <summary>
-    /// <c>true</c>, sobald der Pfad per PATH_CHALLENGE/PATH_RESPONSE bestätigt wurde.
+    /// <c>true</c> once the path was confirmed via PATH_CHALLENGE/PATH_RESPONSE.
     /// </summary>
     public bool PathValidated => _quic.PathValidated;
 
     /// <summary>
-    /// Es läuft eine Pfadvalidierung (Antwort ausstehend).
+    /// A path validation is in progress (answer outstanding).
     /// </summary>
     public bool PathValidationPending => _quic.PathValidationPending;
 
     /// <summary>
-    /// Zugriff auf die zugrunde liegende QUIC-Verbindung (Diagnose).
+    /// Access to the underlying QUIC connection (diagnostics).
     /// </summary>
     public QuicClientConnection Quic => _quic;
 
     public void Start() => _quic.Start();
 
     /// <summary>
-    /// Prüft Loss-Detection-/PTO- und Idle-Timeouts (periodisch aufrufen).
+    /// Checks loss-detection/PTO and idle timeouts (call periodically).
     /// </summary>
     public void CheckTimeouts()
     {
@@ -282,7 +283,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     public IReadOnlyList<byte[]> GetDatagramsToSend() => _quic.GetDatagramsToSend();
 
     /// <summary>
-    /// Verarbeitet ein Datagramm und pumpt anschließend die HTTP/3-Stream-Daten weiter.
+    /// Processes a datagram and then pumps the HTTP/3 stream data along.
     /// </summary>
     public void ProcessDatagram(ReadOnlySpan<byte> datagram)
     {
@@ -291,21 +292,21 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Öffnet Control- + QPACK-Streams und sendet die SETTINGS (einmalig, nach dem Handshake).
+    /// Opens control + QPACK streams and sends the SETTINGS (once, after the handshake).
     /// </summary>
     public void InitializeHttp3()
     {
         if (_http3Initialized)
             return;
 
-        // Control-Stream: Typ 0x00, dann ein SETTINGS-Frame (kündigt unsere QPACK-Kapazität an).
+        // Control stream: type 0x00, then a SETTINGS frame (announcing our QPACK capacity).
         QuicStream control = _quic.OpenUnidirectionalStream();
-        control.SendUrgency = 0; // kritische Streams nie hinter Bulk-Daten verhungern lassen (RFC 9218 §10)
+        control.SendUrgency = 0; // never let critical streams starve behind bulk data (RFC 9218 §10)
         control.Write([(byte)Http3StreamType.Control]);
         control.Write(Http3Frames.Build(Http3FrameType.Settings, BuildSettings()));
         _controlStream = control;
 
-        // QPACK-Encoder-Stream (für Insert-Instruktionen) + Decoder-Stream (Typ-Präfix genügt).
+        // QPACK encoder stream (for insert instructions) + decoder stream (type prefix suffices).
         QuicStream encoderStream = _quic.OpenUnidirectionalStream();
         encoderStream.SendUrgency = 0;
         encoderStream.Write([(byte)Http3StreamType.QpackEncoder]);
@@ -318,27 +319,27 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
         _http3Initialized = true;
     }
 
-    private QuicStream? _controlStream; // unser Control-Stream (SETTINGS, PRIORITY_UPDATE)
+    private QuicStream? _controlStream; // our control stream (SETTINGS, PRIORITY_UPDATE)
 
     /// <summary>
-    /// Der Server erlaubt Extended CONNECT (SETTINGS_ENABLE_CONNECT_PROTOCOL = 1, RFC 8441/9220).
+    /// The server permits Extended CONNECT (SETTINGS_ENABLE_CONNECT_PROTOCOL = 1, RFC 8441/9220).
     /// </summary>
     public bool ServerEnablesConnectProtocol => _qpack.PeerEnableConnectProtocol;
 
     /// <summary>
-    /// Sendet ein Extended CONNECT (RFC 8441 §4 / RFC 9220), z. B. mit <paramref name="protocol"/> =
-    /// „websocket". Der Request-Stream bleibt offen — er wird nach einer 2xx-Antwort zum Tunnel
-    /// (<see cref="TryGetConnectResponse"/>). Ohne das Server-Setting DARF kein Extended CONNECT
-    /// gesendet werden (RFC 8441 §3 MUST NOT) — dann fliegt eine <see cref="InvalidOperationException"/>.
+    /// Sends an Extended CONNECT (RFC 8441 §4 / RFC 9220), e.g. with <paramref name="protocol"/> =
+    /// "websocket". The request stream stays open — after a 2xx response it becomes the tunnel
+    /// (<see cref="TryGetConnectResponse"/>). Without the server setting no Extended CONNECT may be
+    /// sent (RFC 8441 §3 MUST NOT) — an <see cref="InvalidOperationException"/> is thrown then.
     /// </summary>
     public ulong SendExtendedConnect(string authority, string path, string protocol,
                                      IReadOnlyList<HeaderField>? headers = null, string scheme = "https")
     {
         if (!_qpack.PeerEnableConnectProtocol)
             throw new InvalidOperationException(
-                "Der Server hat SETTINGS_ENABLE_CONNECT_PROTOCOL nicht angekündigt (RFC 8441 §3) — Extended CONNECT ist nicht erlaubt.");
+                "The server has not announced SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 8441 §3) — Extended CONNECT is not permitted.");
         if (_qpack.GoAwayId is not null)
-            throw new InvalidOperationException("GOAWAY empfangen (RFC 9114 §5.2): keine neuen Requests auf dieser Verbindung.");
+            throw new InvalidOperationException("GOAWAY received (RFC 9114 §5.2): no new requests on this connection.");
 
         var fields = new List<HeaderField>
         {
@@ -355,7 +356,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
 
         QuicStream stream = _quic.OpenBidirectionalStream();
         stream.Write(Http3Frames.Build(Http3FrameType.Headers, _qpack.EncodeHeaders(stream.Id.Value, fields)));
-        // KEIN Finish: der Stream trägt anschließend die Tunnel-Bytes (RFC 9114 §4.4).
+        // NO Finish: the stream subsequently carries the tunnel bytes (RFC 9114 §4.4).
 
         _requests[stream.Id.Value] = new RequestState(stream) { Method = "CONNECT", IsConnect = true };
         return stream.Id.Value;
@@ -364,24 +365,24 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     // ---- WebTransport (draft-ietf-webtrans-http3) -----------------------------------------
 
     /// <summary>
-    /// Der Server unterstützt WebTransport (SETTINGS_WT_MAX_SESSIONS &gt; 0 + Extended CONNECT + Datagramme).
+    /// The server supports WebTransport (SETTINGS_WT_MAX_SESSIONS &gt; 0 + Extended CONNECT + datagrams).
     /// </summary>
     public bool ServerSupportsWebTransport
         => _qpack.PeerWtMaxSessions > 0 && _qpack.PeerEnableConnectProtocol && DatagramsNegotiated;
 
     /// <summary>
-    /// Öffnet eine WebTransport-Session (draft-webtrans-http3 §3.2): sendet ein Extended CONNECT mit
-    /// <c>:protocol = webtransport</c>. Gibt die CONNECT-Stream-ID (= Session-ID) zurück; die Session
-    /// selbst steht nach der 2xx-Antwort über <see cref="TryGetWebTransportSession"/> bereit.
-    /// Mit <paramref name="availableProtocols"/> (Präferenz zuerst) wird ein ALPN-artiges
-    /// Anwendungsprotokoll ausgehandelt (draft §3.3, Header <c>WT-Available-Protocols</c>); die
-    /// Server-Wahl steht danach in <see cref="WebTransportSession.NegotiatedProtocol"/>.
+    /// Opens a WebTransport session (draft-webtrans-http3 §3.2): sends an Extended CONNECT with
+    /// <c>:protocol = webtransport</c>. Returns the CONNECT stream ID (= session ID); the session
+    /// itself is available after the 2xx response via <see cref="TryGetWebTransportSession"/>.
+    /// With <paramref name="availableProtocols"/> (preference first) an ALPN-like application
+    /// protocol is negotiated (draft §3.3, header <c>WT-Available-Protocols</c>); the server pick is
+    /// afterwards in <see cref="WebTransportSession.NegotiatedProtocol"/>.
     /// </summary>
     public ulong ConnectWebTransport(string authority, string path, IReadOnlyList<HeaderField>? headers = null,
                                      IReadOnlyList<string>? availableProtocols = null)
     {
         if (!ServerSupportsWebTransport)
-            throw new InvalidOperationException("Der Server unterstützt WebTransport nicht (draft §3.1: WT_MAX_SESSIONS/Datagramme fehlen).");
+            throw new InvalidOperationException("The server does not support WebTransport (draft §3.1: WT_MAX_SESSIONS/datagrams missing).");
         if (availableProtocols is { Count: > 0 })
         {
             var combined = new List<HeaderField>(headers ?? [])
@@ -398,8 +399,8 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Liefert die WebTransport-Session, sobald der Server den CONNECT mit 2xx angenommen hat; sonst
-    /// (noch nicht da oder abgelehnt) <c>false</c>.
+    /// Returns the WebTransport session once the server accepted the CONNECT with 2xx; otherwise
+    /// (not yet there or rejected) <c>false</c>.
     /// </summary>
     public bool TryGetWebTransportSession(ulong streamId, out WebTransportSession? session)
     {
@@ -413,15 +414,15 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Der Status der WebTransport-CONNECT-Antwort (z. B. 404, falls abgelehnt), sobald empfangen.
+    /// The status of the WebTransport CONNECT response (e.g. 404 when rejected), once received.
     /// </summary>
     public int? WebTransportConnectStatus(ulong streamId)
         => _requests.TryGetValue(streamId, out RequestState? state) ? state.ConnectStatus : null;
 
     /// <summary>
-    /// Wertet den <c>WT-Protocol</c>-Header der 2xx-Antwort aus (draft §3.3). Das Feld MUSS ignoriert
-    /// werden, wenn wir nichts angeboten haben, es mehrfach auftritt (dann wäre es kein einzelnes
-    /// SF-Item mehr), kein SF-String ist oder die Server-Wahl nicht aus unserer Angebotsliste stammt.
+    /// Evaluates the <c>WT-Protocol</c> header of the 2xx response (draft §3.3). The field MUST be
+    /// ignored when we offered nothing, when it occurs more than once (then it would no longer be a
+    /// single SF item), when it is not an SF string, or when the server pick is not from our offer list.
     /// </summary>
     private static string? SelectNegotiatedProtocol(RequestState state, List<HeaderField> headers)
     {
@@ -433,17 +434,18 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
             if (h.Name != WebTransportProtocols.ProtocolHeader)
                 continue;
             if (value is not null)
-                return null; // mehrfach ⇒ ignorieren
+                return null; // multiple ⇒ ignore
             value = h.Value;
         }
         if (value is null || !WebTransportProtocols.TryParseProtocol(value, out string chosen))
             return null;
-        return offered.Contains(chosen) ? chosen : null; // MUSS aus der Angebotsliste stammen
+        return offered.Contains(chosen) ? chosen : null; // MUST come from the offer list
     }
 
     /// <summary>
-    /// Liefert Status (und Header) der Extended-CONNECT-Antwort, sobald sie da ist; bei 2xx zusätzlich
-    /// den einsatzbereiten <see cref="Http3Tunnel"/> (sonst <c>null</c> — der CONNECT wurde abgelehnt).
+    /// Returns status (and headers) of the Extended-CONNECT response once it is there; on 2xx
+    /// additionally the ready-to-use <see cref="Http3Tunnel"/> (otherwise <c>null</c> — the CONNECT
+    /// was rejected).
     /// </summary>
     public bool TryGetConnectResponse(ulong streamId, out int status, out IReadOnlyList<HeaderField> headers, out Http3Tunnel? tunnel)
     {
@@ -459,14 +461,14 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Sendet ein PRIORITY_UPDATE (RFC 9218 §7.2) für einen laufenden Request — z. B. um einen
-    /// Prefetch (u=7) nachträglich dringlich zu machen (u=0). Das Signal überschreibt serverseitig
-    /// den <c>priority</c>-Header; das jeweils zuletzt empfangene Update gewinnt.
+    /// Sends a PRIORITY_UPDATE (RFC 9218 §7.2) for a running request — e.g. to make a prefetch
+    /// (u=7) urgent afterwards (u=0). The signal overrides the <c>priority</c> header on the server
+    /// side; the most recently received update wins.
     /// </summary>
     public void SendPriorityUpdate(ulong streamId, Http3Priority priority)
     {
         if (_controlStream is null)
-            throw new InvalidOperationException("InitializeHttp3() zuerst aufrufen — PRIORITY_UPDATE läuft über den Control-Stream.");
+            throw new InvalidOperationException("Call InitializeHttp3() first — PRIORITY_UPDATE runs over the control stream.");
 
         var writer = new BufferWriter(16);
         try
@@ -480,51 +482,51 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Die per GOAWAY vom Server angekündigte Stream-ID (RFC 9114 §5.2): Requests mit dieser ID oder
-    /// größer werden nicht verarbeitet; neue Requests sind auf dieser Verbindung nicht mehr erlaubt.
+    /// The stream ID announced by the server via GOAWAY (RFC 9114 §5.2): requests with this ID or
+    /// greater are not processed; new requests are no longer allowed on this connection.
     /// </summary>
     public ulong? GoAwayStreamId => _qpack.GoAwayId;
 
     /// <summary>
-    /// <c>true</c>, wenn der Request vom Server per GOAWAY zurückgewiesen wurde (Stream-ID ≥ GOAWAY-ID,
-    /// RFC 9114 §5.2) — er wurde garantiert NICHT verarbeitet und darf gefahrlos auf einer neuen
-    /// Verbindung wiederholt werden.
+    /// <c>true</c> when the request was rejected by the server via GOAWAY (stream ID ≥ GOAWAY ID,
+    /// RFC 9114 §5.2) — it was guaranteed NOT to have been processed and may be repeated safely on
+    /// a new connection.
     /// </summary>
     public bool IsRequestRejected(ulong streamId)
         => _requests.TryGetValue(streamId, out RequestState? state) && state.Rejected;
 
     /// <summary>
-    /// Sendet einen Request auf einem neuen bidirektionalen Stream. Gibt dessen Stream-ID zurück.
-    /// Ein nicht-leerer <see cref="Http3Request.Body"/> folgt als DATA-Frame auf das HEADERS-Frame
-    /// (RFC 9114 §4.1: Header-Sektion, dann Content als Serie von DATA-Frames), danach FIN.
-    /// Nach einem empfangenen GOAWAY sind neue Requests verboten (RFC 9114 §5.2 MUST NOT) —
-    /// dann fliegt eine <see cref="InvalidOperationException"/>; auf einer NEUEN Verbindung wiederholen.
+    /// Sends a request on a new bidirectional stream. Returns its stream ID.
+    /// A non-empty <see cref="Http3Request.Body"/> follows the HEADERS frame as a DATA frame
+    /// (RFC 9114 §4.1: header section, then content as a series of DATA frames), then FIN.
+    /// After a received GOAWAY, new requests are forbidden (RFC 9114 §5.2 MUST NOT) —
+    /// an <see cref="InvalidOperationException"/> is thrown then; repeat on a NEW connection.
     /// </summary>
     public ulong SendRequest(Http3Request request)
     {
         if (_qpack.GoAwayId is not null)
             throw new InvalidOperationException(
-                "GOAWAY empfangen (RFC 9114 §5.2): keine neuen Requests auf dieser Verbindung — neue Verbindung aufbauen.");
+                "GOAWAY received (RFC 9114 §5.2): no new requests on this connection — establish a new connection.");
 
-        // §4.1.2 MUST NOT generate: eigene malformed Requests schon lokal ablehnen.
+        // §4.1.2 MUST NOT generate: reject our own malformed requests locally already.
         if (Http3MessageValidator.ValidateRequestHeaders(request.ToHeaderFields()) is { } malformed)
-            throw new ArgumentException($"Malformed Request (RFC 9114 §4.1.2): {malformed}");
+            throw new ArgumentException($"Malformed request (RFC 9114 §4.1.2): {malformed}");
         if (request.Trailers.Count > 0 && Http3MessageValidator.ValidateTrailers(request.Trailers) is { } badTrailer)
-            throw new ArgumentException($"Malformed Request-Trailer (RFC 9114 §4.3): {badTrailer}");
+            throw new ArgumentException($"Malformed request trailers (RFC 9114 §4.3): {badTrailer}");
 
-        // §4.2.2 SHOULD NOT: keine Field Section über dem vom Server angekündigten Limit senden.
+        // §4.2.2 SHOULD NOT: send no field section above the limit announced by the server.
         if (_qpack.PeerMaxFieldSectionSize is { } peerLimit)
         {
             if (Http3Qpack.FieldSectionSize(request.ToHeaderFields()) > peerLimit)
                 throw new ArgumentException(
-                    $"Die Request-Header überschreiten das SETTINGS_MAX_FIELD_SECTION_SIZE des Servers ({peerLimit} Bytes, RFC 9114 §4.2.2).");
+                    $"The request headers exceed the server's SETTINGS_MAX_FIELD_SECTION_SIZE ({peerLimit} bytes, RFC 9114 §4.2.2).");
             if (request.Trailers.Count > 0 && Http3Qpack.FieldSectionSize(request.Trailers) > peerLimit)
                 throw new ArgumentException(
-                    $"Die Request-Trailer überschreiten das SETTINGS_MAX_FIELD_SECTION_SIZE des Servers ({peerLimit} Bytes, RFC 9114 §4.2.2).");
+                    $"The request trailers exceed the server's SETTINGS_MAX_FIELD_SECTION_SIZE ({peerLimit} bytes, RFC 9114 §4.2.2).");
         }
 
         QuicStream stream = _quic.OpenBidirectionalStream();
-        if (request.Priority is { } priority) // RFC 9218 §9: auch lokal fürs Senden des Requests nutzen
+        if (request.Priority is { } priority) // RFC 9218 §9: also use locally for sending the request
         {
             stream.SendUrgency = priority.Urgency;
             stream.SendIncremental = priority.Incremental;
@@ -533,46 +535,46 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
         stream.Write(Http3Frames.Build(Http3FrameType.Headers, headerBlock));
         if (request.Body.Length > 0)
             stream.Write(Http3Frames.Build(Http3FrameType.Data, request.Body));
-        if (request.Trailers.Count > 0) // Trailer-Sektion: abschließendes HEADERS-Frame (§4.1 Punkt 3)
+        if (request.Trailers.Count > 0) // trailer section: final HEADERS frame (§4.1 item 3)
             stream.Write(Http3Frames.Build(Http3FrameType.Headers, _qpack.EncodeHeaders(stream.Id.Value, [.. request.Trailers])));
-        stream.Finish(); // Ende der Nachricht ⇒ FIN (die QUIC-Schicht paketiert den Stream selbst)
+        stream.Finish(); // end of the message ⇒ FIN (the QUIC layer packetises the stream itself)
 
         _requests[stream.Id.Value] = new RequestState(stream) { Method = request.Method };
         return stream.Id.Value;
     }
 
     /// <summary>
-    /// Bricht einen laufenden Request ab (RFC 9114 §4.1.1): setzt die eigene Sendeseite zurück und
-    /// bricht das Lesen der Antwort ab (STOP_SENDING) — beides mit <c>H3_REQUEST_CANCELLED</c>
-    /// (Clients SOLLEN diesen Code verwenden). Eine bereits vollständige Antwort bleibt nutzbar.
+    /// Cancels a running request (RFC 9114 §4.1.1): resets our own send side and aborts reading the
+    /// response (STOP_SENDING) — both with <c>H3_REQUEST_CANCELLED</c> (clients SHOULD use this
+    /// code). An already-complete response stays usable.
     /// </summary>
     public void CancelRequest(ulong streamId)
     {
         if (!_requests.TryGetValue(streamId, out RequestState? state) || state.Complete || state.Cancelled)
             return;
         state.Cancelled = true;
-        state.Stream.Reset(Http3Error.RequestCancelled);     // Sendeseite abrupt beenden (§4.1.1)
-        state.Stream.AbortRead(Http3Error.RequestCancelled); // Lesen der Antwort abbrechen (§4.1.1)
+        state.Stream.Reset(Http3Error.RequestCancelled);     // end the send side abruptly (§4.1.1)
+        state.Stream.AbortRead(Http3Error.RequestCancelled); // abort reading the response (§4.1.1)
     }
 
     /// <summary>
-    /// <c>true</c>, wenn der Request abgebrochen wurde — von uns (<see cref="CancelRequest"/>) oder vom
-    /// Server (RESET_STREAM auf der Antwortseite, z. B. <c>H3_REQUEST_REJECTED</c>). Eine Teil-Antwort
-    /// SOLL dann nicht verwendet werden (RFC 9114 §4.1.1); <see cref="TryGetResponse"/> liefert nichts.
+    /// <c>true</c> when the request was cancelled — by us (<see cref="CancelRequest"/>) or by the
+    /// server (RESET_STREAM on the response side, e.g. <c>H3_REQUEST_REJECTED</c>). A partial response
+    /// SHOULD not be used then (RFC 9114 §4.1.1); <see cref="TryGetResponse"/> returns nothing.
     /// </summary>
     public bool IsRequestCancelled(ulong streamId)
         => _requests.TryGetValue(streamId, out RequestState? state) &&
            (state.Cancelled || (!state.Complete && state.Stream.IsResetByPeer));
 
     /// <summary>
-    /// Der Fehlercode, mit dem der Server die Antwortseite zurückgesetzt hat (z. B. 0x010b =
-    /// H3_REQUEST_REJECTED ⇒ Request gilt als nie gesendet und darf wiederholt werden), sonst <c>null</c>.
+    /// The error code with which the server reset the response side (e.g. 0x010b =
+    /// H3_REQUEST_REJECTED ⇒ the request counts as never sent and may be repeated), otherwise <c>null</c>.
     /// </summary>
     public ulong? RequestResetErrorCode(ulong streamId)
         => _requests.TryGetValue(streamId, out RequestState? state) ? state.Stream.PeerResetErrorCode : null;
 
     /// <summary>
-    /// Liefert die fertige Antwort eines Request-Streams, sobald sie vollständig empfangen ist.
+    /// Returns the finished response of a request stream once it has been received completely.
     /// </summary>
     public bool TryGetResponse(ulong streamId, out Http3Response? response)
     {
@@ -591,23 +593,23 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
         return true;
     }
 
-    // ---- HTTP/3-Empfang -------------------------------------------------------------------
+    // ---- HTTP/3 receiving -----------------------------------------------------------------
 
     private void Pump()
     {
         if (_quic.IsClosing || _quic.IsDraining || _quic.IsClosed)
-            return; // nach einem Verbindungsfehler nichts mehr verarbeiten
+            return; // process nothing more after a connection error
 
-        // Zuerst die Uni-Streams des Servers (SETTINGS + QPACK-Encoder-Instruktionen) verarbeiten.
+        // First process the server's uni streams (SETTINGS + QPACK encoder instructions).
         _qpack.PumpPeerStreams(_quic.Streams);
 
         foreach (RequestState state in _requests.Values)
         {
             if (_quic.IsClosing)
-                return; // ein Verbindungsfehler wurde gemeldet
+                return; // a connection error was reported
 
-            // GOAWAY (§5.2): Requests mit Stream-ID ≥ der angekündigten ID werden nicht verarbeitet —
-            // als „rejected" markieren (gefahrlos wiederholbar) und den Transportzustand aufräumen.
+            // GOAWAY (§5.2): requests with a stream ID ≥ the announced ID are not processed —
+            // mark them "rejected" (safely repeatable) and clean up the transport state.
             if (!state.Complete && !state.Rejected &&
                 _qpack.GoAwayId is { } goAway && state.Stream.Id.Value >= goAway)
             {
@@ -619,17 +621,17 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
 
             if (state.Tunnel is not null && state.Stream.IsResetByPeer)
             {
-                state.Tunnel.End(); // abrupter Tunnel-Abbruch (≙ TCP-RST, RFC 9220 §3)
+                state.Tunnel.End(); // abrupt tunnel abort (≙ TCP RST, RFC 9220 §3)
                 continue;
             }
             if (state.Cancelled || state.Rejected || state.Malformed || state.TooLarge || state.Stream.IsResetByPeer)
-                continue; // abgebrochen (§4.1.1), malformed (§4.1.2) oder zu groß (§4.2.2) – nicht weiterverarbeiten
+                continue; // cancelled (§4.1.1), malformed (§4.1.2) or too large (§4.2.2) – do not process further
 
             byte[] chunk = state.Stream.Read();
             if (chunk.Length > 0)
                 state.Buffer.Append(chunk);
 
-            // WebTransport-CONNECT-Stream (draft §5.6/§6): nach der 2xx-Antwort tragen DATA-Frames Capsules.
+            // WebTransport CONNECT stream (draft §5.6/§6): after the 2xx response, DATA frames carry capsules.
             if (state.WebTransportSession is { } wtSession)
             {
                 ProcessWebTransportConnectStream(state, wtSession);
@@ -644,19 +646,19 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 state.Buffer.Consume(consumed);
             }
 
-            // Frame-Zustandsmaschine des Request-Streams (RFC 9114 §4.1, §7.2): Interim-Sektionen (1xx),
-            // finale HEADERS, dann DATA, optional eine Trailer-Sektion; blockierte Sektionen halten an.
+            // Frame state machine of the request stream (RFC 9114 §4.1, §7.2): interim sections (1xx),
+            // final HEADERS, then DATA, optionally a trailer section; blocked sections pause.
             while (state.Pending.Count > 0 && !state.Malformed && !state.TooLarge)
             {
                 Http3Frame frame = state.Pending.Peek();
                 if (!ProcessResponseFrame(state, frame, out bool blocked))
-                    return; // Verbindungsfehler gemeldet
+                    return; // connection error reported
                 if (blocked)
-                    break;  // auf weitere QPACK-Encoder-Stream-Daten warten
+                    break;  // wait for more QPACK encoder-stream data
                 state.Pending.Dequeue();
             }
 
-            // Tunnel-Streams: ein FIN des Servers ist das geordnete Tunnel-Ende (RFC 9220 §3).
+            // Tunnel streams: a server FIN is the orderly tunnel end (RFC 9220 §3).
             if (state.Tunnel is not null)
             {
                 if (state.Stream.IsReceiveComplete && state.Pending.Count == 0)
@@ -666,14 +668,14 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
 
             if (!state.Malformed && !state.TooLarge && state.Stream.IsReceiveComplete && state.Pending.Count == 0)
             {
-                // §7.1: endet der Stream sauber mitten in einem Frame, ist das ein H3_FRAME_ERROR.
+                // §7.1: if the stream ends cleanly mid-frame, that is an H3_FRAME_ERROR.
                 if (state.Buffer.Count > 0)
                 {
                     FatalConnectionError(Http3Error.FrameError, "truncated frame at end of stream");
                     return;
                 }
-                // §4.1.2: content-length MUSS zur DATA-Summe passen — außer die Antwort ist per
-                // Definition rumpflos (HEAD, 204, 304) und es kam tatsächlich kein Content.
+                // §4.1.2: content-length MUST match the DATA sum — unless the response is body-less
+                // by definition (HEAD, 204, 304) and indeed no content arrived.
                 int finalStatus = ParseStatus(state.Headers);
                 bool contentNeverPresent = state.Method == "HEAD" || finalStatus is 204 or 304;
                 if (Http3MessageValidator.ValidateContentLength(state.Headers, (ulong)state.Body.Count, contentNeverPresent) is { } lengthProblem)
@@ -685,20 +687,20 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
             }
         }
 
-        // Server-initiierte Bidi-Streams (draft §4.2): WT_STREAM (0x41) ‖ Session-ID ⇒ WebTransport.
+        // Server-initiated bidi streams (draft §4.2): WT_STREAM (0x41) ‖ session ID ⇒ WebTransport.
         if (_wtMaxSessions > 0)
             RouteServerInitiatedWebTransportBidi();
 
-        // HTTP-Datagramme ZULETZT zuordnen (RFC 9297 §2.1): so sind Tunnel aus demselben Flight
-        // bereits angelegt, statt die Datagramme als „unbekannt" zu verwerfen.
+        // Match HTTP datagrams LAST (RFC 9297 §2.1): tunnels from the same flight are then already
+        // created, instead of dropping the datagrams as "unknown".
         DispatchReceivedDatagrams();
     }
 
-    private readonly Dictionary<ulong, List<byte>> _serverBidiHeaders = []; // Kopf-Puffer server-initiierter Bidi-Streams
+    private readonly Dictionary<ulong, List<byte>> _serverBidiHeaders = []; // header buffers of server-initiated bidi streams
 
     /// <summary>
-    /// Routet server-initiierte bidirektionale Streams (draft §4.2): ihr Kopf ist WT_STREAM (0x41) ‖
-    /// Session-ID; danach übernimmt der WebTransport-Manager.
+    /// Routes server-initiated bidirectional streams (draft §4.2): their header is WT_STREAM (0x41) ‖
+    /// session ID; the WebTransport manager takes over afterwards.
     /// </summary>
     private void RouteServerInitiatedWebTransportBidi()
     {
@@ -712,12 +714,12 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
 
             var reader = new BufferReader(buffer.ToArray());
             if (!reader.TryReadVarInt(out ulong signal))
-                continue; // Kopf noch unvollständig
+                continue; // header still incomplete
             if (signal != WebTransportConstants.BidiStreamSignal || !reader.TryReadVarInt(out ulong sessionId))
             {
                 if (signal != WebTransportConstants.BidiStreamSignal)
                 {
-                    _routedServerBidi.Add(id); // kein WT-Stream ⇒ nicht mehr betrachten
+                    _routedServerBidi.Add(id); // not a WT stream ⇒ no longer consider it
                     _serverBidiHeaders.Remove(id);
                 }
                 continue;
@@ -731,8 +733,8 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     private readonly HashSet<ulong> _routedServerBidi = [];
 
     /// <summary>
-    /// Verarbeitet den WebTransport-CONNECT-Stream (draft §5.6/§6): DATA-Frames tragen Capsules; deren
-    /// Wert-Bytes werden akkumuliert und als Capsules an die Session gereicht. FIN beendet die Session.
+    /// Processes the WebTransport CONNECT stream (draft §5.6/§6): DATA frames carry capsules; their
+    /// value bytes are accumulated and handed to the session as capsules. FIN ends the session.
     /// </summary>
     private void ProcessWebTransportConnectStream(RequestState state, WebTransportSession session)
     {
@@ -752,12 +754,12 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
             state.CapsuleBuffer.Consume(used);
         }
         if ((state.Stream.IsReceiveComplete || state.Stream.IsResetByPeer) && !session.IsClosed)
-            session.OnConnectStreamClosed(); // §6: CONNECT-Stream geschlossen ⇒ Session beendet
+            session.OnConnectStreamClosed(); // §6: CONNECT stream closed ⇒ session ended
     }
 
     // ---- IWebTransportHost (draft-webtrans-http3) -----------------------------------------
 
-    /// <summary>Anfangs-Flow-Control-Limits, die wir je Session gewähren (draft §5.5).</summary>
+    /// <summary>Initial flow-control limits we grant per session (draft §5.5).</summary>
     internal ulong LocalInitialMaxStreamsUni { get; init; } = 16;
     internal ulong LocalInitialMaxStreamsBidi { get; init; } = 16;
     internal ulong LocalInitialMaxData { get; init; } = 1_048_576;
@@ -776,24 +778,24 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     QuicStream IWebTransportHost.OpenWebTransportUniStream(ulong sessionId)
     {
         QuicStream stream = _quic.OpenUnidirectionalStream();
-        stream.Write(WebTransportStreamHeader(WebTransportConstants.UniStreamType, sessionId)); // 0x54 ‖ Session-ID
+        stream.Write(WebTransportStreamHeader(WebTransportConstants.UniStreamType, sessionId)); // 0x54 ‖ session ID
         return stream;
     }
 
     QuicStream IWebTransportHost.OpenWebTransportBidiStream(ulong sessionId)
     {
         QuicStream stream = _quic.OpenBidirectionalStream();
-        stream.Write(WebTransportStreamHeader(WebTransportConstants.BidiStreamSignal, sessionId)); // 0x41 ‖ Session-ID
+        stream.Write(WebTransportStreamHeader(WebTransportConstants.BidiStreamSignal, sessionId)); // 0x41 ‖ session ID
         return stream;
     }
 
     bool IWebTransportHost.SendWebTransportDatagram(ulong sessionId, byte[] payload)
-        => TrySendHttpDatagram(sessionId, payload); // §4.4: Quarter Stream ID = CONNECT-Stream
+        => TrySendHttpDatagram(sessionId, payload); // §4.4: quarter stream ID = CONNECT stream
 
     void IWebTransportHost.WriteConnectStreamData(ulong sessionId, byte[] data)
     {
         if (_requests.TryGetValue(sessionId, out RequestState? state))
-            state.Stream.Write(Http3Frames.Build(Http3FrameType.Data, data)); // Capsules in DATA-Frames
+            state.Stream.Write(Http3Frames.Build(Http3FrameType.Data, data)); // capsules in DATA frames
     }
 
     void IWebTransportHost.FinishConnectStream(ulong sessionId)
@@ -815,16 +817,16 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Verarbeitet EIN Frame des Antwort-Streams gemäß RFC 9114 §4.1/§7.2. Gibt <c>false</c> zurück,
-    /// wenn ein Verbindungsfehler gemeldet wurde; <paramref name="blocked"/> zeigt eine blockierte
-    /// QPACK-Sektion an (Frame noch nicht konsumieren).
+    /// Processes ONE frame of the response stream per RFC 9114 §4.1/§7.2. Returns <c>false</c> when
+    /// a connection error was reported; <paramref name="blocked"/> indicates a blocked QPACK section
+    /// (do not consume the frame yet).
     /// </summary>
     private bool ProcessResponseFrame(RequestState state, Http3Frame frame, out bool blocked)
     {
         blocked = false;
 
-        // WebTransport-CONNECT-Stream (draft §5.6): DATA-Frames tragen Capsules — im selben Flight mit
-        // der 2xx-Sektion eintreffende sammeln, statt sie als HTTP zu deuten.
+        // WebTransport CONNECT stream (draft §5.6): DATA frames carry capsules — collect those
+        // arriving in the same flight as the 2xx section instead of interpreting them as HTTP.
         if (state.WebTransportSession is not null)
         {
             if (frame.Type == Http3FrameType.Data)
@@ -832,7 +834,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
             return true;
         }
 
-        // Tunnel-Modus (Extended CONNECT angenommen, RFC 9114 §4.4): nur noch DATA-Frames erlaubt.
+        // Tunnel mode (Extended CONNECT accepted, RFC 9114 §4.4): only DATA frames allowed from now on.
         if (state.Tunnel is not null)
         {
             if (frame.Type == Http3FrameType.Data)
@@ -848,7 +850,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 FatalConnectionError(Http3Error.FrameUnexpected, "non-DATA frame on CONNECT stream"); // §4.4
                 return false;
             }
-            return true; // unbekannte Typen (Grease/Extensions) ignorieren (§9)
+            return true; // ignore unknown types (grease/extensions) (§9)
         }
 
         switch (frame.Type)
@@ -863,19 +865,19 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                     blocked = true;
                     return true;
                 }
-                // §4.2.2: eine Field Section über unserem angekündigten Limit können wir nicht
-                // verarbeiten — die Antwort wird verworfen („A client can discard responses …").
+                // §4.2.2: we cannot process a field section above our announced limit — the
+                // response is discarded ("A client can discard responses …").
                 if (_localMaxFieldSectionSize is { } limit && Http3Qpack.FieldSectionSize(headers) > limit)
                 {
                     state.TooLarge = true;
-                    state.Stream.Reset(Http3Error.RequestCancelled);     // kein Interesse mehr (§4.1.1)
+                    state.Stream.Reset(Http3Error.RequestCancelled);     // no longer interested (§4.1.1)
                     state.Stream.AbortRead(Http3Error.RequestCancelled);
                     return true;
                 }
                 if (state.FinalHeadersSeen)
                 {
-                    // Trailer-Sektion (§4.1 Punkt 3) — nach Content ODER direkt nach der finalen
-                    // Sektion. §4.3: Pseudo-Header sind in Trailern verboten.
+                    // Trailer section (§4.1 item 3) — after content OR directly after the final
+                    // section. §4.3: pseudo-headers are forbidden in trailers.
                     if (Http3MessageValidator.ValidateTrailers(headers) is not null)
                     {
                         MarkMalformed(state, "malformed trailer section");
@@ -886,24 +888,24 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 }
                 else if (Http3MessageValidator.ValidateResponseHeaders(headers, out int status) is { } problem)
                 {
-                    // §4.1.2: Clients DÜRFEN malformed Responses nicht akzeptieren.
+                    // §4.1.2: clients MUST NOT accept malformed responses.
                     MarkMalformed(state, problem);
                     return true;
                 }
                 else if (status is >= 100 and <= 199)
                 {
-                    // Interim-Response (1xx, §4.1): geht der finalen Antwort voraus, KEIN Teil davon.
+                    // Interim response (1xx, §4.1): precedes the final response, NOT a part of it.
                     state.Interim.Add(new Http3InterimResponse(status, headers));
                 }
                 else if (state.IsConnect)
                 {
-                    // Extended-CONNECT-Antwort (RFC 8441/9220/webtrans): 2xx ⇒ der Stream wird zum Tunnel
-                    // bzw. zur WebTransport-Session; sonst normale (abgelehnte) Antwort bis zum FIN.
+                    // Extended-CONNECT response (RFC 8441/9220/webtrans): 2xx ⇒ the stream becomes the
+                    // tunnel or the WebTransport session; otherwise a normal (rejected) response until the FIN.
                     state.Headers.AddRange(headers);
                     state.ConnectStatus = status;
                     if (status is >= 200 and < 300 && state.IsWebTransport)
                     {
-                        // WebTransport-Session etabliert (draft §3.2): CONNECT-Stream trägt fortan Capsules.
+                        // WebTransport session established (draft §3.2): the CONNECT stream carries capsules from now on.
                         var session = new WebTransportSession(state.Stream.Id.Value, this)
                         {
                             NegotiatedProtocol = SelectNegotiatedProtocol(state, headers), // draft §3.3
@@ -924,7 +926,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 }
                 else
                 {
-                    state.Headers.AddRange(headers); // die finale Header-Sektion
+                    state.Headers.AddRange(headers); // the final header section
                     state.FinalHeadersSeen = true;
                 }
                 return true;
@@ -933,8 +935,8 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 FatalConnectionError(Http3Error.FrameUnexpected, "DATA after trailers"); // §4.1
                 return false;
             case Http3FrameType.Data when !state.FinalHeadersSeen && state.Interim.Count > 0:
-                // Framing wäre gültig (HEADERS→DATA), aber Interim-Responses tragen KEINEN Content (§4.1)
-                // ⇒ malformed ⇒ STREAM-Error H3_MESSAGE_ERROR (§4.1.2), kein Verbindungsfehler.
+                // The framing would be valid (HEADERS→DATA), but interim responses carry NO content
+                // (§4.1) ⇒ malformed ⇒ STREAM error H3_MESSAGE_ERROR (§4.1.2), no connection error.
                 MarkMalformed(state, "DATA after interim response");
                 return true;
             case Http3FrameType.Data when !state.FinalHeadersSeen:
@@ -958,12 +960,12 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 FatalConnectionError(Http3Error.FrameUnexpected, "CANCEL_PUSH on request stream"); // §7.2.3
                 return false;
             case Http3FrameType.PushPromise:
-                // §4.6/§7.2.5: wir haben nie ein MAX_PUSH_ID gesendet ⇒ jede Push-ID ist zu groß.
+                // §4.6/§7.2.5: we never sent a MAX_PUSH_ID ⇒ every push ID is too large.
                 FatalConnectionError(Http3Error.IdError, "PUSH_PROMISE without MAX_PUSH_ID");
                 return false;
             case Http3FrameType.PriorityUpdateRequest:
             case Http3FrameType.PriorityUpdatePush:
-                // RFC 9218 §7.2: Server MÜSSEN NIE PRIORITY_UPDATE senden (und schon gar nicht hier).
+                // RFC 9218 §7.2: servers MUST NEVER send PRIORITY_UPDATE (and certainly not here).
                 FatalConnectionError(Http3Error.FrameUnexpected, "PRIORITY_UPDATE sent to client");
                 return false;
 
@@ -973,13 +975,13 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                     FatalConnectionError(Http3Error.FrameUnexpected, "reserved HTTP/2 frame type"); // §7.2.8
                     return false;
                 }
-                return true; // unbekannte Typen (inkl. Grease) ignorieren (§9)
+                return true; // ignore unknown types (incl. grease) (§9)
         }
     }
 
     /// <summary>
-    /// Behandelt eine malformed Response als STREAM-Fehler H3_MESSAGE_ERROR (RFC 9114 §4.1.2):
-    /// die Antwort DARF NICHT akzeptiert werden; der Stream wird abgebrochen, die Verbindung lebt weiter.
+    /// Treats a malformed response as the STREAM error H3_MESSAGE_ERROR (RFC 9114 §4.1.2):
+    /// the response MUST NOT be accepted; the stream is aborted, the connection lives on.
     /// </summary>
     private static void MarkMalformed(RequestState state, string reason)
     {
@@ -990,7 +992,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// Liest den <c>:status</c>-Pseudo-Header einer Header-Sektion (0, wenn nicht vorhanden/ungültig).
+    /// Reads the <c>:status</c> pseudo-header of a header section (0 when absent/invalid).
     /// </summary>
     private static int ParseStatus(List<HeaderField> headers)
     {
@@ -1001,15 +1003,15 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     }
 
     /// <summary>
-    /// <c>true</c>, wenn die Antwort als malformed verworfen wurde (RFC 9114 §4.1.2 —
-    /// Stream-Fehler H3_MESSAGE_ERROR; Clients MÜSSEN malformed Responses ablehnen).
+    /// <c>true</c> when the response was discarded as malformed (RFC 9114 §4.1.2 —
+    /// stream error H3_MESSAGE_ERROR; clients MUST reject malformed responses).
     /// </summary>
     public bool IsResponseMalformed(ulong streamId)
         => _requests.TryGetValue(streamId, out RequestState? state) && state.Malformed;
 
     /// <summary>
-    /// <c>true</c>, wenn eine Antwort-Field-Section unser angekündigtes
-    /// SETTINGS_MAX_FIELD_SECTION_SIZE überschritt und die Antwort verworfen wurde (RFC 9114 §4.2.2).
+    /// <c>true</c> when a response field section exceeded our announced
+    /// SETTINGS_MAX_FIELD_SECTION_SIZE and the response was discarded (RFC 9114 §4.2.2).
     /// </summary>
     public bool IsResponseTooLarge(ulong streamId)
         => _requests.TryGetValue(streamId, out RequestState? state) && state.TooLarge;
@@ -1033,7 +1035,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 writer.WriteVarInt(Http3Setting.H3Datagram); // RFC 9297 §2.1.1
                 writer.WriteVarInt(1);
             }
-            if (_wtMaxSessions > 0) // draft-webtrans-http3 §3.1: Client kündigt WT_MAX_SESSIONS > 0 an
+            if (_wtMaxSessions > 0) // draft-webtrans-http3 §3.1: the client announces WT_MAX_SESSIONS > 0
             {
                 writer.WriteVarInt(WebTransportConstants.SettingMaxSessions);
                 writer.WriteVarInt(_wtMaxSessions);
@@ -1044,7 +1046,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
                 writer.WriteVarInt(WebTransportConstants.SettingInitialMaxData);
                 writer.WriteVarInt(LocalInitialMaxData);
             }
-            // Grease-Setting (RFC 9114 §7.2.4.1 SHOULD): 0x1f·N + 0x21 — Empfänger MÜSSEN es ignorieren.
+            // Grease setting (RFC 9114 §7.2.4.1 SHOULD): 0x1f·N + 0x21 — receivers MUST ignore it.
             writer.WriteVarInt(0x1f * 4 + 0x21);
             writer.WriteVarInt(0);
             return writer.WrittenSpan.ToArray();
@@ -1057,27 +1059,27 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     private sealed class RequestState(QuicStream stream)
     {
         public QuicStream Stream { get; } = stream;
-        public string Method { get; init; } = "GET"; // für die Content-Length-Ausnahme (HEAD, §4.1.2)
+        public string Method { get; init; } = "GET"; // for the content-length exception (HEAD, §4.1.2)
         public bool IsConnect { get; init; }         // Extended CONNECT (RFC 8441/9220)
         public bool IsWebTransport { get; set; }     // :protocol = webtransport (draft-webtrans-http3)
-        public List<string>? OfferedWtProtocols { get; set; } // per WT-Available-Protocols angeboten (draft §3.3)
-        public int? ConnectStatus { get; set; }      // Status der CONNECT-Antwort, sobald empfangen
-        public Http3Tunnel? Tunnel { get; set; }     // Tunnel nach 2xx-Annahme, sonst null
-        public WebTransportSession? WebTransportSession { get; set; } // WebTransport-Session (draft-webtrans-http3)
-        public ByteQueue CapsuleBuffer { get; } = new(); // Capsule-Protokoll-Bytes des WT-CONNECT-Streams
+        public List<string>? OfferedWtProtocols { get; set; } // offered via WT-Available-Protocols (draft §3.3)
+        public int? ConnectStatus { get; set; }      // status of the CONNECT response, once received
+        public Http3Tunnel? Tunnel { get; set; }     // tunnel after 2xx acceptance, otherwise null
+        public WebTransportSession? WebTransportSession { get; set; } // WebTransport session (draft-webtrans-http3)
+        public ByteQueue CapsuleBuffer { get; } = new(); // capsule-protocol bytes of the WT CONNECT stream
         public ByteQueue Buffer { get; } = new();
-        public Queue<Http3Frame> Pending { get; } = new(); // geparste, noch zu verarbeitende Frames
+        public Queue<Http3Frame> Pending { get; } = new(); // parsed frames still to be processed
         public List<HeaderField> Headers { get; } = [];
         public List<byte> Body { get; } = [];
-        public List<Http3InterimResponse> Interim { get; } = []; // 1xx-Sektionen vor der finalen Antwort (§4.1)
-        public List<HeaderField> Trailers { get; } = [];         // Trailer-Sektion (§4.1 Punkt 3)
+        public List<Http3InterimResponse> Interim { get; } = []; // 1xx sections before the final response (§4.1)
+        public List<HeaderField> Trailers { get; } = [];         // trailer section (§4.1 item 3)
         public bool Complete { get; set; }
-        public bool Cancelled { get; set; }        // von uns abgebrochen (RFC 9114 §4.1.1)
-        public bool Rejected { get; set; }         // per GOAWAY zurückgewiesen (§5.2) ⇒ gefahrlos wiederholbar
-        public bool Malformed { get; set; }        // malformed Response verworfen (§4.1.2, H3_MESSAGE_ERROR)
-        public bool TooLarge { get; set; }         // Field Section über unserem Limit verworfen (§4.2.2)
-        public bool FinalHeadersSeen { get; set; } // finale (nicht-1xx) Header-Sektion dekodiert (§4.1)
-        public bool DataSeen { get; set; }         // Content begonnen
-        public bool TrailersSeen { get; set; }     // Trailer-Sektion gesehen ⇒ danach sind Frames illegal
+        public bool Cancelled { get; set; }        // cancelled by us (RFC 9114 §4.1.1)
+        public bool Rejected { get; set; }         // rejected via GOAWAY (§5.2) ⇒ safely repeatable
+        public bool Malformed { get; set; }        // malformed response discarded (§4.1.2, H3_MESSAGE_ERROR)
+        public bool TooLarge { get; set; }         // field section above our limit discarded (§4.2.2)
+        public bool FinalHeadersSeen { get; set; } // final (non-1xx) header section decoded (§4.1)
+        public bool DataSeen { get; set; }         // content started
+        public bool TrailersSeen { get; set; }     // trailer section seen ⇒ frames after it are illegal
     }
 }

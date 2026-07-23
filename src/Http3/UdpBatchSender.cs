@@ -27,34 +27,34 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 
 /// <summary>
-/// Versendet die Datagramme eines Pump-Durchlaufs möglichst in wenigen Syscalls (UDP-Batching,
-/// Phase 9). Auf <b>Linux</b> werden gleich große Datagramme via <c>UDP_SEGMENT</c> (GSO) zu EINEM
-/// <c>sendmsg</c> zusammengefasst — der Kernel zerlegt sie wieder in einzelne Pakete. Auf allen
-/// anderen Plattformen (u. a. Windows) fällt der Sender auf eine schlanke Einzelsende-Schleife
-/// zurück, die den <see cref="GsoBatcher"/>-Arbeitspuffer und die Ziel-Adresse wiederverwendet.
-/// Beides ist auf dem Draht identisch — GSO spart nur Syscalls, nicht Bytes.
+/// Sends the datagrams of a pump pass in as few syscalls as possible (UDP batching, phase 9). On
+/// <b>Linux</b>, equal-sized datagrams are combined via <c>UDP_SEGMENT</c> (GSO) into ONE
+/// <c>sendmsg</c> — the kernel splits them back into individual packets. On all other platforms
+/// (incl. Windows) the sender falls back to a lean single-send loop that reuses the
+/// <see cref="GsoBatcher"/> work buffer and the destination address.
+/// Both are identical on the wire — GSO only saves syscalls, not bytes.
 /// </summary>
 internal sealed class UdpBatchSender
 {
-    // Linux: SOL_UDP = 17, UDP_SEGMENT = 103 (aus <netinet/udp.h> / <linux/udp.h>).
+    // Linux: SOL_UDP = 17, UDP_SEGMENT = 103 (from <netinet/udp.h> / <linux/udp.h>).
     private const SocketOptionLevel SolUdp = (SocketOptionLevel)17;
     private const SocketOptionName UdpSegment = (SocketOptionName)103;
 
     private readonly GsoBatcher _batcher = new();
     private readonly bool _gsoSupported = OperatingSystem.IsLinux();
-    private bool _gsoDisabled; // wird gesetzt, falls der Kernel GSO doch ablehnt (dann dauerhaft Fallback)
+    private bool _gsoDisabled; // set when the kernel rejects GSO after all (then permanent fallback)
 
     /// <summary>
-    /// Sendet alle <paramref name="datagrams"/> über den (verbundenen oder unverbundenen)
-    /// <paramref name="socket"/>. Ist <paramref name="remote"/> <c>null</c>, gilt der Socket als
-    /// verbunden (Client); sonst wird an die Adresse gesendet (Server).
+    /// Sends all <paramref name="datagrams"/> over the (connected or unconnected)
+    /// <paramref name="socket"/>. When <paramref name="remote"/> is <c>null</c>, the socket counts
+    /// as connected (client); otherwise the address is sent to (server).
     /// </summary>
     public void Send(Socket socket, IReadOnlyList<byte[]> datagrams, EndPoint? remote)
     {
         if (datagrams.Count == 0)
             return;
 
-        // Ohne GSO: schlichte Einzelsende-Schleife (keine Zwischenkopie).
+        // Without GSO: a plain single-send loop (no intermediate copy).
         if (!_gsoSupported || _gsoDisabled)
         {
             foreach (byte[] datagram in datagrams)
@@ -73,12 +73,12 @@ internal sealed class UdpBatchSender
             {
                 socket.SetRawSocketOption((int)SolUdp, (int)UdpSegment, BitConverter.GetBytes(batch.SegmentSize));
                 SendOne(socket, batch.Buffer, batch.Length, remote);
-                socket.SetRawSocketOption((int)SolUdp, (int)UdpSegment, BitConverter.GetBytes(0)); // GSO wieder aus
+                socket.SetRawSocketOption((int)SolUdp, (int)UdpSegment, BitConverter.GetBytes(0)); // GSO off again
             }
             catch (SocketException)
             {
-                // Kernel/NIC lehnt GSO ab ⇒ dauerhaft auf Einzelsenden zurückfallen und diesen Batch
-                // Segment für Segment nachholen (byte-identisch zum GSO-Ergebnis).
+                // Kernel/NIC rejects GSO ⇒ fall back permanently to single sends and catch up this
+                // batch segment by segment (byte-identical to the GSO result).
                 _gsoDisabled = true;
                 for (int offset = 0; offset < batch.Length; offset += batch.SegmentSize)
                 {

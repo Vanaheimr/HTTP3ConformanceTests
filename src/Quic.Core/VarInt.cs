@@ -24,25 +24,25 @@ using System.Buffers.Binary;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Core;
 
 /// <summary>
-/// QUIC Variable-Length Integer (RFC 9000, §16).
+/// QUIC variable-length integer (RFC 9000, §16).
 /// <para>
-/// Die beiden höchstwertigen Bits des ersten Bytes kodieren die Länge des Integers
-/// (2^bits Bytes: 1, 2, 4 oder 8). Die restlichen Bits bilden zusammen mit den
-/// Folgebytes den Wert (Big-Endian). Nutzbarer Wertebereich: 0 .. 2^62-1.
+/// The two most significant bits of the first byte encode the length of the integer
+/// (2^bits bytes: 1, 2, 4 or 8). The remaining bits, together with the following
+/// bytes, form the value (big-endian). Usable value range: 0 .. 2^62-1.
 /// </para>
 /// <code>
-///   2Bit | Länge | Nutzbare Bits | Maximalwert
-///   -----+-------+---------------+---------------------------
-///    00  |   1   |       6       | 63
-///    01  |   2   |      14       | 16383
-///    10  |   4   |      30       | 1073741823
-///    11  |   8   |      62       | 4611686018427387903
+///   2Bit | Length | Usable bits | Maximum value
+///   -----+--------+-------------+---------------------------
+///    00  |   1    |      6      | 63
+///    01  |   2    |     14      | 16383
+///    10  |   4    |     30      | 1073741823
+///    11  |   8    |     62      | 4611686018427387903
 /// </code>
 /// </summary>
 public static class VarInt
 {
     /// <summary>
-    /// Größter kodierbarer Wert (2^62 - 1).
+    /// Largest encodable value (2^62 - 1).
     /// </summary>
     public const ulong MaxValue = (1UL << 62) - 1;
 
@@ -51,9 +51,9 @@ public static class VarInt
     private const ulong Max4Byte = (1UL << 30) - 1;  // 1073741823
 
     /// <summary>
-    /// Liefert die Anzahl Bytes, die <paramref name="value"/> im Wire-Format belegt (1, 2, 4 oder 8).
+    /// Returns the number of bytes that <paramref name="value"/> occupies in the wire format (1, 2, 4 or 8).
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Wenn <paramref name="value"/> &gt; <see cref="MaxValue"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">If <paramref name="value"/> &gt; <see cref="MaxValue"/>.</exception>
     public static int GetLength(ulong value)
     {
         if (value <= Max1Byte) return 1;
@@ -61,45 +61,45 @@ public static class VarInt
         if (value <= Max4Byte) return 4;
         if (value <= MaxValue) return 8;
         throw new ArgumentOutOfRangeException(nameof(value), value,
-            $"Wert überschreitet den maximal kodierbaren VarInt ({MaxValue}).");
+            $"Value exceeds the largest encodable VarInt ({MaxValue}).");
     }
 
     /// <summary>
-    /// Liefert die Gesamtlänge (in Bytes) eines VarInts anhand seines ersten Bytes,
-    /// ohne den Rest zu lesen. Nützlich, um vorab zu prüfen, ob genug Bytes vorliegen.
+    /// Returns the total length (in bytes) of a VarInt based on its first byte,
+    /// without reading the rest. Useful for checking in advance whether enough bytes are present.
     /// </summary>
     public static int GetLengthFromFirstByte(byte first) => 1 << (first >> 6);
 
     /// <summary>
-    /// Kodiert <paramref name="value"/> in <paramref name="destination"/> und gibt die
-    /// Anzahl geschriebener Bytes zurück.
+    /// Encodes <paramref name="value"/> into <paramref name="destination"/> and returns the
+    /// number of bytes written.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Wenn der Wert zu groß ist.</exception>
-    /// <exception cref="ArgumentException">Wenn <paramref name="destination"/> zu klein ist.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">If the value is too large.</exception>
+    /// <exception cref="ArgumentException">If <paramref name="destination"/> is too small.</exception>
     public static int Write(Span<byte> destination, ulong value)
     {
         int length = GetLength(value);
         if (destination.Length < length)
             throw new ArgumentException(
-                $"Zielpuffer zu klein: benötigt {length}, vorhanden {destination.Length}.",
+                $"Destination buffer too small: needs {length}, available {destination.Length}.",
                 nameof(destination));
 
         switch (length)
         {
             case 1:
-                // Präfix 00 — die oberen 2 Bits sind für Werte <= 63 ohnehin 0.
+                // Prefix 00 — the upper 2 bits are 0 anyway for values <= 63.
                 destination[0] = (byte)value;
                 break;
             case 2:
-                // Präfix 01
+                // Prefix 01
                 BinaryPrimitives.WriteUInt16BigEndian(destination, (ushort)(value | (0b01UL << 14)));
                 break;
             case 4:
-                // Präfix 10
+                // Prefix 10
                 BinaryPrimitives.WriteUInt32BigEndian(destination, (uint)(value | (0b10UL << 30)));
                 break;
             default: // 8
-                // Präfix 11
+                // Prefix 11
                 BinaryPrimitives.WriteUInt64BigEndian(destination, value | (0b11UL << 62));
                 break;
         }
@@ -108,9 +108,9 @@ public static class VarInt
     }
 
     /// <summary>
-    /// Liest einen VarInt aus <paramref name="source"/>. Gibt bei Erfolg <c>true</c> zurück und
-    /// setzt <paramref name="value"/> sowie <paramref name="bytesRead"/>. Bei zu wenigen Bytes
-    /// (unvollständiges Paket) <c>false</c>, ohne zu werfen.
+    /// Reads a VarInt from <paramref name="source"/>. On success returns <c>true</c> and
+    /// sets <paramref name="value"/> and <paramref name="bytesRead"/>. With too few bytes
+    /// (incomplete packet) returns <c>false</c> without throwing.
     /// </summary>
     public static bool TryRead(ReadOnlySpan<byte> source, out ulong value, out int bytesRead)
     {

@@ -18,7 +18,7 @@
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 
 /// <summary>
-/// Frame-Typ-Werte in QUIC v1 (RFC 9000, Tabelle 3). Nicht erschöpfend – erweitert sich mit den Phasen.
+/// Frame type values in QUIC v1 (RFC 9000, table 3). Not exhaustive – grows with the phases.
 /// </summary>
 public static class FrameType
 {
@@ -32,7 +32,7 @@ public static class FrameType
     public const ulong NewToken = 0x07;
 
     /// <summary>
-    /// STREAM-Frames belegen 0x08..0x0f; die unteren 3 Bits kodieren OFF/LEN/FIN.
+    /// STREAM frames occupy 0x08..0x0f; the lower 3 bits encode OFF/LEN/FIN.
     /// </summary>
     public const ulong StreamBase = 0x08;
     public const ulong StreamMask = 0x08;
@@ -50,7 +50,7 @@ public static class FrameType
     public const ulong StreamsBlockedUni = 0x17;
 
     /// <summary>
-    /// DATAGRAM-Frames (RFC 9221 §4): 0x30 ohne, 0x31 mit Length-Feld (LEN-Bit 0x01).
+    /// DATAGRAM frames (RFC 9221 §4): 0x30 without, 0x31 with a length field (LEN bit 0x01).
     /// </summary>
     public const ulong DatagramNoLength = 0x30;
     public const ulong DatagramWithLength = 0x31;
@@ -62,8 +62,8 @@ public static class FrameType
     public const ulong HandshakeDone = 0x1e;
 
     /// <summary>
-    /// RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset §4): RESET_STREAM mit garantierter
-    /// Teilzustellung bis zu einer Reliable Size.
+    /// RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset §4): RESET_STREAM with guaranteed
+    /// partial delivery up to a reliable size.
     /// </summary>
     public const ulong ResetStreamAt = 0x24;
 

@@ -24,56 +24,57 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 
 /// <summary>
-/// Ein PSK-Angebot des Clients: Ticket-Identity, verschleiertes Alter und der zugehörige Binder.
+/// A PSK offer from the client: ticket identity, obfuscated age and the corresponding binder.
 /// </summary>
 public readonly record struct OfferedPsk(byte[] Identity, uint ObfuscatedAge, byte[] Binder);
 
 /// <summary>
-/// Die vom Server benötigten Felder eines geparsten ClientHello.
+/// The fields of a parsed ClientHello needed by the server.
 /// </summary>
 public sealed class ClientHelloInfo
 {
     public required IReadOnlyList<ushort> CipherSuites { get; init; }
 
     /// <summary>
-    /// Key-Share-Einträge des Clients: NamedGroup → öffentlicher Schlüssel.
+    /// The client's key-share entries: NamedGroup → public key.
     /// </summary>
     public required IReadOnlyDictionary<ushort, byte[]> KeyShares { get; init; }
 
     /// <summary>
-    /// Vom Client unterstützte Named Groups (supported_groups-Extension) für die HRR-Wahl.
+    /// Named groups supported by the client (supported_groups extension) for the HRR choice.
     /// </summary>
     public required IReadOnlyList<ushort> SupportedGroups { get; init; }
 
     /// <summary>
-    /// Rohe quic_transport_parameters des Clients (opak für TLS).
+    /// The client's raw quic_transport_parameters (opaque to TLS).
     /// </summary>
     public byte[]? QuicTransportParameters { get; init; }
 
     /// <summary>
-    /// PSK-Angebote aus pre_shared_key (RFC 8446 §4.2.11); leer, wenn keine Resumption angeboten wird.
+    /// PSK offers from pre_shared_key (RFC 8446 §4.2.11); empty when no resumption is offered.
     /// </summary>
     public IReadOnlyList<OfferedPsk> OfferedPsks { get; init; } = [];
 
     /// <summary>
-    /// Ob der Client psk_dhe_ke unterstützt (RFC 8446 §4.2.9) – Voraussetzung für unsere Resumption.
+    /// Whether the client supports psk_dhe_ke (RFC 8446 §4.2.9) – a prerequisite for our resumption.
     /// </summary>
     public bool OffersPskDheKe { get; init; }
 
     /// <summary>
-    /// Absoluter Offset (im ClientHello-Handshake-Bytestrom) der Binder-Liste, also die Grenze, bis zu der
-    /// der PSK-Binder berechnet wird (RFC 8446 §4.2.11.2). <c>-1</c>, wenn kein pre_shared_key vorhanden ist.
+    /// Absolute offset (in the ClientHello handshake byte stream) of the binder list, i.e. the
+    /// boundary up to which the PSK binder is computed (RFC 8446 §4.2.11.2). <c>-1</c> when no
+    /// pre_shared_key is present.
     /// </summary>
     public int PskBinderListOffset { get; init; } = -1;
 
     /// <summary>
-    /// Der Client bot eine PSK an und (für 0-RTT) zusätzlich early_data.
+    /// The client offered a PSK and (for 0-RTT) additionally early_data.
     /// </summary>
     public bool OffersEarlyData { get; init; }
 }
 
 /// <summary>
-/// Parst einen ClientHello serverseitig (RFC 8446 §4.1.2).
+/// Parses a ClientHello on the server side (RFC 8446 §4.1.2).
 /// </summary>
 public static class ClientHelloParser
 {
@@ -85,11 +86,11 @@ public static class ClientHelloParser
         if (!reader.TryReadByte(out byte msgType) || msgType != (byte)HandshakeType.ClientHello)
             return false;
         if (!reader.TryReadByte(out _) || !reader.TryReadByte(out _) || !reader.TryReadByte(out _))
-            return false; // 3-Byte-Länge
+            return false; // 3-byte length
 
         if (!reader.TryReadUInt16(out _))            // legacy_version
             return false;
-        if (!reader.TryReadBytes(32, out _))         // Random
+        if (!reader.TryReadBytes(32, out _))         // random
             return false;
         if (!reader.TryReadByte(out byte sessionIdLen) || !reader.TrySkip(sessionIdLen))
             return false;
@@ -109,7 +110,7 @@ public static class ClientHelloParser
 
         if (!reader.TryReadUInt16(out ushort extsLen) || extsLen > reader.Remaining)
             return false;
-        // Absoluter Offset, an dem der Extensions-Block beginnt (für die Binder-Trunkierungsgrenze).
+        // Absolute offset at which the extensions block begins (for the binder truncation boundary).
         int extensionsAbsoluteStart = handshakeMessage.Length - reader.Remaining;
         if (!reader.TryReadBytes(extsLen, out ReadOnlySpan<byte> extensions))
             return false;
@@ -177,7 +178,7 @@ public static class ClientHelloParser
                     offersEarlyData = true;
                     break;
                 case ExtensionType.PreSharedKey:
-                    // Absoluter Offset der Extension-Daten (nach dem 4-Byte-Extension-Header).
+                    // Absolute offset of the extension data (after the 4-byte extension header).
                     int dataAbsolute = extensionsAbsoluteStart + extHeaderStart + 4;
                     ParsePreSharedKey(data, dataAbsolute, offeredPsks, ref binderListOffset);
                     break;
@@ -204,7 +205,7 @@ public static class ClientHelloParser
         if (!r.TryReadUInt16(out ushort identitiesLen) || identitiesLen > r.Remaining)
             return;
 
-        // Die Identities (jeweils Ticket + verschleiertes Alter) einsammeln.
+        // Collect the identities (each ticket + obfuscated age).
         var identities = new List<(byte[] Identity, uint Age)>();
         if (!r.TryReadBytes(identitiesLen, out ReadOnlySpan<byte> identitiesBlock))
             return;
@@ -218,7 +219,7 @@ public static class ClientHelloParser
             identities.Add((id.ToArray(), age));
         }
 
-        // Die Binder-Liste beginnt direkt nach den Identities – das ist die Trunkierungsgrenze.
+        // The binder list begins right after the identities – that is the truncation boundary.
         binderListOffset = dataAbsoluteOffset + 2 + identitiesLen;
 
         if (!r.TryReadUInt16(out ushort bindersLen) || bindersLen > r.Remaining)
@@ -239,7 +240,7 @@ public static class ClientHelloParser
     private static void ParseSupportedGroups(ReadOnlySpan<byte> data, List<ushort> groups)
     {
         var reader = new BufferReader(data);
-        if (!reader.TryReadUInt16(out _)) // Listenlänge
+        if (!reader.TryReadUInt16(out _)) // list length
             return;
         while (reader.TryReadUInt16(out ushort group))
             groups.Add(group);
@@ -248,7 +249,7 @@ public static class ClientHelloParser
     private static void ParseKeyShares(ReadOnlySpan<byte> data, Dictionary<ushort, byte[]> keyShares)
     {
         var reader = new BufferReader(data);
-        if (!reader.TryReadUInt16(out _)) // client_shares-Länge
+        if (!reader.TryReadUInt16(out _)) // client_shares length
             return;
         while (reader.Remaining >= 4)
         {
