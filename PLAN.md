@@ -745,6 +745,30 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
   - 5 tests (Http3AsyncApiTests) over REAL loopback UDP sockets: GET, three parallel requests on
     one connection, POST echo, timeout against a dead port, Query/WaitUntil.
 - ✅ **0-RTT (RFC 8446 §2.3 / RFC 9001 §4) — complete**:
+  - ✅ **Anti-replay for 0-RTT** (RFC 8446 §8 — a **MUST** for QUIC via RFC 9001 §9.2: "Endpoints
+    MUST implement and use the replay protections described in [TLS13]"). The ticket store used to
+    be a plain dictionary without single use, expiry or a size cap, so a recorded 0-RTT flight was
+    accepted again without limit. `ServerResumptionCache` now implements:
+    - **Single-use tickets (§8.1)**: `TryResolve` only *peeks* (the PSK binder is not verified at
+      that point — consuming there would let anyone who merely saw a ticket identity destroy the
+      legitimate client's ticket with a bogus binder); the atomic `TryConsume` runs **after** the
+      binder check and hands the ticket to exactly ONE caller. That also covers concurrent
+      ClientHellos with the same ticket and gives resumed connections forward secrecy (§8.1).
+    - **Freshness check (§8.3)**: the ticket age claimed by the client
+      (`obfuscated_ticket_age − ticket_age_add`, wrapping modulo 2^32) is compared against the age
+      the server measured; a mismatch beyond the window (default 10 s, per the RFC's guidance)
+      rejects **0-RTT only** — the 1-RTT handshake still completes. `ticket_age_add` and the
+      lifetime are stored with the ticket for this.
+    - **Expiry + size cap**: tickets past `ticket_lifetime` are rejected and dropped; beyond
+      `maxEntries` (default 4096) the oldest are evicted — without it, every handshake issuing a
+      ticket would be an unbounded memory sink.
+    - Deliberate limitation, documented at the class: the store is process-local, which is exactly
+      the "at most once per server instance" that §8 calls the minimum guarantee; a distributed
+      deployment needs a shared store.
+    - 8 tests, incl. an **end-to-end replay**: a recorded 0-RTT flight (everything the client sends
+      before handshake confirmation) is fed to a second connection of the same server and rejected —
+      the test fails with the single-use check disabled. **Live:** Cloudflare `--zerortt`
+      (0-RTT ACCEPTED) and `--resume` unchanged, interop 8/8.
   - **Phase A — session resumption (PSK)**: NewSessionTicket (issuing + parsing),
     resumption_master_secret / resumption PSK, `pre_shared_key` with **binder** (HMAC over the
     truncated ClientHello, RFC 8446 §4.2.11.2), `psk_key_exchange_modes` (always sent ⇒ the server

@@ -206,8 +206,11 @@ public sealed class TlsServerHandshake : ITlsHandshake
         byte[] resMaster = _ks.ResumptionMasterSecret(ApplicationSecrets.MasterSecret, _transcript!.CurrentHash());
         byte[] nonce = RandomNumberGenerator.GetBytes(8);
         byte[] psk = _ks.ResumptionPsk(resMaster, nonce);
-        byte[] identity = _resumptionCache.Issue(psk, _cipherSuite, _maxEarlyDataSize, _quicTransportParameters);
         uint ageAdd = BitConverter.ToUInt32(RandomNumberGenerator.GetBytes(4));
+        // ageAdd and lifetime are stored with the ticket — the server needs both later for the
+        // §8.3 freshness check and for expiry.
+        byte[] identity = _resumptionCache.Issue(psk, _cipherSuite, _maxEarlyDataSize, _quicTransportParameters,
+                                                 ageAdd, _ticketLifetimeSeconds);
 
         byte[] ticket = Messages.NewSessionTicket.Build(
             _ticketLifetimeSeconds, ageAdd, nonce, identity, _maxEarlyDataSize);
@@ -289,23 +292,34 @@ public sealed class TlsServerHandshake : ITlsHandshake
             return;
 
         OfferedPsk offer = ch.OfferedPsks[0];
-        if (!_resumptionCache.TryResolve(offer.Identity, out byte[] psk, out _))
+        // Look up WITHOUT consuming: the binder is unverified at this point, so consuming here would
+        // let anyone who merely saw a ticket identity destroy the legitimate client's ticket.
+        if (!_resumptionCache.TryResolve(offer.Identity, offer.ObfuscatedAge, out ResumptionLookup? found) ||
+            found is null)
             return;
 
         // Binder = HMAC(finished_key(binder_key), transcript hash(ClientHello up to just before the binder list)).
         // A hash mismatch (wrong suite) automatically fails here on the length difference.
+        byte[] psk = found.Psk;
         byte[] binderKey = _ks!.ResumptionBinderKey(psk);
         byte[] truncatedHash = _ks.TranscriptHash(_clientHello1.AsSpan(0, ch.PskBinderListOffset));
         byte[] expected = _ks.FinishedVerifyData(binderKey, truncatedHash);
         if (!CryptographicOperations.FixedTimeEquals(expected, offer.Binder))
             return;
 
+        // Single-use ticket (RFC 8446 §8.1, MUST via RFC 9001 §9.2): only the FIRST user gets the
+        // ticket. A replay — and a concurrent ClientHello carrying the same ticket — loses the race
+        // here and falls back to a full handshake.
+        if (!_resumptionCache.TryConsume(offer.Identity))
+            return;
+
         _pskAccepted = true;
         _selectedPsk = psk;
 
-        // Accept 0-RTT when the client offers early_data and we permit it (max_early_data_size > 0).
+        // Accept 0-RTT when the client offers early_data, we permit it (max_early_data_size > 0) AND
+        // the ticket age claimed by the client is plausible (freshness check, RFC 8446 §8.3).
         // The QUIC layer derives the early secret (client_early_traffic_secret) to READ the 0-RTT packets.
-        if (ch.OffersEarlyData && _maxEarlyDataSize > 0)
+        if (ch.OffersEarlyData && _maxEarlyDataSize > 0 && found.EarlyDataFresh)
         {
             EarlyDataAccepted = true;
             _earlyTrafficSecret = _ks.ClientEarlyTrafficSecret(psk, _ks.TranscriptHash(_clientHello1));
