@@ -200,6 +200,12 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     public bool HandshakeConfirmed => _quic.HandshakeConfirmed;
 
     /// <summary>
+    /// Number of packet numbers currently held in the application space for ACK generation
+    /// (RFC 9000 §13.2.4). Diagnostics/test.
+    /// </summary>
+    public int ApplicationTrackedReceivedCount => _quic.ApplicationTrackedReceivedCount;
+
+    /// <summary>
     /// <c>true</c> once the connection was closed silently due to the idle timeout (RFC 9000 §10.1).
     /// </summary>
     public bool IsIdleTimedOut => _quic.IsIdleTimedOut;

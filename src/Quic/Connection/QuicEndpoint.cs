@@ -210,6 +210,13 @@ public abstract class QuicEndpoint : IDisposable
     public ulong ApplicationReceivedCeCount => Spaces[(int)EncryptionLevel.Application].ReceivedCeCount;
 
     /// <summary>
+    /// Number of packet numbers currently held in the application space for ACK generation
+    /// (RFC 9000 §13.2.4). Diagnostics/test: must stay bounded over the lifetime of a connection,
+    /// no matter how many packets have flowed.
+    /// </summary>
+    public int ApplicationTrackedReceivedCount => Spaces[(int)EncryptionLevel.Application].TrackedReceivedCount;
+
+    /// <summary>
     /// <c>true</c> once the connection was closed silently due to the idle timeout (RFC 9000 §10.1).
     /// </summary>
     public bool IsIdleTimedOut => _idleTimedOut;
@@ -977,6 +984,16 @@ public abstract class QuicEndpoint : IDisposable
 
     private void RecordSent(int level, ulong packetNumber, int size, List<Frame> frames)
     {
+        // RFC 9000 §13.2.4: remember which Largest Acknowledged we reported in which packet — its
+        // acknowledgment later releases the ACK state. Must happen for pure ACK packets too (the peer
+        // reports those in its ranges as well), i.e. before the ack-eliciting early exit below.
+        foreach (Frame frame in frames)
+            if (frame is AckFrame sentAck)
+            {
+                Spaces[level].OnAckFrameSent(packetNumber, sentAck.LargestAcknowledged);
+                break;
+            }
+
         bool ackEliciting = frames.Any(f => f is not AckFrame and not PaddingFrame);
         if (!ackEliciting)
             return; // pure ACK packets count neither towards bytes_in_flight nor the pacing budget
@@ -1290,7 +1307,7 @@ public abstract class QuicEndpoint : IDisposable
                     DeliverCryptoToTls(level);
                     break;
                 case AckFrame ack:
-                    Spaces[(int)level].OnAckReceived(ack.LargestAcknowledged);
+                    Spaces[(int)level].OnAckReceived(ack); // incl. ACK-state pruning, RFC 9000 §13.2.4
                     var ackDelay = TimeSpan.FromMicroseconds(ack.AckDelay * 8);
                     _retransmitQueue[(int)level].AddRange(
                         _recovery.OnAckReceived((int)level, ack, ackDelay, NowTicks));

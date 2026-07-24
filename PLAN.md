@@ -648,6 +648,25 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
   `GC.GetAllocatedBytesForCurrentThread`, single-threaded ⇒ exact): 300 KB download reduced from
   **51.3 MiB to 7.0 MiB** (7.3×; ~25 instead of 179 B per payload byte), time ~55 → ~40 ms.
   Measurement harness `PerformanceBenchTests` with a generous regression guard (download < 20 MiB).
+- ✅ **Limiting the ACK state** (RFC 9000 §13.2.4) — the second quadratic term, invisible at 300 KB:
+  `PacketNumberSpace` used to keep **every** packet number ever received (a `SortedSet` growing for
+  the whole connection), and `AckFrame.FromPacketNumbers` copied that set in full
+  (`Distinct().OrderByDescending().ToList()`) on **every single ACK** ⇒ O(n²) in time and
+  allocations, plus ACK frames that grew monotonically because a gap from an early loss never
+  disappeared again. Now per §13.2.4: `OnAckFrameSent` records which Largest Acknowledged we
+  reported in which of our packets; as soon as the peer acknowledges such a packet
+  (`OnAckReceived(AckFrame)`), everything up to that value is dropped (`PruneUpTo`).
+  `LargestReceived` (PN reconstruction) and `IsContiguousFromZero` (§4.9.3 0-RTT discard) are kept
+  correct independently of pruning via an explicit largest and a pruned counter; packets below the
+  bound trigger no new ACK. In addition `BuildAck` walks the already-sorted set exactly once
+  (`AckFrame.FromAscendingPacketNumbers`) instead of sorting + copying it.
+  **Measurement** (5 MB in-process, new `Bench_HugeDownload_ScalesLinearly`): **1185 → 592 ms,
+  168.3 → 108.9 MiB (35.3 → 22.8 B per payload byte — exactly the 300 KB value ⇒ linear), ACK state
+  at the end 5022 → 11 packet numbers.** 10 tests (`AckPruningTests`: range construction, `Covers`,
+  pruning with/without confirmation, gap disappearance, `LargestReceived` after a complete prune,
+  contiguity, late packet, plus a 4 MB end-to-end run over real QUIC connections which fails
+  without pruning: 4215 instead of < 500 tracked packet numbers). **Live:** Cloudflare GET
+  status 200 unchanged.
 - ✅ **UDP batching (GSO)**: `GsoBatcher` (Quic.Core) groups the datagrams of one pump pass into
   UDP_SEGMENT batches — maximal run of equal-sized datagrams, optionally plus one smaller final
   segment (the kernel rule), capped at 64 segments / 65535 B. `UdpBatchSender` (Http3) sends each

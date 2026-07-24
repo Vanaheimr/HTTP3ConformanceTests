@@ -52,29 +52,52 @@ public sealed record AckFrame(
     public ulong LargestAcknowledged => Ranges[0].Largest;
 
     /// <summary>
+    /// Whether <paramref name="packetNumber"/> falls into one of the acknowledged ranges.
+    /// </summary>
+    public bool Covers(ulong packetNumber)
+    {
+        foreach (PacketNumberRange range in Ranges)
+            if (packetNumber >= range.Smallest && packetNumber <= range.Largest)
+                return true;
+        return false;
+    }
+
+    /// <summary>
     /// Builds an ACK frame from a set of received packet numbers by merging consecutive numbers
     /// into ranges (sorted descending).
     /// </summary>
     public static AckFrame FromPacketNumbers(IEnumerable<ulong> packetNumbers, ulong ackDelay = 0)
+        => FromAscendingPacketNumbers([.. packetNumbers.Distinct().Order()], ackDelay);
+
+    /// <summary>
+    /// Like <see cref="FromPacketNumbers"/>, but for an already ascending, duplicate-free sequence
+    /// (e.g. a <see cref="SortedSet{T}"/>): walks it exactly once and therefore avoids the
+    /// sort plus intermediate copy of the whole set on every ACK.
+    /// </summary>
+    public static AckFrame FromAscendingPacketNumbers(IReadOnlyCollection<ulong> packetNumbers, ulong ackDelay = 0)
     {
-        List<ulong> sorted = packetNumbers.Distinct().OrderByDescending(x => x).ToList();
-        if (sorted.Count == 0)
+        if (packetNumbers.Count == 0)
             throw new ArgumentException("At least one packet number is required.", nameof(packetNumbers));
 
         var ranges = new List<PacketNumberRange>();
-        int i = 0;
-        while (i < sorted.Count)
+        ulong smallest = 0, largest = 0;
+        bool open = false;
+
+        foreach (ulong pn in packetNumbers)
         {
-            ulong largest = sorted[i];
-            ulong smallest = largest;
-            while (i + 1 < sorted.Count && smallest > 0 && sorted[i + 1] == smallest - 1)
+            if (open && pn == largest + 1)
             {
-                smallest = sorted[i + 1];
-                i++;
+                largest = pn; // extend the current run upwards
+                continue;
             }
-            ranges.Add(new PacketNumberRange(largest, smallest));
-            i++;
+            if (open)
+                ranges.Add(new PacketNumberRange(largest, smallest));
+            smallest = largest = pn;
+            open = true;
         }
+        ranges.Add(new PacketNumberRange(largest, smallest));
+
+        ranges.Reverse(); // the wire format expects descending ranges (RFC 9000 §19.3)
         return new AckFrame(ranges, ackDelay);
     }
 

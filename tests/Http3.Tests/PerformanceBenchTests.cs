@@ -37,6 +37,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 public class PerformanceBenchTests
 {
     private const int BigBodySize = 300_000;
+    private const int HugeBodySize = 5_000_000;
     private const int SmallRequestCount = 50;
 
     [Test]
@@ -66,6 +67,38 @@ public class PerformanceBenchTests
     }
 
     [Test]
+    public void Bench_HugeDownload_ScalesLinearly()
+    {
+        // The 300-KB benchmark above is far too small to expose per-packet effects that scale with
+        // the SQUARE of the packet count: at ~250 packets even a quadratic term stays invisible.
+        // 5 MB means ~4200 packets — enough for the cost per payload byte to become the yardstick.
+        // Concretely caught here: the ACK state that used to grow for the whole connection while
+        // every single ACK copied it in full (RFC 9000 §13.2.4, see AckPruningTests).
+        (Http3ClientConnection client, Http3ServerConnection server, ServerCertificate cert) = Pair(HugeBody);
+        using ServerCertificate certGuard = cert;
+        using Http3ClientConnection c = client;
+        using Http3ServerConnection s = server;
+
+        RunRequest(client, server, "/small"); // warm-up
+
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var watch = Stopwatch.StartNew();
+        Http3Response response = RunRequest(client, server, "/huge");
+        watch.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.That(response.Body, Has.Length.EqualTo(HugeBodySize));
+        double perByte = allocated / (double)HugeBodySize;
+        // The 300-KB download costs ~25 B per payload byte. Linear scaling means this stays in the
+        // same ballpark; a quadratic term would blow it up by orders of magnitude.
+        Assert.That(perByte, Is.LessThan(60.0),
+            $"5-MB download allocated {perByte:F1} B per payload byte (300 KB: ~25 B) — quadratic term back?");
+        Assert.Pass($"5-MB download: {watch.Elapsed.TotalMilliseconds:F0} ms, " +
+                    $"{allocated / 1024.0 / 1024.0:F1} MiB allocated ({perByte:F1} B/payload byte), " +
+                    $"ACK state at the end: {client.ApplicationTrackedReceivedCount} packet numbers.");
+    }
+
+    [Test]
     public void Bench_ManySmallRequests_TimeAndAllocations()
     {
         (Http3ClientConnection client, Http3ServerConnection server, ServerCertificate cert) = Pair(BigBody);
@@ -90,11 +123,12 @@ public class PerformanceBenchTests
 
     // ---- Helpers --------------------------------------------------------------------------
 
-    private static readonly byte[] BigBodyBytes = CreateBody();
+    private static readonly byte[] BigBodyBytes = CreateBody(BigBodySize);
+    private static readonly byte[] HugeBodyBytes = CreateBody(HugeBodySize);
 
-    private static byte[] CreateBody()
+    private static byte[] CreateBody(int size)
     {
-        byte[] body = new byte[BigBodySize];
+        byte[] body = new byte[size];
         for (int i = 0; i < body.Length; i++)
             body[i] = (byte)(i * 31);
         return body;
@@ -102,6 +136,9 @@ public class PerformanceBenchTests
 
     private static Http3Response BigBody(Http3Request request)
         => new() { Status = 200, Body = request.Path == "/big" ? BigBodyBytes : [1, 2, 3] };
+
+    private static Http3Response HugeBody(Http3Request request)
+        => new() { Status = 200, Body = request.Path == "/huge" ? HugeBodyBytes : [1, 2, 3] };
 
     private static (Http3ClientConnection, Http3ServerConnection, ServerCertificate) Pair(Func<Http3Request, Http3Response> handler)
     {
@@ -121,7 +158,7 @@ public class PerformanceBenchTests
     {
         ulong id = client.SendRequest(Http3Request.Get("localhost", path));
         Http3Response? response = null;
-        for (int round = 0; round < 4000 && response is null; round++)
+        for (int round = 0; round < 100_000 && response is null; round++)
         {
             Pump(client, server);
             client.TryGetResponse(id, out response);
