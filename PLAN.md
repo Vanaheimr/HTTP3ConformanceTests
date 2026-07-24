@@ -667,6 +667,27 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
   contiguity, late packet, plus a 4 MB end-to-end run over real QUIC connections which fails
   without pruning: 4215 instead of < 500 tracked packet numbers). **Live:** Cloudflare GET
   status 200 unchanged.
+- ✅ **Packet-size limit in the send path** (RFC 9000 §14) — the control frames of ONE send pass
+  (retransmits, HANDSHAKE_DONE, NEW_/RETIRE_CONNECTION_ID, PING, ACK, flow control, stream
+  cancellations, post-handshake CRYPTO) all went into the FIRST packet without any size accounting;
+  only the stream chunk was MTU-sized. With many streams that produced a single oversized datagram
+  which the path drops or fragments unnoticed — measured: **3899 bytes** with 300 cancelled streams.
+  Now the control frames are collected once and distributed across as many packets as needed:
+  `BufferWriter.Truncate` (rewind after a speculative write) + `FrameParser.WriteUpTo`
+  (serialises while the budget lasts, returns the cursor of the first frame that no longer fits; a
+  frame that alone exceeds the budget still goes out when the packet is still empty). Unified budget
+  `MaxPayloadPerPacket` (1000 B) for all levels; `AppendOneStreamChunk` also respects what is left of
+  the packet after the control frames; DATAGRAM frames only go in when they still fit (RFC 9221 §5:
+  unfragmentable). Additionally `BuildAck` caps the ACK at **32 ranges** (§13.2.4 "Limiting Ranges"),
+  and control frames left unsent because the anti-amplification budget deferred the packet are put
+  back (retransmit queue resp. `MarkAckPending`) instead of being silently dropped.
+  **Side effect:** since the packet payload is now written into ONE pooled `BufferWriter` instead of
+  a fresh `FrameParser.Serialize()` array per packet, the send path got markedly faster —
+  **5 MB download 592 → ~230 ms, 300 KB 55 → ~14 ms** (allocations 108.9 → 104.6 MiB).
+  6 tests (`PacketSizeTests`: Truncate, WriteUpTo split/oversized-frame, ACK range cap, plus
+  end-to-end 300 cancelled streams — every datagram ≤ 1200 B and every RESET_STREAM arrives — and an
+  MTU check across the whole handshake). **Live: interop matrix 8/8 green**, Cloudflare also with
+  `--mlkem` (multi-packet CRYPTO split) status 200.
 - ✅ **UDP batching (GSO)**: `GsoBatcher` (Quic.Core) groups the datagrams of one pump pass into
   UDP_SEGMENT batches — maximal run of equal-sized datagrams, optionally plus one smaller final
   segment (the kernel rule), capped at 64 segments / 65535 B. `UdpBatchSender` (Http3) sends each

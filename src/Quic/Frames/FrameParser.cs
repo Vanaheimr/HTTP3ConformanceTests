@@ -212,6 +212,32 @@ public static class FrameParser
     }
 
     /// <summary>
+    /// Serialises frames from <paramref name="start"/> onwards into <paramref name="writer"/> for as
+    /// long as its total length stays within <paramref name="maxLength"/>, and returns the index of
+    /// the first frame that no longer fit (= the new cursor). A frame that alone exceeds the budget
+    /// is written anyway when the writer is still empty — otherwise it could never be sent at all.
+    /// <para>Serves the packet-size limit of RFC 9000 §14: an arbitrary number of control frames
+    /// (retransmits, per-stream flow control, cancellations, a wide ACK) must be spread across
+    /// several packets instead of producing one over-MTU datagram.</para>
+    /// </summary>
+    public static int WriteUpTo(ref BufferWriter writer, IReadOnlyList<Frame> frames, int start, int maxLength)
+    {
+        int index = start;
+        while (index < frames.Count)
+        {
+            int lengthBefore = writer.Length;
+            frames[index].Write(ref writer);
+            if (writer.Length > maxLength && lengthBefore > 0)
+            {
+                writer.Truncate(lengthBefore); // does not fit ⇒ undo, it goes into the next packet
+                break;
+            }
+            index++;
+        }
+        return index;
+    }
+
+    /// <summary>
     /// Convenience: serialises a frame sequence into a fresh byte array. Manages the
     /// <c>using</c> conflict (incompatible with <c>ref</c>) internally via try/finally.
     /// </summary>

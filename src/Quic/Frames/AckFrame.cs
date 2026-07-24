@@ -74,7 +74,12 @@ public sealed record AckFrame(
     /// (e.g. a <see cref="SortedSet{T}"/>): walks it exactly once and therefore avoids the
     /// sort plus intermediate copy of the whole set on every ACK.
     /// </summary>
-    public static AckFrame FromAscendingPacketNumbers(IReadOnlyCollection<ulong> packetNumbers, ulong ackDelay = 0)
+    /// <param name="maxRanges">
+    /// Optional upper bound on the number of ranges (RFC 9000 §13.2.4), so the frame stays within a
+    /// packet. Since the ranges are descending, the NEWEST are kept and the oldest dropped.
+    /// </param>
+    public static AckFrame FromAscendingPacketNumbers(IReadOnlyCollection<ulong> packetNumbers, ulong ackDelay = 0,
+                                                      int maxRanges = int.MaxValue)
     {
         if (packetNumbers.Count == 0)
             throw new ArgumentException("At least one packet number is required.", nameof(packetNumbers));
@@ -98,6 +103,8 @@ public sealed record AckFrame(
         ranges.Add(new PacketNumberRange(largest, smallest));
 
         ranges.Reverse(); // the wire format expects descending ranges (RFC 9000 §19.3)
+        if (ranges.Count > maxRanges)
+            ranges.RemoveRange(maxRanges, ranges.Count - maxRanges); // keep the newest
         return new AckFrame(ranges, ackDelay);
     }
 

@@ -144,6 +144,18 @@ public struct BufferWriter : IDisposable
     }
 
     /// <summary>
+    /// Discards everything beyond <paramref name="length"/> bytes — the buffer itself is retained.
+    /// Used to undo a speculative write: write, measure, and on overshoot rewind to the previous
+    /// length (e.g. when filling a packet up to its size budget).
+    /// </summary>
+    public void Truncate(int length)
+    {
+        if (length < 0 || length > _written)
+            throw new ArgumentOutOfRangeException(nameof(length));
+        _written = length;
+    }
+
+    /// <summary>
     /// Ensures space for <paramref name="additional"/> more bytes and returns the backing store.
     /// </summary>
     private byte[] EnsureCapacity(int additional)

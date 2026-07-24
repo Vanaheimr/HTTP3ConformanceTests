@@ -37,6 +37,15 @@ public sealed class PacketNumberSpace
     /// </summary>
     private const int MaxTrackedAckFrames = 64;
 
+    /// <summary>
+    /// Upper bound for the ACK ranges of one frame (RFC 9000 §13.2.4 "Limiting Ranges"). Pruning
+    /// keeps the count small in normal operation, but a pathological loss pattern could otherwise
+    /// still produce an ACK frame that no longer fits into a packet. The ranges are descending, so
+    /// the cap keeps the NEWEST ones — dropping the oldest merely leaves those packets
+    /// unacknowledged for now (at worst a spurious retransmission), which the RFC explicitly allows.
+    /// </summary>
+    private const int MaxAckRanges = 32;
+
     private ulong _nextToSend;
     private readonly SortedSet<ulong> _received = [];
 
@@ -199,6 +208,13 @@ public sealed class PacketNumberSpace
             ? new EcnCounts(_ect0Count, _ect1Count, _ceCount)
             : null;
         // _received is a SortedSet ⇒ already ascending and duplicate-free: one walk, no copy.
-        return AckFrame.FromAscendingPacketNumbers(_received, ackDelay) with { Ecn = ecn };
+        AckFrame ack = AckFrame.FromAscendingPacketNumbers(_received, ackDelay, MaxAckRanges);
+        return ack with { Ecn = ecn };
     }
+
+    /// <summary>
+    /// Re-arms the ACK: to be called when an already-built ACK frame could not be sent after all
+    /// (e.g. deferred by the anti-amplification budget), so the next send builds a fresh one.
+    /// </summary>
+    public void MarkAckPending() => AckPending = _received.Count > 0;
 }

@@ -18,6 +18,7 @@
 #region Usings
 
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Core;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
@@ -589,17 +590,32 @@ public abstract class QuicEndpoint : IDisposable
     }
 
     /// <summary>
-    /// CRYPTO payload per Initial/Handshake packet. Chosen conservatively so that header (long header +
-    /// possible token), a possibly co-sent ACK and the AEAD tag together do not exceed the ~1200-byte
-    /// MTU – large ClientHellos (PQ hybrid) or certificate chains are thus spread over several packets.
+    /// Payload budget per packet. Chosen conservatively so that header (long header + possible token),
+    /// packet number and the AEAD tag together stay below the ~1200-byte MTU floor (RFC 9000 §14.1).
+    /// Everything that does not fit — large ClientHellos (PQ hybrid), certificate chains, but equally
+    /// a long run of control frames — is spread across several packets.
     /// </summary>
-    private const int MaxCryptoDataPerPacket = 1000;
+    private const int MaxPayloadPerPacket = 1000;
 
     /// <summary>
-    /// Emits the packets of an encryption level (RFC 9000 §12.2/§13). If the outgoing CRYPTO does not
-    /// fit into one MTU-sized packet, it is split offset-correctly across several packets (several
-    /// Initials/Handshakes). Anti-amplification (RFC 9000 §8.1) is checked per packet; CRYPTO not yet
-    /// sent stays buffered, the offset only advances by the bytes actually sent.
+    /// Size no datagram we emit exceeds. RFC 9000 §14.1 guarantees exactly 1200 bytes on every path;
+    /// anything above it may be dropped or fragmented without notice, which is why loss recovery and
+    /// pacing also reckon with this value. <see cref="MaxPayloadPerPacket"/> is chosen so that
+    /// payload + header + AEAD tag stay below it in every packet form.
+    /// </summary>
+    public const int MaxDatagramSize = 1200;
+
+    /// <summary>
+    /// CRYPTO payload per Initial/Handshake packet (see <see cref="MaxPayloadPerPacket"/>).
+    /// </summary>
+    private const int MaxCryptoDataPerPacket = MaxPayloadPerPacket;
+
+    /// <summary>
+    /// Emits the packets of an encryption level (RFC 9000 §12.2/§13). Control frames (retransmits,
+    /// ACK) and the outgoing CRYPTO are distributed across as many packets as needed so that NO
+    /// datagram exceeds the packet budget. Anti-amplification (RFC 9000 §8.1) is checked per packet;
+    /// what is not sent stays buffered — CRYPTO keeps its offset, unsent control frames go back into
+    /// the retransmit queue, a built but unsent ACK re-arms.
     /// </summary>
     private void AppendLevelPackets(EncryptionLevel level, List<byte[]> datagrams, ref long amplificationBudget)
     {
@@ -607,70 +623,107 @@ public abstract class QuicEndpoint : IDisposable
         if (WriteKeys[i] is not { } keys)
             return;
 
-        bool firstPacket = true;
-        while (true)
+        // Control frames of this pass, collected once and then spread across packets.
+        var control = new List<Frame>();
+        DrainRetransmitQueue(i, control);
+        if (Spaces[i].AckPending && Spaces[i].BuildAck() is { } ack)
+            control.Add(ack);
+        int controlCursor = 0;
+
+        var writer = new BufferWriter();
+        try
         {
-            var frames = new List<Frame>();
-            // ACK and retransmits only into the first packet of this level – the following packets carry pure CRYPTO continuation.
-            if (firstPacket)
+            while (true)
             {
-                DrainRetransmitQueue(i, frames);
-                if (Spaces[i].AckPending && Spaces[i].BuildAck() is { } ack)
-                    frames.Add(ack);
+                writer.Truncate(0);
+                var frames = new List<Frame>();
+
+                // 1) As many pending control frames as fit into the packet.
+                int cursorBefore = controlCursor;
+                controlCursor = FrameParser.WriteUpTo(ref writer, control, controlCursor, MaxPayloadPerPacket);
+                for (int k = cursorBefore; k < controlCursor; k++)
+                    frames.Add(control[k]);
+
+                // 2) Fill the rest of the packet with CRYPTO.
+                int cryptoBudget = MaxCryptoDataPerPacket - writer.Length;
+                int cryptoChunk = cryptoBudget > 0 ? Math.Min(_outgoingCrypto[i].Count, cryptoBudget) : 0;
+                if (cryptoChunk > 0)
+                {
+                    var crypto = new CryptoFrame(_sendCryptoOffset[i], _outgoingCrypto[i].GetRange(0, cryptoChunk).ToArray());
+                    crypto.Write(ref writer);
+                    frames.Add(crypto);
+                }
+
+                if (frames.Count == 0)
+                    return;
+
+                ulong pn = Spaces[i].NextPacketNumber();
+                int pnLength = PacketNumber.EncodeLength(pn, Spaces[i].LargestAckedByPeer);
+
+                byte[] packet = level == EncryptionLevel.Initial
+                    ? InitialPacketFactory.BuildPadded(keys, Version, Dcid, Scid, InitialToken, pn, pnLength, writer.WrittenSpan)
+                    : LongHeader.Build(keys, LongPacketType.Handshake, Version, Dcid, Scid, default, pn, pnLength, writer.WrittenSpan);
+
+                // Anti-amplification (RFC 9000 §8.1): if the packet blows the budget, defer it – the CRYPTO
+                // stays buffered, the offset unchanged (later receipt raises the limit).
+                if (packet.Length > amplificationBudget)
+                {
+                    RequeueUnsentControlFrames(i, control, cursorBefore);
+                    return;
+                }
+
+                amplificationBudget -= packet.Length;
+                if (!_addressValidated)
+                    _amplificationSent += packet.Length;
+                if (cryptoChunk > 0)
+                {
+                    _sendCryptoOffset[i] += (ulong)cryptoChunk;
+                    _outgoingCrypto[i].RemoveRange(0, cryptoChunk);
+                }
+                RecordSent(i, pn, packet.Length, frames);
+                datagrams.Add(packet);
+                if (level == EncryptionLevel.Handshake)
+                    _handshakePacketSent = true; // client: later triggers discarding the Initial keys (RFC 9001 §4.9.1)
+
+                if (controlCursor >= control.Count && _outgoingCrypto[i].Count == 0)
+                    return; // neither control frames nor CRYPTO left to distribute
             }
+        }
+        finally
+        {
+            writer.Dispose();
+        }
+    }
 
-            // Size the CRYPTO block so that together with the frames already included it stays under the packet budget.
-            int usedBytes = frames.Count > 0 ? FrameParser.Serialize(frames).Length : 0;
-            int cryptoBudget = MaxCryptoDataPerPacket - usedBytes;
-            int cryptoChunk = cryptoBudget > 0 ? Math.Min(_outgoingCrypto[i].Count, cryptoBudget) : 0;
-            if (cryptoChunk > 0)
-                frames.Add(new CryptoFrame(_sendCryptoOffset[i], _outgoingCrypto[i].GetRange(0, cryptoChunk).ToArray()));
-
-            if (frames.Count == 0)
-                return;
-
-            ulong pn = Spaces[i].NextPacketNumber();
-            int pnLength = PacketNumber.EncodeLength(pn, Spaces[i].LargestAckedByPeer);
-            byte[] payload = FrameParser.Serialize(frames);
-
-            byte[] packet = level == EncryptionLevel.Initial
-                ? InitialPacketFactory.BuildPadded(keys, Version, Dcid, Scid, InitialToken, pn, pnLength, payload)
-                : LongHeader.Build(keys, LongPacketType.Handshake, Version, Dcid, Scid, default, pn, pnLength, payload);
-
-            // Anti-amplification (RFC 9000 §8.1): if the packet blows the budget, defer it – the CRYPTO
-            // stays buffered, the offset unchanged (later receipt raises the limit).
-            if (packet.Length > amplificationBudget)
-                return;
-
-            amplificationBudget -= packet.Length;
-            if (!_addressValidated)
-                _amplificationSent += packet.Length;
-            if (cryptoChunk > 0)
-            {
-                _sendCryptoOffset[i] += (ulong)cryptoChunk;
-                _outgoingCrypto[i].RemoveRange(0, cryptoChunk);
-            }
-            RecordSent(i, pn, packet.Length, frames);
-            datagrams.Add(packet);
-            if (level == EncryptionLevel.Handshake)
-                _handshakePacketSent = true; // client: later triggers discarding the Initial keys (RFC 9001 §4.9.1)
-
-            firstPacket = false;
-            if (_outgoingCrypto[i].Count == 0)
-                return; // no further CRYPTO to distribute
+    /// <summary>
+    /// Puts control frames that were built but not sent back into circulation: reliable frames go
+    /// back into the retransmit queue, an unsent ACK re-arms so the next send builds a fresh one.
+    /// Without this, deferring a packet (anti-amplification) would silently drop them.
+    /// </summary>
+    private void RequeueUnsentControlFrames(int level, List<Frame> control, int from)
+    {
+        for (int k = from; k < control.Count; k++)
+        {
+            if (control[k] is AckFrame)
+                Spaces[level].MarkAckPending();
+            else
+                _retransmitQueue[level].Add(control[k]);
         }
     }
 
     /// <summary>
     /// Payload budget for stream data per 1-RTT packet, so a datagram stays within the MTU (~1200).
     /// </summary>
-    private const int MaxStreamDataPerPacket = 1000;
+    private const int MaxStreamDataPerPacket = MaxPayloadPerPacket;
 
     /// <summary>
-    /// Emits the 1-RTT datagrams: a first packet with control/ACK/flow-control frames (and possibly
-    /// first stream data), then one MTU-sized packet per stream chunk – as long as cwnd (RFC 9002 §7)
-    /// and pacing (§7.7) permit. Pure ACK/control frames and PTO probes (retransmit queue) are exempt
-    /// from the budget so feedback and loss probes are never blocked.
+    /// Emits the 1-RTT datagrams: the control frames of this pass (retransmits, HANDSHAKE_DONE,
+    /// CID management, PING, ACK, flow control, stream cancellations, post-handshake CRYPTO) are
+    /// collected ONCE and then spread across as many packets as needed — an arbitrary number of them
+    /// must never end up in a single over-MTU datagram (RFC 9000 §14). Each packet is then filled up
+    /// with a DATAGRAM frame or a stream chunk, as long as cwnd (RFC 9002 §7) and pacing (§7.7)
+    /// permit. Control frames and PTO probes themselves are exempt from that budget so feedback and
+    /// loss probes are never blocked.
     /// </summary>
     private void BuildApplicationPackets(List<byte[]> datagrams)
     {
@@ -682,57 +735,73 @@ public abstract class QuicEndpoint : IDisposable
 
         // Shared budget for NEW stream data from congestion window and pacing.
         long sendBudget = Math.Min(_recovery.Congestion.Available, _pacer.AvailableBytes);
-        bool firstPacket = true;
 
+        var control = new List<Frame>();
+        DrainRetransmitQueue(i, control);
+        AddApplicationControlFrames(control); // server: HANDSHAKE_DONE
+        if (_pendingControlFrames.Count > 0)
+        {
+            control.AddRange(_pendingControlFrames); // NEW_/RETIRE_CONNECTION_ID (RFC 9000 §5.1)
+            _pendingControlFrames.Clear();
+        }
+        if (_pingPending)
+        {
+            control.Add(PingFrame.Instance); // keep-alive (RFC 9000 §10.1.2)
+            _pingPending = false;
+        }
+        if (Spaces[i].AckPending && Spaces[i].BuildAck() is { } ack)
+            control.Add(ack);
+        CollectFlowControlFrames(control);
+        CollectStreamCancellationFrames(control); // RESET_STREAM / STOP_SENDING (RFC 9000 §2.4)
+
+        // Post-handshake CRYPTO at application level (e.g. NewSessionTicket, RFC 8446 §4.6.1).
+        int appCryptoChunk = Math.Min(_outgoingCrypto[i].Count, MaxCryptoDataPerPacket);
+        if (appCryptoChunk > 0)
+        {
+            control.Add(new CryptoFrame(_sendCryptoOffset[i], _outgoingCrypto[i].GetRange(0, appCryptoChunk).ToArray()));
+            _sendCryptoOffset[i] += (ulong)appCryptoChunk;
+            _outgoingCrypto[i].RemoveRange(0, appCryptoChunk);
+        }
+        int controlCursor = 0;
+
+        var writer = new BufferWriter();
+        try
+        {
         while (true)
         {
+            writer.Truncate(0);
             var frames = new List<Frame>();
-            if (firstPacket)
-            {
-                DrainRetransmitQueue(i, frames);
-                AddApplicationControlFrames(frames); // server: HANDSHAKE_DONE
-                if (_pendingControlFrames.Count > 0)
-                {
-                    frames.AddRange(_pendingControlFrames); // NEW_/RETIRE_CONNECTION_ID (RFC 9000 §5.1)
-                    _pendingControlFrames.Clear();
-                }
-                if (_pingPending)
-                {
-                    frames.Add(PingFrame.Instance); // keep-alive (RFC 9000 §10.1.2)
-                    _pingPending = false;
-                }
-                if (Spaces[i].AckPending && Spaces[i].BuildAck() is { } ack)
-                    frames.Add(ack);
-                CollectFlowControlFrames(frames);
-                CollectStreamCancellationFrames(frames); // RESET_STREAM / STOP_SENDING (RFC 9000 §2.4)
 
-                // Post-handshake CRYPTO at application level (e.g. NewSessionTicket, RFC 8446 §4.6.1).
-                int appCryptoChunk = Math.Min(_outgoingCrypto[i].Count, MaxCryptoDataPerPacket);
-                if (appCryptoChunk > 0)
-                {
-                    frames.Add(new CryptoFrame(_sendCryptoOffset[i], _outgoingCrypto[i].GetRange(0, appCryptoChunk).ToArray()));
-                    _sendCryptoOffset[i] += (ulong)appCryptoChunk;
-                    _outgoingCrypto[i].RemoveRange(0, appCryptoChunk);
-                }
-            }
+            // As many pending control frames as fit into this packet – the rest follows in the next one.
+            int cursorBefore = controlCursor;
+            controlCursor = FrameParser.WriteUpTo(ref writer, control, controlCursor, MaxPayloadPerPacket);
+            for (int k = cursorBefore; k < controlCursor; k++)
+                frames.Add(control[k]);
+            int payloadLeft = MaxPayloadPerPacket - writer.Length;
 
             // DATAGRAM frames (RFC 9221 §5): as early as possible, one frame per packet (unfragmentable,
             // MTU!), congestion-controlled — if the budget does not suffice, they stay in the queue (§5.4).
             bool sentDatagram = false;
-            if (sendBudget > 0 && _outgoingDatagrams.Count > 0)
+            if (sendBudget > 0 && _outgoingDatagrams.Count > 0 &&
+                _outgoingDatagrams.Peek().Length + DatagramFrameOverhead <= payloadLeft)
             {
                 byte[] datagramPayload = _outgoingDatagrams.Dequeue();
                 frames.Add(new DatagramFrame(datagramPayload));
-                sendBudget -= datagramPayload.Length + 4;
+                sendBudget -= datagramPayload.Length + DatagramFrameOverhead;
                 sentDatagram = true;
             }
 
-            // At most one stream chunk (~MTU) per packet, limited by flow control and the send budget.
-            if (!sentDatagram && sendBudget > 0)
-                AppendOneStreamChunk(frames, ref sendBudget);
+            // At most one stream chunk per packet, limited by flow control, send budget and what is
+            // left of the packet after the control frames.
+            if (!sentDatagram && sendBudget > 0 && payloadLeft > StreamFrameOverhead)
+                AppendOneStreamChunk(frames, ref sendBudget, payloadLeft - StreamFrameOverhead);
 
             if (frames.Count == 0)
                 break;
+
+            // Everything after the control frames still has to go into the writer.
+            for (int k = controlCursor - cursorBefore; k < frames.Count; k++)
+                frames[k].Write(ref writer);
 
             ulong pn = Spaces[i].NextPacketNumber();
             // First GENUINE 1-RTT packet – its acknowledgment may confirm the handshake (RFC 9001 §4.1.2).
@@ -745,17 +814,33 @@ public abstract class QuicEndpoint : IDisposable
             // after 0-RTT rejection thus stays correct.
             _firstOneRttPacketNumber ??= pn;
             int pnLength = PacketNumber.EncodeLength(pn, Spaces[i].LargestAckedByPeer);
-            byte[] packet = ShortHeader.Build(keys, Dcid, pn, pnLength, FrameParser.Serialize(frames), keyPhase: _sendKeyPhase);
+            byte[] packet = ShortHeader.Build(keys, Dcid, pn, pnLength, writer.WrittenSpan, keyPhase: _sendKeyPhase);
             RecordSent(i, pn, packet.Length, frames);
             datagrams.Add(packet);
-            firstPacket = false;
 
-            // Continue only while budget remains AND stream data or datagrams are still pending.
+            // Control frames still pending always keep the loop going — they must get out.
+            if (controlCursor < control.Count)
+                continue;
+
+            // Otherwise continue only while budget remains AND stream data or datagrams are pending.
             if (sendBudget <= 0 ||
                 (!StreamMap.Values.Any(s => s.Send.HasPending) && _outgoingDatagrams.Count == 0))
                 break;
         }
+        }
+        finally
+        {
+            writer.Dispose();
+        }
     }
+
+    /// <summary>
+    /// Worst-case frame overhead beyond the pure payload: type + stream/offset/length varints
+    /// (RFC 9000 §19.8) resp. type + length (§19.7 DATAGRAM). Used when sizing a packet so the frame
+    /// header cannot push the datagram beyond the budget.
+    /// </summary>
+    private const int StreamFrameOverhead = 25;
+    private const int DatagramFrameOverhead = 9;
 
     private readonly Queue<byte[]> _outgoingDatagrams = new(); // waiting DATAGRAM payloads (RFC 9221)
     private List<byte[]> _receivedDatagrams = [];
@@ -814,7 +899,11 @@ public abstract class QuicEndpoint : IDisposable
     /// NON-incremental streams are served one after another in ascending stream ID (request order),
     /// incremental ones share the bandwidth via round-robin.
     /// </summary>
-    private void AppendOneStreamChunk(List<Frame> frames, ref long sendBudget)
+    /// <param name="payloadLeft">
+    /// Bytes still free in the current packet after the control frames — the chunk must fit in
+    /// there too, not just under <see cref="MaxStreamDataPerPacket"/>.
+    /// </param>
+    private void AppendOneStreamChunk(List<Frame> frames, ref long sendBudget, int payloadLeft)
     {
         // Choose the prioritised candidate — possibly retry when a stream, despite HasPending,
         // currently yields no frame (e.g. stream flow control exhausted).
@@ -827,7 +916,8 @@ public abstract class QuicEndpoint : IDisposable
             ulong connWindow = _connSendLimit > _connSendUsed ? _connSendLimit - _connSendUsed : 0;
             if (connWindow == 0)
                 return; // connection window exhausted
-            int chunk = (int)Math.Min(Math.Min((ulong)MaxStreamDataPerPacket, connWindow), (ulong)sendBudget);
+            int maxChunk = Math.Min(MaxStreamDataPerPacket, payloadLeft);
+            int chunk = (int)Math.Min(Math.Min((ulong)maxChunk, connWindow), (ulong)sendBudget);
             if (chunk <= 0)
                 return;
             StreamFrame? sf = stream.Send.NextFrame(chunk);
