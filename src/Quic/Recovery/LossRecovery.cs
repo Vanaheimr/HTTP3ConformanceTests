@@ -78,6 +78,23 @@ public sealed class LossRecovery
     /// </summary>
     public long LastAckElicitingSentTicks { get; private set; } = -1;
 
+    /// <summary>
+    /// Time of the last packet sent at all (also non-ack-eliciting) – the PTO base for a client
+    /// whose peer has not yet completed address validation.
+    /// </summary>
+    private long _lastSentTicks = -1;
+
+    /// <summary>
+    /// Whether the peer has completed address validation (RFC 9002 §A.6
+    /// <c>PeerCompletedAddressValidation</c>). For the server always <c>true</c>; the client sets it
+    /// once it has received a Handshake ACK or the handshake is complete.
+    /// <para>While it is <c>false</c>, the client MUST keep a PTO armed EVEN WITHOUT packets in
+    /// flight (RFC 9002 §6.2.2.1) — otherwise a lost server flight deadlocks the handshake: the
+    /// server waits (address not yet validated, anti-amplification limit) for more data from the
+    /// client, and the client waits for the server.</para>
+    /// </summary>
+    public bool PeerCompletedAddressValidation { get; set; } = true;
+
     public int PtoCount { get; private set; }
 
     /// <summary>
@@ -100,6 +117,8 @@ public sealed class LossRecovery
     public void OnPacketSent(int space, SentPacket packet)
     {
         _spaces[space].Sent[packet.PacketNumber] = packet;
+        if (packet.TimeSentTicks > _lastSentTicks)
+            _lastSentTicks = packet.TimeSentTicks;
         if (packet.AckEliciting)
         {
             Congestion.OnPacketSent(packet.Size);
@@ -242,13 +261,22 @@ public sealed class LossRecovery
 
     /// <summary>
     /// PTO deadline (RFC 9002 §6.2): last ack-eliciting send time + PTO·2^ptoCount. -1 = no timer.
+    /// <para>Special case RFC 9002 §6.2.2.1: with nothing ack-eliciting in flight the timer is
+    /// normally cancelled — but NOT at a client whose peer has not yet completed address validation.
+    /// It has to keep probing to unblock the server; otherwise a lost handshake flight leaves both
+    /// sides waiting for each other forever.</para>
     /// </summary>
     public long GetProbeTimeoutDeadline()
     {
-        if (LastAckElicitingSentTicks < 0)
-            return -1;
+        long baseTicks = LastAckElicitingSentTicks;
+        if (baseTicks < 0)
+        {
+            if (PeerCompletedAddressValidation || _lastSentTicks < 0)
+                return -1;
+            baseTicks = _lastSentTicks;
+        }
         long pto = Rtt.GetProbeTimeout(MaxAckDelay).Ticks << PtoCount;
-        return LastAckElicitingSentTicks + pto;
+        return baseTicks + pto;
     }
 
     /// <summary>

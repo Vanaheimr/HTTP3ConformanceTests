@@ -632,6 +632,26 @@ Deliberately left open: server push (MAY), classic CONNECT proxying.
   through loss recovery (tracked as retransmittable; loss test via dropped flight + PTO). Tested
   in-process (7 tests: buffer units, copied code end-to-end, state errors, HTTP/3 cancellation,
   loss).
+- ✅ **Two handshake deadlocks under packet loss** — found by the new seeded lossy link (see the test
+  strategy, point 4), which drops/reorders/duplicates datagrams. A sweep over 150 seeds at 18 % loss
+  initially stalled the handshake on 7 of them; both causes were explicit RFC MUSTs:
+  - **HANDSHAKE_DONE was not retransmitted** (RFC 9000 §13.3): the frame was missing from the
+    retransmittable set in `RecordSent`, so a lost HANDSHAKE_DONE was gone for good. The client can
+    then no longer be reached by a Handshake-level probe either, because the server discards those
+    keys on completion (§4.9.2). Fixed by tracking it; test seam
+    `HandshakeDoneSentCountForTest` proves the repetition directly (the client can ALSO confirm via
+    a 1-RTT ACK per RFC 9001 §4.1.2, which would otherwise mask the bug).
+  - **The client stopped probing before address validation** (RFC 9002 §6.2.2.1): with nothing
+    ack-eliciting in flight, `GetProbeTimeoutDeadline` cancelled the timer — correct in general, but
+    NOT for a client whose address the server has not yet validated. It has to keep probing to
+    unblock the server (anti-amplification), otherwise both sides wait for each other forever.
+    `LossRecovery.PeerCompletedAddressValidation` (RFC 9002 §A.6; server always `true`, client from
+    the first Handshake ACK or handshake completion) now keeps the PTO armed, and a PTO with nothing
+    to retransmit sends a **PING** probe (§6.2.4) instead of no packet at all.
+  - After both fixes: **150/150 seeds green**. Permanently guarded by 10 `[TestCase]` seeds (incl. the
+    formerly failing 6/8/14/25/47/50/72), 2 `LossRecovery` unit tests and the HANDSHAKE_DONE
+    retransmission test. **Live:** interop 8/8, `H3Get --loss=10` against Cloudflare status 200
+    (17 datagrams dropped and bridged).
 - Grease: tolerate the peer's reserved frame/stream types.
 
 ### ✅ Phase 9 — Performance & nice-to-have — COMPLETED
@@ -825,8 +845,14 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
    Priceless for debugging; ~30 lines of code.
 3. Build in **qlog** (JSON event log per connection) early → visualisation with qvis.
    At minimum: packet_sent/received, frames, loss, recovery metrics.
-4. **Lossy UDP proxy** in the test project (drop/reorder/duplicate/delay configurable,
-   seed-based deterministic) for recovery tests without external tools.
+4. ✅ **Lossy UDP proxy** in the test project (drop/reorder/duplicate/delay configurable,
+   seed-based deterministic) for recovery tests without external tools — `LossyLink`/`LossyNetwork`
+   (tests/), slots into the usual pump idiom between `GetDatagramsToSend` and `ProcessDatagram`.
+   Datagrams are handed over as COPIES (`ProcessDatagram` unprotects in place, so a duplicate needs
+   its own buffer); time comes from the `FakeTimeProvider`, since otherwise loss recovery would never
+   fire in-process (PTO is time-driven, the rounds run in microseconds). Statistics per direction
+   (sent/dropped/delayed/duplicated/delivered/out-of-order) land in the assertion messages.
+   **Found two RFC violations on first use — see phase 8.**
 5. **Interop targets (client side) ✅ 8 stacks:** quiche (Cloudflare), nginx, Google QUIC, mvfst
    (Meta), lsquic (LiteSpeed), msquic (Microsoft/outlook), quic-go (Caddy), Akamai — each status
    2xx/3xx with full cert validation. **Server side:** `curl --http3` ✅ (ngtcp2/LibreSSL on

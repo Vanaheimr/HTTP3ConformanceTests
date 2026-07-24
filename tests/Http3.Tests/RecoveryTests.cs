@@ -230,6 +230,37 @@ public class LossRecoveryTests
         Assert.That(lr.PtoCount, Is.EqualTo(1));
     }
 
+    [Test]
+    public void PtoStaysArmed_WithNothingInFlight_UntilThePeerHasValidatedTheAddress()
+    {
+        // RFC 9002 §6.2.2.1: normally the PTO timer is cancelled once nothing ack-eliciting is in
+        // flight. NOT so at a client whose address the server has not yet validated — it has to keep
+        // probing to unblock the server, otherwise a lost server flight deadlocks both sides.
+        var lr = new LossRecovery { PeerCompletedAddressValidation = false };
+        lr.OnPacketSent(0, Packet(0, tick: Ms(0)));
+        lr.OnAckReceived(0, AckFrame.FromPacketNumbers([0]), TimeSpan.Zero, Ms(50));
+
+        Assert.That(lr.LastAckElicitingSentTicks, Is.EqualTo(-1), "Nothing is in flight any more.");
+        Assert.That(lr.GetProbeTimeoutDeadline(), Is.GreaterThan(0),
+                    "Before address validation the client must keep a PTO armed.");
+
+        // Once a Handshake ACK arrives (or the handshake is complete), the normal rule applies again.
+        lr.PeerCompletedAddressValidation = true;
+        Assert.That(lr.GetProbeTimeoutDeadline(), Is.EqualTo(-1));
+    }
+
+    [Test]
+    public void PtoTimer_StaysCancelled_ForTheServer()
+    {
+        // The server validates the client implicitly (RFC 9002 §A.6) – the default must not change
+        // its behaviour.
+        var lr = new LossRecovery();
+        lr.OnPacketSent(0, Packet(0, tick: Ms(0)));
+        lr.OnAckReceived(0, AckFrame.FromPacketNumbers([0]), TimeSpan.Zero, Ms(50));
+
+        Assert.That(lr.GetProbeTimeoutDeadline(), Is.EqualTo(-1));
+    }
+
     private static long Ms(double ms) => TimeSpan.FromMilliseconds(ms).Ticks;
 
     /// <summary>

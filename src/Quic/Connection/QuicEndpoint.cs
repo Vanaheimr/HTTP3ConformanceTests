@@ -171,6 +171,9 @@ public abstract class QuicEndpoint : IDisposable
         Scid = new ConnectionId(RandomNumberGenerator.GetBytes(8));
         _cids = new ConnectionIdManager(Scid); // local handshake CID = sequence 0
         _addressValidated = !IsServer;         // the client regards the server address as validated
+        // RFC 9002 §6.2.2.1/§A.6: for the client the peer counts as validated only after a Handshake
+        // ACK or handshake completion — until then it must keep a PTO armed even with nothing in flight.
+        _recovery.PeerCompletedAddressValidation = IsServer;
         _idle.Negotiate(LocalParams.MaxIdleTimeoutMs, peerMs: 0); // the peer value follows after the handshake
         _idle.Start(NowTicks);
     }
@@ -216,6 +219,12 @@ public abstract class QuicEndpoint : IDisposable
     /// no matter how many packets have flowed.
     /// </summary>
     public int ApplicationTrackedReceivedCount => Spaces[(int)EncryptionLevel.Application].TrackedReceivedCount;
+
+    /// <summary>
+    /// Test seam: how often a HANDSHAKE_DONE frame went onto the wire. RFC 9000 §13.3 requires
+    /// retransmission until acknowledged ⇒ after a loss this must be &gt; 1.
+    /// </summary>
+    internal int HandshakeDoneSentCountForTest { get; private set; }
 
     /// <summary>
     /// <c>true</c> once the connection was closed silently due to the idle timeout (RFC 9000 §10.1).
@@ -1090,7 +1099,13 @@ public abstract class QuicEndpoint : IDisposable
         _pacer.OnBytesSent(size);
         _idle.OnAckElicitingPacketSent(NowTicks); // RFC 9000 §10.1
         // RESET_STREAM/STOP_SENDING must arrive reliably (RFC 9000 §19.4/§3.5) ⇒ track them.
-        List<Frame> retransmittable = frames.Where(f => f is CryptoFrame or StreamFrame or ResetStreamFrame or ResetStreamAtFrame or StopSendingFrame).ToList();
+        // HANDSHAKE_DONE likewise: RFC 9000 §13.3 requires retransmission until acknowledged — if it
+        // is lost, the client never learns that the handshake is confirmed and, once the server has
+        // discarded its Handshake keys, cannot be reached by a Handshake-level probe either ⇒ deadlock.
+        List<Frame> retransmittable = frames.Where(f => f is CryptoFrame or StreamFrame or ResetStreamFrame
+                                                          or ResetStreamAtFrame or StopSendingFrame or HandshakeDoneFrame).ToList();
+        if (retransmittable.Any(f => f is HandshakeDoneFrame))
+            HandshakeDoneSentCountForTest++;
         _recovery.OnPacketSent(level, new SentPacket
         {
             PacketNumber = packetNumber,
@@ -1112,9 +1127,29 @@ public abstract class QuicEndpoint : IDisposable
         if (deadline < 0 || NowTicks < deadline)
             return;
         _recovery.OnProbeTimeoutFired();
+
+        bool anyProbe = false;
         for (int level = 0; level < LevelCount; level++)
-            if (WriteKeys[level] is not null)
-                _retransmitQueue[level].AddRange(_recovery.GetProbeFrames(level));
+        {
+            if (WriteKeys[level] is null)
+                continue;
+            List<Frame> probe = _recovery.GetProbeFrames(level);
+            if (probe.Count == 0)
+                continue;
+            _retransmitQueue[level].AddRange(probe);
+            anyProbe = true;
+        }
+
+        // Nothing outstanding to repeat ⇒ send an ack-eliciting PING anyway (RFC 9002 §6.2.4).
+        // Without it, a PTO at a client whose peer has not yet validated the address (§6.2.2.1)
+        // would produce no packet at all and the handshake would stay stuck.
+        if (!anyProbe)
+            for (int level = LevelCount - 1; level >= 0; level--)
+                if (WriteKeys[level] is not null)
+                {
+                    _retransmitQueue[level].Add(PingFrame.Instance);
+                    break;
+                }
     }
 
     private void CollectFlowControlFrames(List<Frame> frames)
@@ -1398,6 +1433,10 @@ public abstract class QuicEndpoint : IDisposable
                     break;
                 case AckFrame ack:
                     Spaces[(int)level].OnAckReceived(ack); // incl. ACK-state pruning, RFC 9000 §13.2.4
+                    // A Handshake ACK proves the server has validated our address (RFC 9002 §A.6)
+                    // ⇒ the §6.2.2.1 special case for the PTO no longer applies.
+                    if (level == EncryptionLevel.Handshake && !IsServer)
+                        _recovery.PeerCompletedAddressValidation = true;
                     var ackDelay = TimeSpan.FromMicroseconds(ack.AckDelay * 8);
                     _retransmitQueue[(int)level].AddRange(
                         _recovery.OnAckReceived((int)level, ack, ackDelay, NowTicks));
@@ -1805,6 +1844,9 @@ public abstract class QuicEndpoint : IDisposable
     /// </summary>
     private void MaybeDiscardHandshakeKeys()
     {
+        if (HandshakeIsConfirmed)
+            _recovery.PeerCompletedAddressValidation = true; // RFC 9002 §A.6
+
         if (_handshakeKeysDiscarded || !HandshakeIsConfirmed || WriteKeys[(int)EncryptionLevel.Handshake] is null)
             return;
         _handshakeKeysDiscarded = true;
