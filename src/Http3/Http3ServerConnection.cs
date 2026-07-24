@@ -91,7 +91,8 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         ulong webTransportMaxSessions = 0,
         Func<Http3Request, Action<WebTransportSession>?>? webTransportHandler = null,
         Func<Http3Request, IReadOnlyList<string>, string?>? webTransportProtocolSelector = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        KeyLog? keyLog = null)
     {
         _connectHandler = connectHandler;
         _wtMaxSessions = webTransportMaxSessions;
@@ -106,7 +107,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             transportParameters ??= new TransportParameters();
             transportParameters.MaxDatagramFrameSizeValue = 65535; // RFC 9221 §3 RECOMMENDED
         }
-        _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider);
+        _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider, keyLog: keyLog);
         _handler = handler;
         _qpack = new Http3Qpack(qpackMaxTableCapacity, weAreClient: false, FatalConnectionError)
         {

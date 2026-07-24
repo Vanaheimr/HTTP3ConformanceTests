@@ -66,6 +66,33 @@ public sealed class TlsServerHandshake : ITlsHandshake
     // 0-RTT (RFC 8446 §2.3): accepted early_data + the early secret needed to read the 0-RTT packets.
     private byte[]? _earlyTrafficSecret;
 
+    // Optional key log (NSS format) for Wireshark; null = off. See KeyLog for the security note.
+    private readonly KeyLog? _keyLog;
+
+    /// <summary>
+    /// The random of the ClientHello the handshake is running on — the connection identifier of the
+    /// key log. After a HelloRetryRequest that is the random of ClientHello2.
+    /// </summary>
+    private ReadOnlySpan<byte> ClientRandom => ClientHelloParser.ClientRandom(_clientHello1);
+
+    private void LogHandshakeSecrets()
+    {
+        if (_keyLog is null || HandshakeSecrets is null)
+            return;
+        _keyLog.Write(KeyLog.ClientHandshakeTrafficSecret, ClientRandom, HandshakeSecrets.ClientHandshakeTrafficSecret);
+        _keyLog.Write(KeyLog.ServerHandshakeTrafficSecret, ClientRandom, HandshakeSecrets.ServerHandshakeTrafficSecret);
+    }
+
+    private void LogApplicationSecrets()
+    {
+        if (_keyLog is null || ApplicationSecrets is null)
+            return;
+        _keyLog.Write(KeyLog.ClientTrafficSecret0, ClientRandom, ApplicationSecrets.ClientApplicationTrafficSecret);
+        _keyLog.Write(KeyLog.ServerTrafficSecret0, ClientRandom, ApplicationSecrets.ServerApplicationTrafficSecret);
+        if (_exporterMasterSecret is { } exporter)
+            _keyLog.Write(KeyLog.ExporterSecret, ClientRandom, exporter);
+    }
+
     public TlsServerHandshake(
         ServerCertificate certificate,
         byte[] quicTransportParameters,
@@ -73,8 +100,10 @@ public sealed class TlsServerHandshake : ITlsHandshake
         IReadOnlyList<CipherSuite>? preferredCipherSuites = null,
         ServerResumptionCache? resumptionCache = null,
         uint ticketLifetimeSeconds = 7200,
-        uint maxEarlyDataSize = 0)
+        uint maxEarlyDataSize = 0,
+        KeyLog? keyLog = null)
     {
+        _keyLog = keyLog;
         _certificate = certificate;
         _quicTransportParameters = quicTransportParameters;
         _preferredGroups = preferredGroups ?? [NamedGroup.X25519, NamedGroup.Secp256r1];
@@ -280,6 +309,7 @@ public sealed class TlsServerHandshake : ITlsHandshake
         {
             EarlyDataAccepted = true;
             _earlyTrafficSecret = _ks.ClientEarlyTrafficSecret(psk, _ks.TranscriptHash(_clientHello1));
+            _keyLog?.Write(KeyLog.ClientEarlyTrafficSecret, ClientRandom, _earlyTrafficSecret);
         }
     }
 
@@ -302,6 +332,7 @@ public sealed class TlsServerHandshake : ITlsHandshake
 
         ReadOnlySpan<byte> psk = _pskAccepted ? _selectedPsk : default;
         HandshakeSecrets = _ks!.DeriveHandshakeSecrets(shared, _transcript.CurrentHash(), psk);
+        LogHandshakeSecrets();
 
         byte[] encryptedExtensions = BuildEncryptedExtensions();
         _transcript.Append(encryptedExtensions);
@@ -328,6 +359,7 @@ public sealed class TlsServerHandshake : ITlsHandshake
         ApplicationSecrets = _ks.DeriveApplicationSecrets(HandshakeSecrets.HandshakeSecret, _transcriptThroughServerFinished);
         // exporter_master_secret (RFC 8446 §7.1) over CH…server Finished — for §7.5 keying-material exports.
         _exporterMasterSecret = _ks.ExporterMasterSecret(ApplicationSecrets.MasterSecret, _transcriptThroughServerFinished);
+        LogApplicationSecrets();
         _state = State.WaitClientFinished;
     }
 

@@ -71,6 +71,35 @@ public sealed class TlsClientHandshake : ITlsHandshake
     // Wall clock for the obfuscated ticket age (RFC 8446 §4.2.11); injectable for tests.
     private readonly TimeProvider _timeProvider;
 
+    // Optional key log (NSS format) for Wireshark; null = off. See KeyLog for the security note.
+    private readonly KeyLog? _keyLog;
+
+    /// <summary>
+    /// The random of the ClientHello most recently built — the connection identifier of the key log.
+    /// After a HelloRetryRequest that is the random of ClientHello2, i.e. the one on the wire.
+    /// </summary>
+    private ReadOnlySpan<byte> ClientRandom => ClientHelloParser.ClientRandom(_currentClientHello);
+
+    private byte[] _currentClientHello = [];
+
+    private void LogHandshakeSecrets()
+    {
+        if (_keyLog is null || HandshakeSecrets is null)
+            return;
+        _keyLog.Write(KeyLog.ClientHandshakeTrafficSecret, ClientRandom, HandshakeSecrets.ClientHandshakeTrafficSecret);
+        _keyLog.Write(KeyLog.ServerHandshakeTrafficSecret, ClientRandom, HandshakeSecrets.ServerHandshakeTrafficSecret);
+    }
+
+    private void LogApplicationSecrets()
+    {
+        if (_keyLog is null || ApplicationSecrets is null)
+            return;
+        _keyLog.Write(KeyLog.ClientTrafficSecret0, ClientRandom, ApplicationSecrets.ClientApplicationTrafficSecret);
+        _keyLog.Write(KeyLog.ServerTrafficSecret0, ClientRandom, ApplicationSecrets.ServerApplicationTrafficSecret);
+        if (_exporterMasterSecret is { } exporter)
+            _keyLog.Write(KeyLog.ExporterSecret, ClientRandom, exporter);
+    }
+
     public TlsClientHandshake(
         string serverName,
         byte[] quicTransportParameters,
@@ -79,8 +108,10 @@ public sealed class TlsClientHandshake : ITlsHandshake
         CertificateValidationOptions? certificateValidation = null,
         IReadOnlyList<CipherSuite>? cipherSuites = null,
         ResumptionTicket? resumptionTicket = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        KeyLog? keyLog = null)
     {
+        _keyLog = keyLog;
         _serverName = serverName;
         _quicTransportParameters = quicTransportParameters;
         _keyShareGroups = keyShareGroups ?? KeyExchange.DefaultGroups;
@@ -164,7 +195,10 @@ public sealed class TlsClientHandshake : ITlsHandshake
         // 0-RTT: derive the early traffic secret over the hash of the (complete) ClientHello – from it
         // the QUIC layer installs the 0-RTT write keys in order to send application data immediately.
         if (_earlyDataOffered && _resumptionTicket is { } t && _ks is not null)
+        {
             _earlyTrafficSecret = _ks.ClientEarlyTrafficSecret(t.Psk, _ks.TranscriptHash(_clientHello1));
+            _keyLog?.Write(KeyLog.ClientEarlyTrafficSecret, ClientRandom, _earlyTrafficSecret);
+        }
 
         _state = State.WaitServerHello;
     }
@@ -299,6 +333,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
         // With accepted resumption, the PSK flows into the early secret (RFC 8446 §7.1).
         ReadOnlySpan<byte> psk = _pskAccepted ? _resumptionTicket!.Psk : default;
         HandshakeSecrets = _ks!.DeriveHandshakeSecrets(shared, _transcript.CurrentHash(), psk);
+        LogHandshakeSecrets();
         _state = State.WaitServerFinished;
     }
 
@@ -346,7 +381,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
             computeBinder = truncated => ks.FinishedVerifyData(binderKey, ks.TranscriptHash(truncated.Span));
         }
 
-        return ClientHello.Build(new ClientHelloOptions
+        _currentClientHello = ClientHello.Build(new ClientHelloOptions
         {
             ServerName = _serverName,
             CipherSuites = _cipherSuites,
@@ -358,6 +393,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
             ComputeBinder = computeBinder,
             OfferEarlyData = _earlyDataOffered,
         });
+        return _currentClientHello;
     }
 
     /// <summary>
@@ -402,6 +438,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
         ApplicationSecrets = _ks!.DeriveApplicationSecrets(HandshakeSecrets!.HandshakeSecret, transcriptThroughServerFinished);
         // exporter_master_secret (RFC 8446 §7.1) over CH…server Finished — for §7.5 keying-material exports.
         _exporterMasterSecret = _ks.ExporterMasterSecret(ApplicationSecrets.MasterSecret, transcriptThroughServerFinished);
+        LogApplicationSecrets();
 
         byte[] verifyData = _ks.FinishedVerifyData(HandshakeSecrets.ClientHandshakeTrafficSecret, transcriptThroughServerFinished);
         byte[] clientFinished = Finished.BuildMessage(verifyData);

@@ -20,6 +20,7 @@
 using System.Net;
 using System.Net.Sockets;
 
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 #endregion
@@ -69,7 +70,8 @@ public sealed class Http3Client : IAsyncDisposable
                        CertificateValidationOptions? certificateValidation = null,
                        bool enableDatagrams = false,
                        ulong webTransportMaxSessions = 0,
-                       TimeProvider? timeProvider = null)
+                       TimeProvider? timeProvider = null,
+                       KeyLog? keyLog = null)
     {
         _host = host;
         _port = port;
@@ -78,7 +80,8 @@ public sealed class Http3Client : IAsyncDisposable
             certificateValidation: certificateValidation,
             enableDatagrams: enableDatagrams,
             webTransportMaxSessions: webTransportMaxSessions,
-            timeProvider: _timeProvider);
+            timeProvider: _timeProvider,
+            keyLog: keyLog);
     }
 
     /// <summary>

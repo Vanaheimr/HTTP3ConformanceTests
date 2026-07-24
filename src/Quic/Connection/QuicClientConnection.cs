@@ -56,7 +56,8 @@ public sealed class QuicClientConnection : QuicEndpoint
         IReadOnlyList<CipherSuite>? cipherSuites = null,
         IReadOnlyList<NamedGroup>? keyExchangeGroups = null,
         ResumptionTicket? resumptionTicket = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        KeyLog? keyLog = null)
         : base(transportParameters, version, timeProvider)
     {
         LocalParams.InitialSourceConnectionIdValue = Scid;
@@ -70,7 +71,7 @@ public sealed class QuicClientConnection : QuicEndpoint
         // A resumptionTicket enables session resumption (PSK) for this connection.
         _tls = new TlsClientHandshake(serverName, LocalParams.Encode(), certificateValidation: certificateValidation,
             cipherSuites: cipherSuites, keyShareGroups: keyExchangeGroups, supportedGroups: keyExchangeGroups,
-            resumptionTicket: resumptionTicket, timeProvider: TimeProvider);
+            resumptionTicket: resumptionTicket, timeProvider: TimeProvider, keyLog: keyLog);
         TlsHandshake = _tls;
         InstallInitialKeys(_originalDcid);
     }

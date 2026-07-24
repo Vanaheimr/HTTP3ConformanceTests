@@ -78,6 +78,15 @@ public sealed class ClientHelloInfo
 /// </summary>
 public static class ClientHelloParser
 {
+    /// <summary>
+    /// The 32-byte client random of a ClientHello handshake message. It sits at a fixed offset:
+    /// 4 bytes handshake header (type + 3-byte length) + 2 bytes legacy_version (RFC 8446 §4.1.2).
+    /// Serves as the connection identifier of the NSS key log format (see <see cref="KeyLog"/>).
+    /// Empty when the message is too short.
+    /// </summary>
+    public static ReadOnlySpan<byte> ClientRandom(ReadOnlySpan<byte> handshakeMessage)
+        => handshakeMessage.Length >= 4 + 2 + 32 ? handshakeMessage.Slice(4 + 2, 32) : default;
+
     public static bool TryParse(ReadOnlySpan<byte> handshakeMessage, out ClientHelloInfo? info)
     {
         info = null;

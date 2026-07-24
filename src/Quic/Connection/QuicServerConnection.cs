@@ -38,6 +38,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 public sealed class QuicServerConnection : QuicEndpoint
 {
     private readonly ServerCertificate _certificate;
+    private readonly KeyLog? _keyLog; // optional NSS key log for Wireshark; see KeyLog
     private readonly bool _requireRetry;
     private readonly IReadOnlyList<CipherSuite>? _preferredCipherSuites;
     private readonly IReadOnlyList<NamedGroup>? _preferredGroups;
@@ -65,9 +66,11 @@ public sealed class QuicServerConnection : QuicEndpoint
         ServerResumptionCache? resumptionCache = null,
         uint maxEarlyDataSize = 0,
         StatelessResetTokenGenerator? statelessResetTokens = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        KeyLog? keyLog = null)
         : base(transportParameters, version, timeProvider)
     {
+        _keyLog = keyLog;
         _certificate = certificate;
         _requireRetry = requireRetry;
         _preferredCipherSuites = preferredCipherSuites;
@@ -156,7 +159,7 @@ public sealed class QuicServerConnection : QuicEndpoint
 
         _serverTls = new TlsServerHandshake(_certificate, LocalParams.Encode(),
             preferredCipherSuites: _preferredCipherSuites, preferredGroups: _preferredGroups,
-            resumptionCache: _resumptionCache, maxEarlyDataSize: _maxEarlyDataSize);
+            resumptionCache: _resumptionCache, maxEarlyDataSize: _maxEarlyDataSize, keyLog: _keyLog);
         TlsHandshake = _serverTls;
 
         InstallInitialKeys(initialKeyDcid);

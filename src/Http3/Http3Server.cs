@@ -64,8 +64,8 @@ public sealed class Http3Server : IAsyncDisposable
     /// default <see cref="Http3ServerConnection"/>.
     /// </summary>
     public Http3Server(ServerCertificate certificate, Func<Http3Request, Http3Response> handler, int port = 443,
-                       TimeProvider? timeProvider = null)
-        : this(port, () => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider),
+                       TimeProvider? timeProvider = null, KeyLog? keyLog = null)
+        : this(port, () => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider, keyLog: keyLog),
                timeProvider: timeProvider)
     { }
 

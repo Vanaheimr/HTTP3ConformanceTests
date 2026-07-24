@@ -841,8 +841,20 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
 
 1. **RFC test vectors as unit tests:** RFC 9001 Appendix A (Initial packets, Retry tag,
    ChaCha20 vectors), RFC 8448 (TLS key schedule), RFC 7541 Appendix C (Huffman).
-2. Implement **`SSLKEYLOGFILE` export** → Wireshark can decrypt our own QUIC packets.
-   Priceless for debugging; ~30 lines of code.
+2. ✅ **`SSLKEYLOGFILE` export** → Wireshark decrypts our own QUIC packets. `KeyLog` (Quic.Tls) writes
+   the NSS key log format (`<LABEL> <client random> <secret>`) with all TLS 1.3 secrets of RFC 8446
+   §7.1: CLIENT_EARLY_TRAFFIC_SECRET (0-RTT), CLIENT/SERVER_HANDSHAKE_TRAFFIC_SECRET,
+   CLIENT/SERVER_TRAFFIC_SECRET_0 and EXPORTER_SECRET. The connection identifier is the client random
+   of the ClientHello (`ClientHelloParser.ClientRandom`, fixed offset 6). Threaded through as an
+   optional `keyLog:` parameter exactly like `timeProvider:` (both handshakes → QUIC connections →
+   HTTP/3 connections → async facades); samples via `--keylog[=<path>]`.
+   **DELIBERATELY not enabled by the environment variable alone** — the secrets are written in plain
+   text, so the application has to pass the key log explicitly; `KeyLog.FromEnvironment()` merely
+   offers the customary convention. **Verified live:** a `tshark` capture of a real
+   cloudflare-quic.com connection shows **0** HTTP/3 frames without the key log and **16** with it —
+   including `HEADERS: GET /` and `HEADERS: 200 OK`, SETTINGS, DATA and the QPACK streams in both
+   directions. 7 tests (format, empty values, environment gate, client-random offset, all secrets
+   over a real handshake, **both endpoints log identical lines**, 0-RTT early secret).
 3. Build in **qlog** (JSON event log per connection) early → visualisation with qvis.
    At minimum: packet_sent/received, frames, loss, recovery metrics.
 4. ✅ **Lossy UDP proxy** in the test project (drop/reorder/duplicate/delay configurable,

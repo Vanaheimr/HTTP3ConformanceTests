@@ -87,9 +87,16 @@ IReadOnlyList<NamedGroup>? keyExchangeGroups =
     : args.Contains("--x448") ? [NamedGroup.X448]
     : null;
 bool wantWebTransport = args.Contains("--webtransport");
+// --keylog[=<path>]: writes the TLS secrets in NSS key log format so Wireshark can decrypt our own
+// QUIC packets (RFC 8446 §7.1 secrets). Without a path the SSLKEYLOGFILE convention applies.
+// DEBUGGING ONLY — anyone holding the file can decrypt the recorded traffic.
+KeyLog? keyLog = ParseKeyLog(args);
+if (keyLog is not null)
+    Console.WriteLine("  Key log active (NSS format) — Wireshark can decrypt this connection.\n");
 using var http3 = new Http3ClientConnection(host, transportParams, validation, qpackCapacity, cipherSuites, keyExchangeGroups,
                                             enableDatagrams: args.Contains("--datagrams") || wantWebTransport, // RFC 9297/9221
-                                            webTransportMaxSessions: wantWebTransport ? 4u : 0u); // draft-webtrans-http3
+                                            webTransportMaxSessions: wantWebTransport ? 4u : 0u, // draft-webtrans-http3
+                                            keyLog: keyLog);
 http3.Start();
 
 try
@@ -623,6 +630,15 @@ static int ParseLoss(string[] args)
 {
     string? arg = args.FirstOrDefault(a => a.StartsWith("--loss=", StringComparison.Ordinal));
     return arg is not null && int.TryParse(arg["--loss=".Length..], out int v) ? Math.Clamp(v, 0, 90) : 0;
+}
+
+static KeyLog? ParseKeyLog(string[] args)
+{
+    string? arg = args.FirstOrDefault(a => a == "--keylog" || a.StartsWith("--keylog="));
+    if (arg is null)
+        return null;
+    string path = arg.Length > "--keylog=".Length && arg.StartsWith("--keylog=") ? arg["--keylog=".Length..] : "";
+    return path.Length > 0 ? KeyLog.ToFile(path) : KeyLog.FromEnvironment();
 }
 
 static int ParseIntArg(string[] args, string prefix, int fallback)

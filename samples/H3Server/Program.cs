@@ -45,6 +45,10 @@ var serverParams = new TransportParameters { MaxIdleTimeoutMs = idleMs };
 
 // Optional address validation via Retry (RFC 9000 §8.1): --retry.
 bool requireRetry = args.Contains("--retry");
+// --keylog[=<path>]: TLS secrets in NSS key log format for Wireshark (debugging only!).
+KeyLog? keyLog = args.FirstOrDefault(a => a.StartsWith("--keylog")) is { } keyLogArg
+    ? (keyLogArg.StartsWith("--keylog=") ? KeyLog.ToFile(keyLogArg["--keylog=".Length..]) : KeyLog.FromEnvironment())
+    : null;
 
 // Optionally demonstrate graceful shutdown (RFC 9114 §5.2): after the first answered request send a
 // GOAWAY, then (one exchange later) close with H3_NO_ERROR: --goaway.
@@ -161,6 +165,7 @@ while (true)
         conn = new ServerConn(new Http3ServerConnection(certificate, Handle, serverParams, requireRetry,
             preferredGroups: preferGroups, resumptionCache: resumptionCache, maxEarlyDataSize: 0xFFFFFFFF,
             statelessResetTokens: statelessResetTokens,
+            keyLog: keyLog,
             maxFieldSectionSize: 16_384,        // RFC 9114 §4.2.2: oversized request headers ⇒ 431
             connectHandler: HandleConnect,      // RFC 9220: WebSockets via Extended CONNECT
             enableDatagrams: true,              // RFC 9297/9221: HTTP datagrams
