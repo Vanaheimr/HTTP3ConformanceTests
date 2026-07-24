@@ -22,6 +22,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Crypto;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Qlog;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Recovery;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
@@ -159,7 +160,8 @@ public abstract class QuicEndpoint : IDisposable
     /// </summary>
     private enum ConnectionState { Active, Closing, Draining, Closed }
 
-    protected QuicEndpoint(TransportParameters? transportParameters, uint version, TimeProvider? timeProvider = null)
+    protected QuicEndpoint(TransportParameters? transportParameters, uint version, TimeProvider? timeProvider = null,
+                           QlogWriter? qlog = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
         _startTimestamp = _timeProvider.GetTimestamp();
@@ -174,6 +176,10 @@ public abstract class QuicEndpoint : IDisposable
         // RFC 9002 §6.2.2.1/§A.6: for the client the peer counts as validated only after a Handshake
         // ACK or handshake completion — until then it must keep a PTO armed even with nothing in flight.
         _recovery.PeerCompletedAddressValidation = IsServer;
+        Qlog = qlog;
+        if (qlog is not null)
+            _recovery.OnPacketLost = (space, packetNumber, trigger) =>
+                qlog.PacketLost(QlogTimeMs, QlogPacketType(space), packetNumber, trigger);
         _idle.Negotiate(LocalParams.MaxIdleTimeoutMs, peerMs: 0); // the peer value follows after the handshake
         _idle.Start(NowTicks);
     }
@@ -219,6 +225,41 @@ public abstract class QuicEndpoint : IDisposable
     /// no matter how many packets have flowed.
     /// </summary>
     public int ApplicationTrackedReceivedCount => Spaces[(int)EncryptionLevel.Application].TrackedReceivedCount;
+
+    /// <summary>
+    /// Optional qlog for this connection; <c>null</c> = off (then no event is built at all).
+    /// </summary>
+    protected QlogWriter? Qlog { get; }
+
+    /// <summary>
+    /// Connection time in milliseconds — the qlog time base (<c>relative_to_epoch</c> on our
+    /// monotonic clock).
+    /// </summary>
+    private double QlogTimeMs => NowTicks / (double)TimeSpan.TicksPerMillisecond;
+
+    /// <summary>
+    /// qlog packet type of an encryption level (draft-ietf-quic-qlog-quic-events, PacketType).
+    /// </summary>
+    private static string QlogPacketType(int level) => level switch
+    {
+        (int)EncryptionLevel.Initial => "initial",
+        (int)EncryptionLevel.Handshake => "handshake",
+        _ => "1RTT",
+    };
+
+    /// <summary>
+    /// Emits <c>quic:recovery_metrics_updated</c> with the current RTT/congestion values — what
+    /// qvis draws as the congestion diagram.
+    /// </summary>
+    private void QlogRecoveryMetrics()
+        => Qlog?.RecoveryMetricsUpdated(QlogTimeMs,
+               _recovery.Rtt.SmoothedRtt.TotalMilliseconds,
+               _recovery.Rtt.LatestRtt.TotalMilliseconds,
+               _recovery.Rtt.MinRtt.TotalMilliseconds,
+               _recovery.Rtt.RttVar.TotalMilliseconds,
+               _recovery.PtoCount,
+               _recovery.Congestion.CongestionWindow,
+               _recovery.Congestion.BytesInFlight);
 
     /// <summary>
     /// Test seam: how often a HANDSHAKE_DONE frame went onto the wire. RFC 9000 §13.3 requires
@@ -365,6 +406,8 @@ public abstract class QuicEndpoint : IDisposable
 
     private void EnterClosing(ConnectionCloseFrame closeFrame)
     {
+        Qlog?.ConnectionClosed(QlogTimeMs, "local", closeFrame.ErrorCode, closeFrame.ReasonPhrase);
+
         if (_state != ConnectionState.Active)
             return;
         _closeFrame = closeFrame;
@@ -1083,6 +1126,8 @@ public abstract class QuicEndpoint : IDisposable
 
     private void RecordSent(int level, ulong packetNumber, int size, List<Frame> frames)
     {
+        Qlog?.PacketSent(QlogTimeMs, QlogPacketType(level), packetNumber, size, frames);
+
         // RFC 9000 §13.2.4: remember which Largest Acknowledged we reported in which packet — its
         // acknowledgment later releases the ACK state. Must happen for pure ACK packets too (the peer
         // reports those in its ranges as well), i.e. before the ack-eliciting early exit below.
@@ -1310,7 +1355,10 @@ public abstract class QuicEndpoint : IDisposable
         byte[] packet = packetSpan.ToArray();
         // Remove the header protection (the HP key is constant across key updates) → then read the key-phase bit.
         if (!current.RemoveHeaderProtection(packet, pnOffset, Spaces[i].LargestReceived, longHeader: false, out ulong pn, out int headerLength))
+        {
+            Qlog?.PacketDropped(QlogTimeMs, "1RTT", packet.Length, "header_protection_failure");
             return;
+        }
 
         bool packetKeyPhase = (packet[0] & 0x04) != 0;
         ReadOnlySpan<byte> header = packet.AsSpan(0, headerLength);
@@ -1336,7 +1384,7 @@ public abstract class QuicEndpoint : IDisposable
             CommitPeerKeyUpdate(packetKeyPhase);
         }
 
-        DeliverApplicationFrames(pn, plaintext, len, ecn);
+        DeliverApplicationFrames(pn, plaintext, len, ecn, packet.Length);
     }
 
     /// <summary>
@@ -1354,11 +1402,15 @@ public abstract class QuicEndpoint : IDisposable
         return true;
     }
 
-    private void DeliverApplicationFrames(ulong packetNumber, byte[] plaintext, int length, EcnCodepoint ecn)
+    private void DeliverApplicationFrames(ulong packetNumber, byte[] plaintext, int length, EcnCodepoint ecn,
+                                          int packetLength = 0)
     {
         _idle.OnPacketReceived(NowTicks); // RFC 9000 §10.1
         _anyPacketProcessed = true;
         Spaces[(int)EncryptionLevel.Application].RecordReceived(packetNumber, ecn);
+        // Only when the qlog is on: parse the frames a second time purely for the log.
+        if (Qlog is { } qlog && FrameParser.TryParseAll(plaintext.AsSpan(0, length), out List<Frame> loggedFrames) == FrameParseResult.Ok)
+            qlog.PacketReceived(QlogTimeMs, "1RTT", packetNumber, packetLength, loggedFrames);
 
         // Only genuine 1-RTT packets (short header) land here – 0-RTT (long header 0x01) runs through
         // DecryptAndHandle. With the first 1-RTT packet the server knows the upper bound of the 0-RTT
@@ -1381,7 +1433,10 @@ public abstract class QuicEndpoint : IDisposable
         int i = (int)level;
         byte[] plaintext = new byte[packet.Length];
         if (!keys.UnprotectPacket(packet, pnOffset, Spaces[i].LargestReceived, longHeader, plaintext, out ulong pn, out int len))
+        {
+            Qlog?.PacketDropped(QlogTimeMs, QlogPacketType(i), packet.Length, "decryption_failure");
             return;
+        }
 
         _idle.OnPacketReceived(NowTicks); // RFC 9000 §10.1: restart the timer on successful receipt
         _anyPacketProcessed = true;
@@ -1393,6 +1448,10 @@ public abstract class QuicEndpoint : IDisposable
             _handshakePacketReceived = true; // server: later triggers discarding the Initial keys (RFC 9001 §4.9.1)
         }
         Spaces[i].RecordReceived(pn, ecn);
+        // Only when the qlog is on: parse the frames a second time purely for the log — that keeps
+        // the hot path (DeliverFrames below) completely untouched.
+        if (Qlog is { } qlog && FrameParser.TryParseAll(plaintext.AsSpan(0, len), out List<Frame> loggedFrames) == FrameParseResult.Ok)
+            qlog.PacketReceived(QlogTimeMs, QlogPacketType(i), pn, packet.Length, loggedFrames);
         // Server 0-RTT receipt (application level, long header): if a reordered 0-RTT packet arrives
         // only AFTER the first 1-RTT packet and closes the last PN gap, all 0-RTT packets are present ⇒ keys gone (§4.9.3).
         if (level == EncryptionLevel.Application)
@@ -1440,6 +1499,7 @@ public abstract class QuicEndpoint : IDisposable
                     var ackDelay = TimeSpan.FromMicroseconds(ack.AckDelay * 8);
                     _retransmitQueue[(int)level].AddRange(
                         _recovery.OnAckReceived((int)level, ack, ackDelay, NowTicks));
+                    QlogRecoveryMetrics();
                     // When one of our 1-RTT packets is acknowledged, the client MAY regard the handshake
                     // as confirmed (RFC 9001 §4.1.2) – even without a (possibly lost) HANDSHAKE_DONE.
                     if (level == EncryptionLevel.Application &&
@@ -1799,6 +1859,12 @@ public abstract class QuicEndpoint : IDisposable
     /// </summary>
     private void DiscardKeys(EncryptionLevel level)
     {
+        Qlog?.KeyDiscarded(QlogTimeMs, level == EncryptionLevel.Initial
+            ? (IsServer ? "server_initial_secret" : "client_initial_secret")
+            : level == EncryptionLevel.Handshake
+                ? (IsServer ? "server_handshake_secret" : "client_handshake_secret")
+                : (IsServer ? "server_0rtt_secret" : "client_0rtt_secret"));
+
         int i = (int)level;
         WriteKeys[i]?.Dispose();
         WriteKeys[i] = null;
@@ -2001,6 +2067,8 @@ public abstract class QuicEndpoint : IDisposable
         WriteKeys[(int)EncryptionLevel.Application] = new PacketProtection(_appWriteTk, _appAead);
         _sendKeyPhase = !_sendKeyPhase;
         _keyUpdateCount++;
+        Qlog?.KeyUpdated(QlogTimeMs, IsServer ? "server_1rtt_secret" : "client_1rtt_secret",
+                         "local_update", (ulong)_keyUpdateCount);
         return true;
     }
 

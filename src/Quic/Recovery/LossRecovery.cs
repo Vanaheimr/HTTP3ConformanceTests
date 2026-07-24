@@ -98,6 +98,13 @@ public sealed class LossRecovery
     public int PtoCount { get; private set; }
 
     /// <summary>
+    /// Optional observer for declared losses: (packet-number space, packet number, trigger) —
+    /// "reordering_threshold" or "time_threshold" per RFC 9002 §6.1. Used for the qlog
+    /// (<c>quic:packet_lost</c>); <c>null</c> = nothing is reported.
+    /// </summary>
+    public Action<int, ulong, string>? OnPacketLost { get; set; }
+
+    /// <summary>
     /// Discards the entire loss-recovery state of a packet-number space (RFC 9002 §6.4) when its
     /// protection keys are discarded (Initial/Handshake after the handshake): the not-yet-acknowledged
     /// packets no longer count, their bytes are removed from <c>bytes_in_flight</c>.
@@ -193,6 +200,8 @@ public sealed class LossRecovery
 
             if (lostByThreshold || lostByTime)
             {
+                OnPacketLost?.Invoke(space, sp.PacketNumber,
+                                     lostByThreshold ? "reordering_threshold" : "time_threshold");
                 st.Sent.Remove(sp.PacketNumber);
                 lostFrames.AddRange(sp.RetransmittableFrames);
                 if (sp.AckEliciting)

@@ -855,8 +855,22 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
    including `HEADERS: GET /` and `HEADERS: 200 OK`, SETTINGS, DATA and the QPACK streams in both
    directions. 7 tests (format, empty values, environment gate, client-random offset, all secrets
    over a real handshake, **both endpoints log identical lines**, 0-RTT early secret).
-3. Build in **qlog** (JSON event log per connection) early → visualisation with qvis.
-   At minimum: packet_sent/received, frames, loss, recovery metrics.
+3. ✅ **qlog** (structured event log per connection) → visualisation with qvis. `QlogWriter`
+   (`src/Quic/Qlog/`) writes **JSON Text Sequences** (`application/qlog+json-seq`, RFC 7464: one
+   record per line behind a 0x1E record separator) — streamable, and a recording stays usable even
+   if the process is killed. Events: `packet_sent`/`packet_received` (with the full frame list),
+   `packet_dropped`, `packet_lost` (trigger reordering/time threshold), `recovery_metrics_updated`
+   (smoothed/latest/min RTT, rttvar, pto_count, cwnd, bytes_in_flight), `key_updated`,
+   `key_discarded`, `connection_closed`. Field and event names taken from the draft sources
+   (main-schema-14 + quic-events-13); since these are Internet-Drafts, the event schema URI carries
+   the draft number as required (`urn:ietf:params:qlog:events:quic-13`). Wired in like the key log
+   via an optional `qlog:` parameter; samples: `H3Get --qlog[=<path>]`, `H3Server --qlog=<dir>`
+   (one trace per connection). Costs nothing when off — the frames of received packets are parsed a
+   second time ONLY when the qlog is enabled, so the hot path stays untouched.
+   **Live:** a Cloudflare GET yields 146 records (124 packet_received with 117 STREAM frames,
+   136 KB), and with `--loss=10` the trace shows the 2 lost packets AND the congestion window
+   halving in response (13297 → 6672 bytes). 9 tests (container, event/frame names, ACK range
+   notation, JSON-SEQ file format, complete trace over a real connection, monotonic times).
 4. ✅ **Lossy UDP proxy** in the test project (drop/reorder/duplicate/delay configurable,
    seed-based deterministic) for recovery tests without external tools — `LossyLink`/`LossyNetwork`
    (tests/), slots into the usual pump idiom between `GetDatagramsToSend` and `ProcessDatagram`.

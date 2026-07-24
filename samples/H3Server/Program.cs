@@ -25,6 +25,7 @@ using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
 using org.GraphDefined.Vanaheimr.Hermod.Quic;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Qlog;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 
 #endregion
@@ -46,6 +47,11 @@ var serverParams = new TransportParameters { MaxIdleTimeoutMs = idleMs };
 // Optional address validation via Retry (RFC 9000 §8.1): --retry.
 bool requireRetry = args.Contains("--retry");
 // --keylog[=<path>]: TLS secrets in NSS key log format for Wireshark (debugging only!).
+// --qlog=<dir>: one qlog trace per connection (a qlog trace = exactly one connection).
+string? qlogDir = args.FirstOrDefault(a => a.StartsWith("--qlog="))?["--qlog=".Length..];
+if (qlogDir is not null)
+    Directory.CreateDirectory(qlogDir);
+int qlogCounter = 0;
 KeyLog? keyLog = args.FirstOrDefault(a => a.StartsWith("--keylog")) is { } keyLogArg
     ? (keyLogArg.StartsWith("--keylog=") ? KeyLog.ToFile(keyLogArg["--keylog=".Length..]) : KeyLog.FromEnvironment())
     : null;
@@ -166,6 +172,8 @@ while (true)
             preferredGroups: preferGroups, resumptionCache: resumptionCache, maxEarlyDataSize: 0xFFFFFFFF,
             statelessResetTokens: statelessResetTokens,
             keyLog: keyLog,
+            qlog: qlogDir is null ? null
+                : QlogWriter.ToFile(Path.Combine(qlogDir, $"conn-{++qlogCounter:D3}.sqlog"), isServer: true),
             maxFieldSectionSize: 16_384,        // RFC 9114 §4.2.2: oversized request headers ⇒ 431
             connectHandler: HandleConnect,      // RFC 9220: WebSockets via Extended CONNECT
             enableDatagrams: true,              // RFC 9297/9221: HTTP datagrams

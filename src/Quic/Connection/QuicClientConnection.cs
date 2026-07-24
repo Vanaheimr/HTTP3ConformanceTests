@@ -19,6 +19,7 @@
 
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Frames;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Qlog;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
@@ -57,8 +58,9 @@ public sealed class QuicClientConnection : QuicEndpoint
         IReadOnlyList<NamedGroup>? keyExchangeGroups = null,
         ResumptionTicket? resumptionTicket = null,
         TimeProvider? timeProvider = null,
-        KeyLog? keyLog = null)
-        : base(transportParameters, version, timeProvider)
+        KeyLog? keyLog = null,
+        QlogWriter? qlog = null)
+        : base(transportParameters, version, timeProvider, qlog)
     {
         LocalParams.InitialSourceConnectionIdValue = Scid;
 

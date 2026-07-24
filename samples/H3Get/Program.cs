@@ -23,6 +23,7 @@ using System.Net.Sockets;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 using org.GraphDefined.Vanaheimr.Hermod.Quic;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Qlog;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 #endregion
@@ -91,12 +92,16 @@ bool wantWebTransport = args.Contains("--webtransport");
 // QUIC packets (RFC 8446 §7.1 secrets). Without a path the SSLKEYLOGFILE convention applies.
 // DEBUGGING ONLY — anyone holding the file can decrypt the recorded traffic.
 KeyLog? keyLog = ParseKeyLog(args);
+// --qlog[=<path>]: structured connection log (qlog, JSON-SEQ) for https://qvis.quictools.info
+QlogWriter? qlog = ParseQlog(args, isServer: false);
+if (qlog is not null)
+    Console.WriteLine("  qlog active — load the .sqlog file into qvis.");
 if (keyLog is not null)
     Console.WriteLine("  Key log active (NSS format) — Wireshark can decrypt this connection.\n");
 using var http3 = new Http3ClientConnection(host, transportParams, validation, qpackCapacity, cipherSuites, keyExchangeGroups,
                                             enableDatagrams: args.Contains("--datagrams") || wantWebTransport, // RFC 9297/9221
                                             webTransportMaxSessions: wantWebTransport ? 4u : 0u, // draft-webtrans-http3
-                                            keyLog: keyLog);
+                                            keyLog: keyLog, qlog: qlog);
 http3.Start();
 
 try
@@ -630,6 +635,17 @@ static int ParseLoss(string[] args)
 {
     string? arg = args.FirstOrDefault(a => a.StartsWith("--loss=", StringComparison.Ordinal));
     return arg is not null && int.TryParse(arg["--loss=".Length..], out int v) ? Math.Clamp(v, 0, 90) : 0;
+}
+
+static QlogWriter? ParseQlog(string[] args, bool isServer)
+{
+    string? arg = args.FirstOrDefault(a => a == "--qlog" || a.StartsWith("--qlog="));
+    if (arg is null)
+        return null;
+    string path = arg.StartsWith("--qlog=") ? arg["--qlog=".Length..] : $"h3-{DateTime.Now:yyyyMMdd-HHmmss}.sqlog";
+    if (File.Exists(path))
+        File.Delete(path); // a trace is one connection – do not append to an old run
+    return QlogWriter.ToFile(path, isServer);
 }
 
 static KeyLog? ParseKeyLog(string[] args)

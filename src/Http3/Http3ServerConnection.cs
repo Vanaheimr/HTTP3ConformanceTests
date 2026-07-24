@@ -22,6 +22,7 @@ using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
 using org.GraphDefined.Vanaheimr.Hermod.Quic;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Qlog;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Streams;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 
@@ -92,7 +93,8 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         Func<Http3Request, Action<WebTransportSession>?>? webTransportHandler = null,
         Func<Http3Request, IReadOnlyList<string>, string?>? webTransportProtocolSelector = null,
         TimeProvider? timeProvider = null,
-        KeyLog? keyLog = null)
+        KeyLog? keyLog = null,
+        QlogWriter? qlog = null)
     {
         _connectHandler = connectHandler;
         _wtMaxSessions = webTransportMaxSessions;
@@ -107,7 +109,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             transportParameters ??= new TransportParameters();
             transportParameters.MaxDatagramFrameSizeValue = 65535; // RFC 9221 §3 RECOMMENDED
         }
-        _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider, keyLog: keyLog);
+        _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider, keyLog: keyLog, qlog: qlog);
         _handler = handler;
         _qpack = new Http3Qpack(qpackMaxTableCapacity, weAreClient: false, FatalConnectionError)
         {
