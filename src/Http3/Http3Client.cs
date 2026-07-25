@@ -71,7 +71,8 @@ public sealed class Http3Client : IAsyncDisposable
                        bool enableDatagrams = false,
                        ulong webTransportMaxSessions = 0,
                        TimeProvider? timeProvider = null,
-                       KeyLog? keyLog = null)
+                       KeyLog? keyLog = null,
+                       ServerCertificate? clientCertificate = null)
     {
         _host = host;
         _port = port;
@@ -81,7 +82,8 @@ public sealed class Http3Client : IAsyncDisposable
             enableDatagrams: enableDatagrams,
             webTransportMaxSessions: webTransportMaxSessions,
             timeProvider: _timeProvider,
-            keyLog: keyLog);
+            keyLog: keyLog,
+            clientCertificate: clientCertificate);
     }
 
     /// <summary>

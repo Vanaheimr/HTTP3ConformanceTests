@@ -18,6 +18,7 @@
 #region Usings
 
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Core.Buffers;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Crypto;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
@@ -69,6 +70,25 @@ public sealed class TlsServerHandshake : ITlsHandshake
     // Optional key log (NSS format) for Wireshark; null = off. See KeyLog for the security note.
     private readonly KeyLog? _keyLog;
 
+    // Client authentication (RFC 8446 §4.3.2). Null = never ask, which stays the default.
+    private readonly ClientCertificateOptions? _clientCertificate;
+    private bool _certificateRequestSent;
+    private List<byte[]>? _clientCertChain;
+    private string? _clientCertFailure;
+
+    /// <summary>
+    /// The validated client certificate (mutual TLS), or <c>null</c> if none was asked for, none was
+    /// presented, or validation failed under <see cref="ClientCertificateMode.Request"/>.
+    /// </summary>
+    public X509Certificate2? ClientCertificate { get; private set; }
+
+    /// <summary>
+    /// The outcome of client authentication, for the application above.
+    /// </summary>
+    public ClientAuthenticationResult ClientAuthentication => _certificateRequestSent
+        ? new ClientAuthenticationResult(true, ClientCertificate, _clientCertFailure)
+        : ClientAuthenticationResult.NotRequested;
+
     /// <summary>
     /// The random of the ClientHello the handshake is running on — the connection identifier of the
     /// key log. After a HelloRetryRequest that is the random of ClientHello2.
@@ -101,10 +121,12 @@ public sealed class TlsServerHandshake : ITlsHandshake
         ServerResumptionCache? resumptionCache = null,
         uint ticketLifetimeSeconds = 7200,
         uint maxEarlyDataSize = 0,
-        KeyLog? keyLog = null)
+        KeyLog? keyLog = null,
+        ClientCertificateOptions? clientCertificate = null)
     {
         _keyLog = keyLog;
         _certificate = certificate;
+        _clientCertificate = clientCertificate is { Mode: not ClientCertificateMode.None } ? clientCertificate : null;
         _quicTransportParameters = quicTransportParameters;
         _preferredGroups = preferredGroups ?? [NamedGroup.X25519, NamedGroup.Secp256r1];
         // Preference: AES-128, then ChaCha20, then AES-256; the server accepts all three.
@@ -182,7 +204,17 @@ public sealed class TlsServerHandshake : ITlsHandshake
             case HandshakeType.ClientHello when _state == State.WaitClientHello2:
                 ProcessClientHello(message, isSecond: true);
                 break;
+            // Client authentication (RFC 8446 §4.4): Certificate and CertificateVerify arrive in the
+            // client's flight, before its Finished — and both go into the transcript that Finished
+            // is computed over.
+            case HandshakeType.Certificate when _state == State.WaitClientFinished:
+                ProcessClientCertificate(message);
+                break;
+            case HandshakeType.CertificateVerify when _state == State.WaitClientFinished:
+                ProcessClientCertificateVerify(message);
+                break;
             case HandshakeType.Finished when _state == State.WaitClientFinished:
+                RequireClientCertificateIfDemanded();
                 VerifyClientFinished(message);
                 _transcript!.Append(message.Full.Span); // through client Finished – the basis for res_master
                 _state = State.Complete;
@@ -190,6 +222,73 @@ public sealed class TlsServerHandshake : ITlsHandshake
                     IssueNewSessionTicket();
                 break;
         }
+    }
+
+    /// <summary>
+    /// The client's Certificate. An empty one is legal — it is how a client declines (§4.4.2.4) —
+    /// so the decision what to do about it is deferred to <see cref="RequireClientCertificateIfDemanded"/>,
+    /// after the flight is complete.
+    /// </summary>
+    private void ProcessClientCertificate(HandshakeMessage message)
+    {
+        if (!_certificateRequestSent)
+            throw new TlsHandshakeException(TlsAlert.UnexpectedMessage, "Client sent a Certificate without being asked.");
+        if (!CertificateMessage.TryParseWithContext(message.Body.Span, out List<byte[]> chain, out byte[] context))
+            throw new TlsHandshakeException(TlsAlert.DecodeError, "Invalid client Certificate message.");
+        // §4.4.2: the context is echoed from our CertificateRequest, which is always empty here.
+        if (context.Length != 0)
+            throw new TlsHandshakeException(TlsAlert.DecodeError, "Client echoed an unknown certificate_request_context.");
+
+        _clientCertChain = chain;
+        // The hash BEFORE this message is not what CertificateVerify signs — that one covers the
+        // Certificate too, so append first and take the hash when the CertificateVerify arrives.
+        _transcript!.Append(message.Full.Span);
+    }
+
+    private void ProcessClientCertificateVerify(HandshakeMessage message)
+    {
+        if (_clientCertChain is null)
+            throw new TlsHandshakeException(TlsAlert.UnexpectedMessage, "CertificateVerify without a preceding Certificate.");
+        if (_clientCertChain.Count == 0)
+            // §4.4.2.4: a client that sends an empty Certificate has nothing to prove possession of.
+            throw new TlsHandshakeException(TlsAlert.UnexpectedMessage, "CertificateVerify after an empty Certificate.");
+        if (!CertificateVerify.TryParse(message.Body.Span, out SignatureScheme scheme, out byte[] signature))
+            throw new TlsHandshakeException(TlsAlert.DecodeError, "Invalid client CertificateVerify message.");
+
+        try
+        {
+            // Signed over the transcript up to and including the client's Certificate, with the
+            // CLIENT context string — that is what keeps a server signature from being replayed here.
+            ClientCertificate = PeerCertificateValidator.ValidateClient(
+                _clientCertChain, scheme, signature, _transcript!.CurrentHash(),
+                _clientCertificate!.Validation);
+        }
+        catch (CertificateValidationException e)
+        {
+            // Under Request the application decides what an untrusted client is worth; under Require
+            // the handshake ends here (see RequireClientCertificateIfDemanded).
+            _clientCertFailure = e.Message;
+        }
+
+        _transcript!.Append(message.Full.Span);
+    }
+
+    /// <summary>
+    /// Applies the policy once the client's authentication messages are in: under
+    /// <see cref="ClientCertificateMode.Require"/> a missing or rejected certificate ends the
+    /// handshake (§4.4.2.4 "abort the handshake with a certificate_required alert").
+    /// </summary>
+    private void RequireClientCertificateIfDemanded()
+    {
+        if (_clientCertificate is not { Mode: ClientCertificateMode.Require })
+            return;
+        if (ClientCertificate is not null)
+            return;
+        throw _clientCertFailure is null
+            ? new TlsHandshakeException(TlsAlert.CertificateRequired,
+                                        "Client presented no certificate although one is required.")
+            : new TlsHandshakeException(TlsAlert.BadCertificate,
+                                        $"Client certificate rejected: {_clientCertFailure}");
     }
 
     /// <summary>
@@ -354,6 +453,17 @@ public sealed class TlsServerHandshake : ITlsHandshake
 
         if (!_pskAccepted)
         {
+            // Client authentication, if configured. §4.3.2: "This message, if sent, MUST follow
+            // EncryptedExtensions" — and servers authenticating with a PSK MUST NOT send it in the
+            // main handshake at all, which is why it lives inside this branch.
+            if (_clientCertificate is { } clientAuth)
+            {
+                byte[] certificateRequest = CertificateRequestMessage.Build(clientAuth.SignatureSchemes);
+                _transcript.Append(certificateRequest);
+                _outgoing.Enqueue((EncryptionLevel.Handshake, certificateRequest));
+                _certificateRequestSent = true;
+            }
+
             // Full authentication only without resumption – with a PSK the binder vouches for the identity.
             byte[] certificate = BuildCertificate(_certificate.Der);
             _transcript.Append(certificate);
@@ -423,7 +533,11 @@ public sealed class TlsServerHandshake : ITlsHandshake
 
     private void VerifyClientFinished(HandshakeMessage finished)
     {
-        byte[] expected = _ks!.FinishedVerifyData(HandshakeSecrets!.ClientHandshakeTrafficSecret, _transcriptThroughServerFinished);
+        // RFC 8446 §4.4: the client's Finished is a MAC over Transcript-Hash(Handshake Context,
+        // Certificate, CertificateVerify) — so the current transcript, NOT the snapshot taken at our
+        // own Finished. Without client authentication nothing was appended since, and the two are
+        // the same value; with it, only this one is right.
+        byte[] expected = _ks!.FinishedVerifyData(HandshakeSecrets!.ClientHandshakeTrafficSecret, _transcript!.CurrentHash());
         ClientFinishedValid = CryptographicOperations.FixedTimeEquals(expected, finished.Body.Span);
     }
 

@@ -166,6 +166,16 @@ time** in [INTEROP.md](INTEROP.md) (`dotnet run --project samples/H3Get -- --int
   sources: dozens of connections without it, zero with it. **Live:** `curl --http3` completes
   through the Retry.
 
+- **Client certificates / mutual TLS** (RFC 8446 §4.3.2): the server asks with a CertificateRequest
+  after EncryptedExtensions (never on a PSK handshake — §4.3.2 MUST NOT); the client answers at the
+  end of its flight with Certificate + CertificateVerify signed under the *client* context string,
+  and its Finished covers both. `ClientCertificateMode.Require` rejects an anonymous client with
+  `certificate_required`; `Request` lets it in unauthenticated and hands the application the verdict
+  via `ClientAuthentication`. **Live:**
+  `dotnet run --project samples/H3Server -- 4433 --mtls=ca.pem` +
+  `curl --http3 --cert client.pem --key client.key -k https://localhost:4433/` → 200, while the same
+  curl without a certificate is refused and the server keeps serving everyone else.
+
 ### Connection close & draining (RFC 9000 §10.2)
 
 - `Close(TransportError, reason)` sends a CONNECTION_CLOSE and puts the connection into the
@@ -534,14 +544,14 @@ src/Http3.Qpack/   QPACK (static table, Huffman, encoder/decoder)
 src/Http3/         HTTP/3 (frames, client/server connection, malformed validation, priorities,
                    Extended-CONNECT tunnel) + WebSocket/ (RFC 6455) + WebTransport/ (draft-13)
                    + async API (Http3Client/Http3Server: Task facades with socket + background pump)
-tests/Http3.Tests/ NUnit tests (509), incl. RFC test vectors, "evil" raw-QUIC peers and a
+tests/Http3.Tests/ NUnit tests (523), incl. RFC test vectors, "evil" raw-QUIC peers and a
                    seeded lossy link (drop/reorder/duplicate)
 samples/H3Get/     HTTP/3 client: GET/POST against cloudflare-quic.com or our own server
                    (incl. --interop [matrix against 8 foreign stacks], --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
                    --rotate-cid, --qpack-dynamic, --mlkem, --x448, --chacha20, --loss, --hold, -k)
 samples/H3Server/  HTTP/3 server: self-signed cert, handler over UDP (routes: /, /big, POST /echo,
                    /hints with 103 + trailers; CONNECT websocket/datagram-echo, WebTransport /wt;
-                   options incl. --retry/--stateless-retry, --idle, --goaway, --ed25519/--ed448/--mldsa)
+                   options incl. --retry/--stateless-retry, --mtls, --idle, --goaway, --ed25519/--ed448/--mldsa)
 ```
 
 Namespaces: QUIC lives under `org.GraphDefined.Vanaheimr.Hermod.Quic` (+ `.Tls`, `.Core`, …) — as a

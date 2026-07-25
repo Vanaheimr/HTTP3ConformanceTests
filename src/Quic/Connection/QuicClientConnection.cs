@@ -59,7 +59,8 @@ public sealed class QuicClientConnection : QuicEndpoint
         ResumptionTicket? resumptionTicket = null,
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
-        QlogWriter? qlog = null)
+        QlogWriter? qlog = null,
+        ServerCertificate? clientCertificate = null)
         : base(transportParameters, version, timeProvider, qlog)
     {
         LocalParams.InitialSourceConnectionIdValue = Scid;
@@ -73,7 +74,8 @@ public sealed class QuicClientConnection : QuicEndpoint
         // A resumptionTicket enables session resumption (PSK) for this connection.
         _tls = new TlsClientHandshake(serverName, LocalParams.Encode(), certificateValidation: certificateValidation,
             cipherSuites: cipherSuites, keyShareGroups: keyExchangeGroups, supportedGroups: keyExchangeGroups,
-            resumptionTicket: resumptionTicket, timeProvider: TimeProvider, keyLog: keyLog);
+            resumptionTicket: resumptionTicket, timeProvider: TimeProvider, keyLog: keyLog,
+            clientCertificate: clientCertificate);
         TlsHandshake = _tls;
         InstallInitialKeys(_originalDcid);
     }
@@ -82,6 +84,17 @@ public sealed class QuicClientConnection : QuicEndpoint
     /// <c>true</c> once the client has produced its Finished.
     /// </summary>
     public bool HandshakeComplete => _tls.IsComplete;
+
+    /// <summary>
+    /// <c>true</c> when the server requested client authentication (RFC 8446 §4.3.2).
+    /// </summary>
+    public bool ClientCertificateRequested => _tls.ClientCertificateRequested;
+
+    /// <summary>
+    /// <c>true</c> when we answered that request with an actual certificate rather than the empty
+    /// Certificate that declines it.
+    /// </summary>
+    public bool ClientCertificateSent => _tls.ClientCertificateSent;
 
     /// <summary>
     /// <c>true</c> once a server HANDSHAKE_DONE has been received.

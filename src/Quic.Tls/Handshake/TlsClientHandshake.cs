@@ -74,6 +74,23 @@ public sealed class TlsClientHandshake : ITlsHandshake
     // Optional key log (NSS format) for Wireshark; null = off. See KeyLog for the security note.
     private readonly KeyLog? _keyLog;
 
+    // Client authentication (RFC 8446 §4.3.2): our own credential, used only if the server asks.
+    // Null means we answer any CertificateRequest with an empty Certificate.
+    private readonly ServerCertificate? _clientCertificate;
+    private bool _certificateRequested;
+    private byte[] _certificateRequestContext = [];
+
+    /// <summary>
+    /// <c>true</c> when the server asked us to authenticate (RFC 8446 §4.3.2).
+    /// </summary>
+    public bool ClientCertificateRequested => _certificateRequested;
+
+    /// <summary>
+    /// <c>true</c> when we actually sent a certificate — false if none was configured, in which case
+    /// an empty Certificate went out instead and the server decides what to do about it.
+    /// </summary>
+    public bool ClientCertificateSent { get; private set; }
+
     /// <summary>
     /// The random of the ClientHello most recently built — the connection identifier of the key log.
     /// After a HelloRetryRequest that is the random of ClientHello2, i.e. the one on the wire.
@@ -109,8 +126,10 @@ public sealed class TlsClientHandshake : ITlsHandshake
         IReadOnlyList<CipherSuite>? cipherSuites = null,
         ResumptionTicket? resumptionTicket = null,
         TimeProvider? timeProvider = null,
-        KeyLog? keyLog = null)
+        KeyLog? keyLog = null,
+        ServerCertificate? clientCertificate = null)
     {
+        _clientCertificate = clientCertificate;
         _keyLog = keyLog;
         _serverName = serverName;
         _quicTransportParameters = quicTransportParameters;
@@ -262,6 +281,9 @@ public sealed class TlsClientHandshake : ITlsHandshake
             case HandshakeType.CertificateVerify:
                 ProcessCertificateVerify(message);
                 break;
+            case HandshakeType.CertificateRequest:
+                ProcessCertificateRequest(message);
+                break;
             case HandshakeType.NewSessionTicket:
                 // Post-handshake message: do NOT append to the handshake transcript.
                 NewSessionTicketMessagesSeen++;
@@ -271,6 +293,29 @@ public sealed class TlsClientHandshake : ITlsHandshake
                 _transcript?.Append(message.Full.Span);
                 break;
         }
+    }
+
+    /// <summary>
+    /// The server asks us to authenticate (RFC 8446 §4.3.2). We only record it here — the answer
+    /// (Certificate + CertificateVerify) belongs at the END of the client flight, after the server's
+    /// Finished, per the §4.4 handshake-context table.
+    /// </summary>
+    private void ProcessCertificateRequest(HandshakeMessage message)
+    {
+        // RFC 9001 §4.4: "servers MUST NOT send post-handshake TLS CertificateRequest messages, and
+        // clients MUST treat receipt of such messages as a connection error of type
+        // PROTOCOL_VIOLATION." QUIC's multiplexing means the client could not correlate the request
+        // with whatever triggered it, so the mechanism is banned outright rather than merely unused.
+        if (_state == State.Complete)
+            throw new PostHandshakeAuthenticationException(
+                "Server sent a post-handshake CertificateRequest, which RFC 9001 §4.4 forbids.");
+
+        if (!CertificateRequestMessage.TryParse(message.Body.Span, out byte[] context, out _))
+            throw new InvalidOperationException("Invalid CertificateRequest message.");
+
+        _certificateRequested = true;
+        _certificateRequestContext = context; // echoed back in our Certificate (§4.4.2)
+        _transcript?.Append(message.Full.Span);
     }
 
     private void ProcessCertificate(HandshakeMessage message)
@@ -290,7 +335,7 @@ public sealed class TlsClientHandshake : ITlsHandshake
 
         // The signed transcript hash extends up to and including Certificate – i.e. BEFORE appending this message.
         byte[] transcriptHash = _transcript!.CurrentHash();
-        ServerCertificate = ServerCertificateValidator.Validate(
+        ServerCertificate = PeerCertificateValidator.Validate(
             _serverCertChain, scheme, signature, transcriptHash, _serverName, _validation);
         ServerCertificateValid = true;
 
@@ -435,12 +480,19 @@ public sealed class TlsClientHandshake : ITlsHandshake
     private void GenerateClientFinishedAndAppKeys()
     {
         byte[] transcriptThroughServerFinished = _transcript!.CurrentHash();
+        // The application secrets are anchored at the server Finished (RFC 8446 §7.1) and do NOT move
+        // when client authentication adds messages after it.
         ApplicationSecrets = _ks!.DeriveApplicationSecrets(HandshakeSecrets!.HandshakeSecret, transcriptThroughServerFinished);
         // exporter_master_secret (RFC 8446 §7.1) over CH…server Finished — for §7.5 keying-material exports.
         _exporterMasterSecret = _ks.ExporterMasterSecret(ApplicationSecrets.MasterSecret, transcriptThroughServerFinished);
         LogApplicationSecrets();
 
-        byte[] verifyData = _ks.FinishedVerifyData(HandshakeSecrets.ClientHandshakeTrafficSecret, transcriptThroughServerFinished);
+        if (_certificateRequested)
+            SendClientAuthentication();
+
+        // §4.4: Finished is a MAC over Transcript-Hash(Handshake Context, Certificate,
+        // CertificateVerify) — the current hash, which the two messages above have just extended.
+        byte[] verifyData = _ks.FinishedVerifyData(HandshakeSecrets.ClientHandshakeTrafficSecret, _transcript.CurrentHash());
         byte[] clientFinished = Finished.BuildMessage(verifyData);
         _outgoing.Enqueue((EncryptionLevel.Handshake, clientFinished));
         _transcript.Append(clientFinished);
@@ -450,6 +502,49 @@ public sealed class TlsClientHandshake : ITlsHandshake
         _resumptionMasterSecret = _ks.ResumptionMasterSecret(
             ApplicationSecrets.MasterSecret, _transcript.CurrentHash());
         _state = State.Complete;
+    }
+
+    /// <summary>
+    /// Answers a CertificateRequest (RFC 8446 §4.4.2/§4.4.3). Without a configured credential the
+    /// answer is an EMPTY Certificate — the legal way to decline (§4.4.2.4) — and no CertificateVerify
+    /// follows it, since there is no key to prove possession of. The server then decides whether to
+    /// continue.
+    /// </summary>
+    private void SendClientAuthentication()
+    {
+        byte[] certificate = CertificateMessage.Build(
+            _clientCertificate?.Der ?? ReadOnlySpan<byte>.Empty, _certificateRequestContext);
+        _outgoing.Enqueue((EncryptionLevel.Handshake, certificate));
+        _transcript!.Append(certificate);
+
+        if (_clientCertificate is not { } credential)
+            return;
+
+        // Signed over the transcript INCLUDING our Certificate, with the client context string —
+        // "TLS 1.3, client CertificateVerify" is what keeps this signature from being replayable as
+        // a server's (§4.4.3).
+        byte[] content = CertificateVerify.BuildSignatureContent(
+            CertificateVerify.ClientContext, _transcript.CurrentHash());
+        byte[] signature = credential.SignCertificateVerify(content);
+
+        var w = new BufferWriter(signature.Length + 16);
+        try
+        {
+            w.WriteByte((byte)HandshakeType.CertificateVerify);
+            int bodyLen = TlsWriter.BeginVector(ref w, 3);
+            w.WriteUInt16((ushort)credential.SignatureScheme);
+            int sigLen = TlsWriter.BeginVector(ref w, 2);
+            w.WriteBytes(signature);
+            TlsWriter.EndVector(ref w, sigLen, 2);
+            TlsWriter.EndVector(ref w, bodyLen, 3);
+
+            byte[] certificateVerify = w.WrittenSpan.ToArray();
+            _outgoing.Enqueue((EncryptionLevel.Handshake, certificateVerify));
+            _transcript.Append(certificateVerify);
+        }
+        finally { w.Dispose(); }
+
+        ClientCertificateSent = true;
     }
 
     private void ProcessNewSessionTicket(HandshakeMessage message)

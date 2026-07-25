@@ -63,6 +63,7 @@ public sealed class QuicServerConnection : QuicEndpoint
     private readonly IReadOnlyList<NamedGroup>? _preferredGroups;
     private readonly ServerResumptionCache? _resumptionCache;
     private readonly uint _maxEarlyDataSize;
+    private readonly ClientCertificateOptions? _clientCertificate; // mutual TLS (RFC 8446 §4.3.2)
     private TlsServerHandshake? _serverTls;
     private bool _handshakeDoneSent;
     private bool _retrySent;
@@ -89,7 +90,8 @@ public sealed class QuicServerConnection : QuicEndpoint
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
         QlogWriter? qlog = null,
-        ValidatedRetry? validatedRetry = null)
+        ValidatedRetry? validatedRetry = null,
+        ClientCertificateOptions? clientCertificate = null)
         : base(transportParameters, version, timeProvider, qlog,
                sourceConnectionId: validatedRetry?.RetrySourceConnectionId)
     {
@@ -110,7 +112,15 @@ public sealed class QuicServerConnection : QuicEndpoint
         StatelessResetTokens = statelessResetTokens; // tokens derivable from the CID ⇒ stateless reset sendable
         _resumptionCache = resumptionCache;
         _maxEarlyDataSize = maxEarlyDataSize;
+        _clientCertificate = clientCertificate;
     }
+
+    /// <summary>
+    /// The outcome of client authentication (mutual TLS, RFC 8446 §4.3.2): whether one was asked
+    /// for, the validated certificate if there is one, and why validation failed if it did.
+    /// </summary>
+    public ClientAuthenticationResult ClientAuthentication =>
+        _serverTls?.ClientAuthentication ?? ClientAuthenticationResult.NotRequested;
 
     /// <summary>
     /// <c>true</c> when the handshake ran via session resumption (PSK).
@@ -193,7 +203,8 @@ public sealed class QuicServerConnection : QuicEndpoint
 
         _serverTls = new TlsServerHandshake(_certificate, LocalParams.Encode(),
             preferredCipherSuites: _preferredCipherSuites, preferredGroups: _preferredGroups,
-            resumptionCache: _resumptionCache, maxEarlyDataSize: _maxEarlyDataSize, keyLog: _keyLog);
+            resumptionCache: _resumptionCache, maxEarlyDataSize: _maxEarlyDataSize, keyLog: _keyLog,
+            clientCertificate: _clientCertificate);
         TlsHandshake = _serverTls;
 
         InstallInitialKeys(initialKeyDcid);

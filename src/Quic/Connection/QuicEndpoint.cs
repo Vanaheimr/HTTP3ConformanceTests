@@ -415,6 +415,7 @@ public abstract class QuicEndpoint : IDisposable
 
         if (_state != ConnectionState.Active)
             return;
+        LocalCloseErrorCode = closeFrame.ErrorCode;
         _closeFrame = closeFrame;
         _state = ConnectionState.Closing;
         _closePacketPending = true;
@@ -1482,6 +1483,20 @@ public abstract class QuicEndpoint : IDisposable
     /// </summary>
     private void CloseWithTransportError(TransportError error, string reason) => Close(error, reason);
 
+    /// <summary>
+    /// Closes with CRYPTO_ERROR carrying a TLS alert (RFC 9001 §4.8: the code is
+    /// <c>0x0100 + AlertDescription</c>). QUIC has no alert records, so this is how the peer learns
+    /// <em>which</em> handshake failure occurred.
+    /// </summary>
+    private void CloseWithCryptoError(TlsAlert alert, string reason)
+        => EnterClosing(new ConnectionCloseFrame((ulong)TransportError.CryptoErrorBase + (ulong)alert,
+                                                 IsApplicationError: false, 0, reason));
+
+    /// <summary>
+    /// The error code of the CONNECTION_CLOSE we sent, if any — diagnostics and tests.
+    /// </summary>
+    public ulong? LocalCloseErrorCode { get; private set; }
+
     private void HandleFrames(EncryptionLevel level, List<Frame> frames)
     {
         foreach (Frame frame in frames)
@@ -1815,7 +1830,26 @@ public abstract class QuicEndpoint : IDisposable
         if (contiguous.Length <= _deliveredCrypto[i])
             return;
 
-        TlsHandshake.ProvideCrypto(level, contiguous.AsSpan((int)_deliveredCrypto[i]));
+        try
+        {
+            TlsHandshake.ProvideCrypto(level, contiguous.AsSpan((int)_deliveredCrypto[i]));
+        }
+        catch (PostHandshakeAuthenticationException e)
+        {
+            // RFC 9001 §4.4: a post-handshake CertificateRequest is a PROTOCOL_VIOLATION, not a
+            // crypto failure — it is a well-formed message the peer was simply not allowed to send.
+            CloseWithTransportError(TransportError.ProtocolViolation, e.Message);
+            return;
+        }
+        catch (Exception e) when (e is TlsHandshakeException or CertificateValidationException or InvalidOperationException)
+        {
+            // A failed handshake must CLOSE the connection, not escape into the I/O loop above —
+            // one client with a bad certificate would otherwise take down every other connection
+            // sharing that loop. RFC 9001 §4.8 carries the TLS alert as CRYPTO_ERROR + alert code.
+            TlsAlert alert = e is TlsHandshakeException typed ? typed.Alert : TlsAlert.HandshakeFailure;
+            CloseWithCryptoError(alert, e.Message);
+            return;
+        }
         _deliveredCrypto[i] = contiguous.Length;
 
         MaybeInstallHandshakeKeys();

@@ -32,15 +32,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 public sealed class CertificateValidationException(string message) : Exception(message);
 
 /// <summary>
-/// Validates the server certificate on the client side: (1) the CertificateVerify signature over the
-/// transcript hash with the public key of the leaf certificate (RFC 8446 §4.4.3) and (2), per policy,
-/// the certificate chain, the hostname and the validity period.
+/// Validates a peer's certificate: (1) the CertificateVerify signature over the transcript hash with
+/// the public key of the leaf certificate (RFC 8446 §4.4.3) and (2), per policy, the certificate
+/// chain, the hostname and the validity period.
+/// <para>
+/// Both directions run through here. They differ in exactly two things: the signature context string
+/// (§4.4.3 uses "TLS 1.3, server CertificateVerify" vs "TLS 1.3, client CertificateVerify", which is
+/// what stops a signature being replayed in the other role) and whether a hostname is checked at all
+/// — a client certificate is judged by its issuer, not by a name we happen to have connected to.
+/// </para>
 /// </summary>
-public static class ServerCertificateValidator
+public static class PeerCertificateValidator
 {
     /// <summary>
-    /// Performs the full validation and throws a <see cref="CertificateValidationException"/> on
-    /// failure. Returns the validated leaf certificate.
+    /// Validates a SERVER certificate on the client side. Throws a
+    /// <see cref="CertificateValidationException"/> on failure; returns the validated leaf.
     /// </summary>
     /// <param name="certificateChainDer">The DER certificates from the Certificate message (leaf first).</param>
     /// <param name="scheme">Signature scheme from the CertificateVerify message.</param>
@@ -59,10 +65,44 @@ public static class ServerCertificateValidator
         if (certificateChainDer.Count == 0)
             throw new CertificateValidationException("Server sent no certificate.");
 
+        return ValidateCore(certificateChainDer, scheme, signature, transcriptHash,
+                            CertificateVerify.ServerContext, serverName, options);
+    }
+
+    /// <summary>
+    /// Validates a CLIENT certificate on the server side (mutual TLS, RFC 8446 §4.3.2/§4.4.2.4).
+    /// Identical to <see cref="Validate"/> except for the signature context and the absence of a
+    /// hostname check.
+    /// </summary>
+    public static X509Certificate2 ValidateClient(
+        IReadOnlyList<byte[]> certificateChainDer,
+        SignatureScheme scheme,
+        ReadOnlySpan<byte> signature,
+        byte[] transcriptHash,
+        CertificateValidationOptions options)
+    {
+        if (certificateChainDer.Count == 0)
+            throw new CertificateValidationException("Client sent no certificate.");
+
+        return ValidateCore(certificateChainDer, scheme, signature, transcriptHash,
+                            CertificateVerify.ClientContext,
+                            serverName: string.Empty,
+                            options with { VerifyHostname = false });
+    }
+
+    private static X509Certificate2 ValidateCore(
+        IReadOnlyList<byte[]> certificateChainDer,
+        SignatureScheme scheme,
+        ReadOnlySpan<byte> signature,
+        byte[] transcriptHash,
+        string signatureContext,
+        string serverName,
+        CertificateValidationOptions options)
+    {
         var leaf = X509CertificateLoader.LoadCertificate(certificateChainDer[0]);
 
         // (1) CertificateVerify signature — always, regardless of policy.
-        byte[] content = CertificateVerify.BuildSignatureContent(CertificateVerify.ServerContext, transcriptHash);
+        byte[] content = CertificateVerify.BuildSignatureContent(signatureContext, transcriptHash);
         if (!VerifySignature(leaf, scheme, signature, content))
         {
             leaf.Dispose();
@@ -209,6 +249,15 @@ public static class ServerCertificateValidator
             error = chain.ChainStatus.Length > 0
                 ? string.Join("; ", chain.ChainStatus.Select(s => s.StatusInformation.Trim()))
                 : "unknown";
+            return false;
+        }
+        catch (CryptographicException e)
+        {
+            // The platform chain builder can refuse a certificate outright rather than reporting a
+            // status — Windows does exactly that for Ed25519/Ed448 keys, which it cannot build a
+            // chain for at all. That is a failed validation, not an exception for the caller to
+            // handle: a peer must never be able to throw an arbitrary type through the validator.
+            error = $"chain building failed: {e.Message}";
             return false;
         }
         finally

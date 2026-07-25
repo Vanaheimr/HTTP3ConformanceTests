@@ -89,11 +89,13 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
         QlogWriter? qlog = null,
-        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null)
+        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null,
+        Quic.Tls.Handshake.ClientCertificateOptions? clientCertificate = null)
         : this(certificate, _ => new Http3Response { Status = 500 }, transportParameters, requireRetry,
                qpackMaxTableCapacity, preferredGroups, resumptionCache, maxEarlyDataSize, statelessResetTokens,
                maxFieldSectionSize, maxRequestBodySize, connectHandler, enableDatagrams, webTransportMaxSessions,
-               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog, validatedRetry)
+               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog, validatedRetry,
+               clientCertificate)
     {
         _streamingHandler = handler;
     }
@@ -149,11 +151,13 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
         QlogWriter? qlog = null,
-        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null)
+        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null,
+        Quic.Tls.Handshake.ClientCertificateOptions? clientCertificate = null)
         : this(certificate, _ => new Http3Response { Status = 500 }, transportParameters, requireRetry,
                qpackMaxTableCapacity, preferredGroups, resumptionCache, maxEarlyDataSize, statelessResetTokens,
                maxFieldSectionSize, maxRequestBodySize, connectHandler, enableDatagrams, webTransportMaxSessions,
-               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog, validatedRetry)
+               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog, validatedRetry,
+               clientCertificate)
     {
         _handler = handler;
     }
@@ -184,7 +188,8 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
         QlogWriter? qlog = null,
-        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null)
+        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null,
+        Quic.Tls.Handshake.ClientCertificateOptions? clientCertificate = null)
     {
         _connectHandler = connectHandler;
         _wtMaxSessions = webTransportMaxSessions;
@@ -199,7 +204,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             transportParameters ??= new TransportParameters();
             transportParameters.MaxDatagramFrameSizeValue = 65535; // RFC 9221 §3 RECOMMENDED
         }
-        _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider, keyLog: keyLog, qlog: qlog, validatedRetry: validatedRetry);
+        _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider, keyLog: keyLog, qlog: qlog, validatedRetry: validatedRetry, clientCertificate: clientCertificate);
         _handler = (request, _) => Task.FromResult(handler(request));
         _qpack = new Http3Qpack(qpackMaxTableCapacity, weAreClient: false, FatalConnectionError)
         {
@@ -404,6 +409,14 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     /// The underlying QUIC server connection (symmetric to <see cref="Http3ClientConnection.Quic"/>).
     /// </summary>
     public QuicServerConnection Quic => _quic;
+
+    /// <summary>
+    /// The outcome of client authentication (mutual TLS, RFC 8446 §4.3.2) for this connection.
+    /// Under <see cref="ClientCertificateMode.Require"/> a handler only ever runs when this reports
+    /// success; under <see cref="ClientCertificateMode.Request"/> the handler decides for itself what
+    /// an unauthenticated client may do.
+    /// </summary>
+    public Quic.Tls.Handshake.ClientAuthenticationResult ClientAuthentication => _quic.ClientAuthentication;
 
     /// <summary>
     /// <c>true</c> once the server has sent a Retry for address validation.

@@ -26,6 +26,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 #endregion
 
@@ -78,9 +79,11 @@ public sealed class Http3Server : IAsyncDisposable
     /// </summary>
     public Http3Server(ServerCertificate certificate, Func<Http3Request, Http3Response> handler, int port = 443,
                        TimeProvider? timeProvider = null, KeyLog? keyLog = null,
-                       RetryTokenGenerator? addressValidation = null)
+                       RetryTokenGenerator? addressValidation = null,
+                       ClientCertificateOptions? clientCertificate = null)
         : this(port, retry => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider,
-                                                       keyLog: keyLog, validatedRetry: retry),
+                                                       keyLog: keyLog, validatedRetry: retry,
+                                                       clientCertificate: clientCertificate),
                timeProvider: timeProvider, addressValidation: addressValidation)
     { }
 
@@ -91,9 +94,11 @@ public sealed class Http3Server : IAsyncDisposable
     /// </summary>
     public Http3Server(ServerCertificate certificate, Func<Http3Request, CancellationToken, Task<Http3Response>> handler,
                        int port = 443, TimeProvider? timeProvider = null, KeyLog? keyLog = null,
-                       RetryTokenGenerator? addressValidation = null)
+                       RetryTokenGenerator? addressValidation = null,
+                       ClientCertificateOptions? clientCertificate = null)
         : this(port, retry => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider,
-                                                       keyLog: keyLog, validatedRetry: retry),
+                                                       keyLog: keyLog, validatedRetry: retry,
+                                                       clientCertificate: clientCertificate),
                timeProvider: timeProvider, addressValidation: addressValidation)
     { }
 
@@ -105,9 +110,11 @@ public sealed class Http3Server : IAsyncDisposable
     public Http3Server(ServerCertificate certificate,
                        Func<Http3Request, Http3RequestBody, CancellationToken, Task<Http3Response>> handler,
                        int port = 443, TimeProvider? timeProvider = null, KeyLog? keyLog = null,
-                       RetryTokenGenerator? addressValidation = null)
+                       RetryTokenGenerator? addressValidation = null,
+                       ClientCertificateOptions? clientCertificate = null)
         : this(port, retry => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider,
-                                                       keyLog: keyLog, validatedRetry: retry),
+                                                       keyLog: keyLog, validatedRetry: retry,
+                                                       clientCertificate: clientCertificate),
                timeProvider: timeProvider, addressValidation: addressValidation)
     { }
 

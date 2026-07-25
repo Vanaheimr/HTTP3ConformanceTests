@@ -31,13 +31,66 @@ namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Messages;
 /// </summary>
 public static class CertificateMessage
 {
+    /// <summary>
+    /// Builds the complete message (including the handshake header). <paramref name="der"/> may be
+    /// empty: that is the client's way of saying "I have no certificate for you" (§4.4.2.4), which
+    /// the server may accept or refuse. An empty message from a SERVER is always an error.
+    /// </summary>
+    /// <param name="context">
+    /// The <c>certificate_request_context</c> echoed from the CertificateRequest. Empty in the main
+    /// handshake, which is the only kind QUIC allows (RFC 9001 §4.4).
+    /// </param>
+    public static byte[] Build(ReadOnlySpan<byte> der, ReadOnlySpan<byte> context = default)
+    {
+        var w = new BufferWriter(der.Length + 32);
+        try
+        {
+            w.WriteByte((byte)HandshakeType.Certificate);
+            int bodyLen = TlsWriter.BeginVector(ref w, 3);
+
+            w.WriteByte((byte)context.Length);
+            w.WriteBytes(context);
+
+            int listLen = TlsWriter.BeginVector(ref w, 3);
+            if (!der.IsEmpty)
+            {
+                int certLen = TlsWriter.BeginVector(ref w, 3);
+                w.WriteBytes(der);
+                TlsWriter.EndVector(ref w, certLen, 3);
+                w.WriteUInt16(0); // no per-certificate extensions
+            }
+            TlsWriter.EndVector(ref w, listLen, 3);
+
+            TlsWriter.EndVector(ref w, bodyLen, 3);
+            return w.WrittenSpan.ToArray();
+        }
+        finally { w.Dispose(); }
+    }
+
+    /// <summary>
+    /// Parses the body. An empty certificate list is <b>well-formed</b> — see
+    /// <see cref="TryParseWithContext"/> if the distinction between "empty" and "malformed" matters,
+    /// as it does when a server receives a client's Certificate.
+    /// </summary>
     public static bool TryParse(ReadOnlySpan<byte> body, out List<byte[]> certificates)
+        => TryParseWithContext(body, out certificates, out _) && certificates.Count > 0;
+
+    /// <summary>
+    /// Parses the body, keeping an empty certificate list as a valid outcome and returning the
+    /// <c>certificate_request_context</c> so a server can check that the client echoed the right one.
+    /// </summary>
+    public static bool TryParseWithContext(ReadOnlySpan<byte> body, out List<byte[]> certificates,
+                                           out byte[] context)
     {
         certificates = [];
+        context = [];
 
         var r = new BufferReader(body);
-        if (!r.TryReadByte(out byte contextLength) || !r.TrySkip(contextLength))
+        if (!r.TryReadByte(out byte contextLength) ||
+            !r.TryReadBytes(contextLength, out ReadOnlySpan<byte> contextBytes))
             return false;
+        context = contextBytes.ToArray();
+
         if (!TryReadUInt24(ref r, out int listLength) || listLength > r.Remaining)
             return false;
 
@@ -53,7 +106,7 @@ public static class CertificateMessage
                 return false;
         }
 
-        return certificates.Count > 0;
+        return true;
     }
 
     /// <summary>

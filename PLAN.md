@@ -100,7 +100,7 @@ HTTP/3 layer. Project/assembly names stay short. Usings in #region Usings blocks
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **509 tests green**, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **523 tests green**, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -122,6 +122,8 @@ in the phases themselves, since that is where they belong:
 | Server demux | linear scan per datagram, unbounded connections | CID index + connection cap + 413 body limit |
 | Debug tooling | none of the three planned items existed | lossy link, SSLKEYLOGFILE, qlog — all three |
 | Retry (§8.1.2) | connection built first, THEN the Retry ⇒ state per spoofed packet | answered from the token alone, before any state |
+| Client certs (§4.3.2) | not implemented; a CertificateRequest was silently absorbed | full mTLS, both roles, Require/Request policy |
+| Handshake failure | escaped `ProcessDatagram` into the accept loop | CONNECTION_CLOSE with the right CRYPTO_ERROR alert |
 | Language | German comments left in the five MSBuild files | repo is English throughout, verified by sweep |
 
 Two of those RFC violations (§13.3 and RFC 9002 §6.2.2.1) were found by the new lossy link and
@@ -809,6 +811,26 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
     consume. H3Server sets 8 MiB as an example.
   - 4 tests (limit + existing connections stay alive, 12 clients routed correctly, 413, streaming
     exempt). **Live:** `curl --http3` incl. a 500 KB POST unchanged, interop 8/8.
+- ✅ **Client certificates / mutual TLS** (RFC 8446 §4.3.2, §4.4.2.4, §4.4.3) — the server sends a
+  CertificateRequest after EncryptedExtensions (never with a PSK, §4.3.2 MUST NOT); the client
+  answers at the END of its flight with Certificate + CertificateVerify, signed with the
+  `"TLS 1.3, client CertificateVerify"` context, and its Finished then covers both.
+  - `ClientCertificateMode.Require` vs `Request` is exactly the discretion §4.4.2.4 grants: an empty
+    client Certificate either aborts the handshake or yields an unauthenticated connection the
+    application can judge for itself (`ClientAuthentication`).
+  - `PeerCertificateValidator` (renamed from `ServerCertificateValidator`) now serves both roles.
+    They differ in only two things: the signature context string, and whether a hostname is checked
+    at all — a client certificate is judged by its issuer, not by a name we dialled.
+  - Also fixed here, found while implementing it: the client silently ABSORBED a CertificateRequest
+    into the transcript. RFC 9001 §4.4 requires post-handshake ones to be a PROTOCOL_VIOLATION.
+  - And a hazard the feature exposed: a failed handshake threw out of `ProcessDatagram` straight
+    into `Http3Server`'s accept loop, whose catch list does not cover it — ONE client with a bad
+    certificate would have killed every other connection on that loop. Handshake failures now close
+    the connection with CRYPTO_ERROR + the right TLS alert (RFC 9001 §4.8), and a test asserts the
+    server still serves the next client.
+  - 14 tests. **Live:** `curl --http3 --cert/--key` completes mutual TLS against `H3Server --mtls`;
+    without a certificate curl is refused (exit 56) and the server keeps serving. Interop 8/8.
+
 - ✅ **Stateless Retry** (RFC 9000 §8.1.2/§8.1.4) — the hardening above bounded the number of
   connections, but a spoofed-source flood could still *fill* that bound, because `requireRetry`
   builds the connection object first and only then sends the Retry. Now `Http3Server` decides from
@@ -1161,7 +1183,7 @@ Akamai — matrix at M2), server interop against `curl --http3` (ngtcp2/LibreSSL
 4. **Protocol extras:** NEW_TOKEN issuance/replay (§8.1.3 — the token machinery now exists, only
    the frame and the client-side replay are missing), DPLPMTUD (RFC 8899 — datagrams are
    pinned near 1200 B, so ~20 % of throughput is unused on a 1500-MTU path), preferred_address
-   (§9.6), ACK frequency, client certificates/mTLS.
+   (§9.6), ACK frequency.
 5. **Observability** — no EventSource/metrics; nothing about a running connection is measurable
    from outside (qlog covers debugging, not production monitoring).
 

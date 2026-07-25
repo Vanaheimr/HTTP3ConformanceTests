@@ -20,6 +20,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
@@ -29,6 +30,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Qlog;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
 #endregion
 
@@ -52,6 +54,25 @@ bool requireRetry = args.Contains("--retry");
 // from the token alone, BEFORE a connection object exists (§8.1.2). --retry, by contrast, builds the
 // connection first and only then sends the Retry — fine for a demo, useless against a flood.
 RetryTokenGenerator? addressValidation = args.Contains("--stateless-retry") ? new RetryTokenGenerator() : null;
+
+// Mutual TLS (RFC 8446 §4.3.2): --mtls=<ca.pem> requires a client certificate chaining to that CA,
+// --mtls-request=<ca.pem> asks for one but lets an anonymous client through (the handler then sees
+// an unauthenticated connection and can answer 403 itself).
+string? mtlsRequire = args.FirstOrDefault(a => a.StartsWith("--mtls=", StringComparison.Ordinal))?["--mtls=".Length..];
+string? mtlsRequest = args.FirstOrDefault(a => a.StartsWith("--mtls-request=", StringComparison.Ordinal))?["--mtls-request=".Length..];
+ClientCertificateOptions? clientCertificates = (mtlsRequire ?? mtlsRequest) is { } caPath
+    ? new ClientCertificateOptions
+      {
+          Mode       = mtlsRequire is not null ? ClientCertificateMode.Require : ClientCertificateMode.Request,
+          Validation = new CertificateValidationOptions
+                       {
+                           VerifyHostname    = false, // a client certificate names a client, not a host
+                           CustomTrustRoots  = [X509CertificateLoader.LoadCertificateFromFile(caPath)],
+                       },
+      }
+    : null;
+if (clientCertificates is not null)
+    Console.WriteLine($"Mutual TLS: client certificates {clientCertificates.Mode} (CA: {mtlsRequire ?? mtlsRequest})");
 // --keylog[=<path>]: TLS secrets in NSS key log format for Wireshark (debugging only!).
 // --qlog=<dir>: one qlog trace per connection (a qlog trace = exactly one connection).
 string? qlogDir = args.FirstOrDefault(a => a.StartsWith("--qlog="))?["--qlog=".Length..];
@@ -222,7 +243,8 @@ while (true)
             webTransportMaxSessions: 4,         // draft-webtrans-http3: WebTransport
             webTransportHandler: HandleWebTransport,
             webTransportProtocolSelector: SelectWebTransportProtocol, // draft §3.3
-            validatedRetry: validatedRetry), from);
+            validatedRetry: validatedRetry,
+            clientCertificate: clientCertificates), from);
         connections.Add(conn);
         Console.WriteLine($"New connection from {from}");
     }
