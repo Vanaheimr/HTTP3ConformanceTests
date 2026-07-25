@@ -100,7 +100,7 @@ HTTP/3 layer. Project/assembly names stay short. Usings in #region Usings blocks
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **496 tests green**, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **509 tests green**, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -121,6 +121,7 @@ in the phases themselves, since that is where they belong:
 | Facade throughput | ~150 KB/s, 1.5 MB never finished | socket drained per pass; 3 MB in ~0.5 s |
 | Server demux | linear scan per datagram, unbounded connections | CID index + connection cap + 413 body limit |
 | Debug tooling | none of the three planned items existed | lossy link, SSLKEYLOGFILE, qlog — all three |
+| Retry (§8.1.2) | connection built first, THEN the Retry ⇒ state per spoofed packet | answered from the token alone, before any state |
 
 Two of those RFC violations (§13.3 and RFC 9002 §6.2.2.1) were found by the new lossy link and
 could not have been found by the previous perfect in-process link at all.
@@ -544,7 +545,8 @@ Deliberately left open: server push (MAY), classic CONNECT proxying.
   (`VersionNegotiationReceived`/`OfferedVersions`). Tested in-process (receive, GREASE version,
   no VN for a too-small datagram).
 - ✅ **Retry / address validation** (RFC 9000 §8.1, §17.2.5; RFC 9001 §5.8): server optionally
-  behind `requireRetry`/`--retry` — responds to the first tokenless Initial with a `RetryPacket`
+  behind `requireRetry`/`--retry` (see phase 9 for the *stateless* form, which is the one that
+  survives a flood) — responds to the first tokenless Initial with a `RetryPacket`
   (integrity tag over the ODCID), validates the echoed token. The client verifies the tag,
   re-derives the Initial keys from the Retry SCID (RFC 9001 §5.2), resends the ClientHello with the
   token. `retry_source_connection_id` TP added. **Confirmed live over UDP** (H3Get "after Retry").
@@ -806,9 +808,28 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
     consume. H3Server sets 8 MiB as an example.
   - 4 tests (limit + existing connections stay alive, 12 clients routed correctly, 413, streaming
     exempt). **Live:** `curl --http3` incl. a 500 KB POST unchanged, interop 8/8.
-  - Still open (separate task): **stateless Retry** (RFC 9000 §8.1) — a spoofed-source flood can
-    still fill the cap, because address validation currently happens only after the connection
-    object exists.
+- ✅ **Stateless Retry** (RFC 9000 §8.1.2/§8.1.4) — the hardening above bounded the number of
+  connections, but a spoofed-source flood could still *fill* that bound, because `requireRetry`
+  builds the connection object first and only then sends the Retry. Now `Http3Server` decides from
+  the cleartext header alone, before any state exists: no token ⇒ Retry, valid token ⇒ connection,
+  bad token ⇒ INVALID_TOKEN. The token IS the state.
+  - `RetryTokenGenerator` — AES-256-GCM under an HKDF-derived server key, plaintext
+    `kind ‖ issued ‖ ODCID ‖ Retry-SCID`, client address **and port** as associated data. That
+    covers the four things §8.1.4 asks for: hard to guess, integrity protected, address-bound, and
+    replay "prevented or limited" (10-second lifetime **plus** a bounded single-use set). The kind
+    byte is what §8.1.1 requires so Retry and NEW_TOKEN tokens stay distinguishable.
+  - `QuicServerConnection.ValidatedRetry` carries the outcome into the connection, which must adopt
+    the Retry SCID as its own (§7.2: the client changes its DCID only once) and report the ODCID in
+    the transport parameter — that parameter is exactly what proves to the client that we saw its
+    first Initial.
+  - `StatelessClose` answers an unusable token with INVALID_TOKEN in an Initial packet whose keys
+    come from the client's DCID (§8.1.2: "a server has not established any state ... and so does not
+    enter the closing period"). Dropping would be legal but costs the client a handshake timeout.
+  - 13 tests. The one that matters is a **control experiment**: the same 128-source flood produces
+    dozens of connections without address validation and **zero** with it — measured, not asserted
+    by construction. **Live:** `curl --http3` (WSL, OpenSSL-QUIC) completes through the Retry against
+    `H3Server --stateless-retry`; the server log shows two Retries (a client retransmit) and one
+    validated token. Interop 8/8 unchanged.
 - ✅ **Throughput of the socket facades** — both pump loops (`Http3Client.PumpLoopAsync`,
   `Http3Server.LoopAsync`) processed exactly ONE datagram per await cycle: per packet a
   `Task.WhenAny`, a freshly allocated `Task.Delay` timer that was then **abandoned** (never
@@ -1115,36 +1136,34 @@ WebTransport (draft-13) — see phase 7.)*
 3. ✅ Build the ClientHello, send an Initial packet to cloudflare-quic.com, parse the ServerHello —
    from here on, every step gets real server feedback instead of dry runs.
 
-## Status and what is genuinely still open (as of 2026-07-24)
+## Status and what is genuinely still open (as of 2026-07-25)
 
 **Done:** all phases 0–9 — RFC 9114 feature audit, transport-error matrix, every extension
 (Priorities/WebSockets/datagrams/WebTransport incl. RESET_STREAM_AT), PQ crypto (ML-KEM hybrid +
 ML-DSA), async API, curl interop, the performance extras (zero-alloc, UDP batching/GSO, window
 auto-tuning) — **plus** the post-review round summarised in the table at the top: five RFC MUST
 violations fixed, streaming in both directions, the throughput ceiling removed, server hardening,
-and all three debug-tooling items that this plan had promised "from the start". Client interop is
+all three debug-tooling items that this plan had promised "from the start", and stateless address
+validation (§8.1.2), which closes the last item with a security angle. Client interop is
 confirmed against **8 independent QUIC stacks** (quiche/nginx/Google/mvfst/lsquic/msquic/quic-go/
 Akamai — matrix at M2), server interop against `curl --http3` (ngtcp2/LibreSSL and OpenSSL-QUIC).
 
 **Open, roughly by value:**
 
-1. **Stateless Retry under load** (RFC 9000 §8.1) — the connection cap bounds state, but a
-   spoofed-source flood can still fill it: `requireRetry` only takes effect once the connection
-   object (and its signature) already exists. Needs `Http3Server` to answer statelessly and
-   `QuicServerConnection` to accept an externally issued token.
-2. **CI** — there is none, and `dotnet test` on the solution exits 1 because the `libs/` submodules
+1. **CI** — there is none, and `dotnet test` on the solution exits 1 because the `libs/` submodules
    inherit `TreatWarningsAsErrors` from the root `Directory.Build.props`. Until then every "N tests
    green" here rests on local runs.
-3. **Receive-side GRO + per-connection parallelism** — send-side GSO exists; the per-datagram async
+2. **Receive-side GRO + per-connection parallelism** — send-side GSO exists; the per-datagram async
    round trip is gone, so what remains is batched receive and getting connections off one loop.
-4. **ClientHello random after a HelloRetryRequest** (RFC 8446 §4.1.2) — CH2 currently gets a fresh
+3. **ClientHello random after a HelloRetryRequest** (RFC 8446 §4.1.2) — CH2 currently gets a fresh
    random, which the allowed-changes list does not permit. Small, self-contained MUST fix.
-5. **Protocol extras:** NEW_TOKEN issuance/replay (§8.1.3), DPLPMTUD (RFC 8899 — datagrams are
+4. **Protocol extras:** NEW_TOKEN issuance/replay (§8.1.3 — the token machinery now exists, only
+   the frame and the client-side replay are missing), DPLPMTUD (RFC 8899 — datagrams are
    pinned near 1200 B, so ~20 % of throughput is unused on a 1500-MTU path), preferred_address
    (§9.6), ACK frequency, client certificates/mTLS.
-6. **Observability** — no EventSource/metrics; nothing about a running connection is measurable
+5. **Observability** — no EventSource/metrics; nothing about a running connection is measurable
    from outside (qlog covers debugging, not production monitoring).
-7. **Housekeeping** — German comments remain in the MSBuild files (`Directory.Build.props`, four
+6. **Housekeeping** — German comments remain in the MSBuild files (`Directory.Build.props`, four
    `.csproj`), missed by the 2026-07-23 translation pass.
 
 **Known inconsistency:** `Http3RequestBody` is thread-safe, `Http3Tunnel` is not. The tunnel gets

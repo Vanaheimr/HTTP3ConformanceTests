@@ -38,6 +38,24 @@ namespace org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 /// </summary>
 public sealed class QuicServerConnection : QuicEndpoint
 {
+    /// <summary>
+    /// The outcome of a Retry that was carried out <b>outside</b> this connection — statelessly, by
+    /// the listener, before any connection existed (RFC 9000 §8.1.2: "a server has not established
+    /// any state for the connection at this point"). Both values come out of the validated Retry
+    /// token: the DCID of the client's original Initial, and the source connection ID the server put
+    /// into its Retry packet.
+    /// </summary>
+    /// <param name="OriginalDestinationConnectionId">
+    /// D0 — goes into the <c>original_destination_connection_id</c> transport parameter and proves to
+    /// the client that we (or a peer we cooperate with) saw its first Initial.
+    /// </param>
+    /// <param name="RetrySourceConnectionId">
+    /// The SCID of the Retry packet. It is the client's DCID from now on (§7.2), so this connection
+    /// must adopt it as its own SCID and echo it in <c>retry_source_connection_id</c>.
+    /// </param>
+    public sealed record ValidatedRetry(ConnectionId OriginalDestinationConnectionId,
+                                        ConnectionId RetrySourceConnectionId);
+
     private readonly ServerCertificate _certificate;
     private readonly KeyLog? _keyLog; // optional NSS key log for Wireshark; see KeyLog
     private readonly bool _requireRetry;
@@ -48,6 +66,7 @@ public sealed class QuicServerConnection : QuicEndpoint
     private TlsServerHandshake? _serverTls;
     private bool _handshakeDoneSent;
     private bool _retrySent;
+    private bool _retryValidatedExternally; // the token was already checked by the listener
     private byte[] _retryToken = [];
     private ConnectionId _originalDcid = ConnectionId.Empty;
     private readonly List<ulong> _newlyOpenedRequestStreams = [];
@@ -69,12 +88,23 @@ public sealed class QuicServerConnection : QuicEndpoint
         StatelessResetTokenGenerator? statelessResetTokens = null,
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
-        QlogWriter? qlog = null)
-        : base(transportParameters, version, timeProvider, qlog)
+        QlogWriter? qlog = null,
+        ValidatedRetry? validatedRetry = null)
+        : base(transportParameters, version, timeProvider, qlog,
+               sourceConnectionId: validatedRetry?.RetrySourceConnectionId)
     {
         _keyLog = keyLog;
         _certificate = certificate;
-        _requireRetry = requireRetry;
+        // A Retry already carried out statelessly counts as one that happened: the token is checked,
+        // the address is proven, and we must not (indeed cannot, §8.1.2) send a second one.
+        _requireRetry = requireRetry || validatedRetry is not null;
+        if (validatedRetry is { } retry)
+        {
+            _originalDcid = retry.OriginalDestinationConnectionId;
+            _retrySent = true;
+            _retryValidatedExternally = true;
+            MarkAddressValidated(); // the returned token proved the client address (RFC 9000 §8.1)
+        }
         _preferredCipherSuites = preferredCipherSuites;
         _preferredGroups = preferredGroups;
         StatelessResetTokens = statelessResetTokens; // tokens derivable from the CID ⇒ stateless reset sendable
@@ -141,8 +171,10 @@ public sealed class QuicServerConnection : QuicEndpoint
             return; // no keys/TLS yet – only the renewed, token-carrying Initial counts
         }
 
-        // After a Retry: accept only an Initial with exactly our token.
-        if (_requireRetry && !prefix.Token.AsSpan().SequenceEqual(_retryToken))
+        // After a Retry: accept only an Initial with exactly our token. After a STATELESS Retry we
+        // never held one — the listener validated the token cryptographically and handed us the
+        // result, so there is nothing left to compare here.
+        if (_requireRetry && !_retryValidatedExternally && !prefix.Token.AsSpan().SequenceEqual(_retryToken))
             return;
         if (_requireRetry)
             MarkAddressValidated(); // a valid Retry token proves the client address (RFC 9000 §8.1)

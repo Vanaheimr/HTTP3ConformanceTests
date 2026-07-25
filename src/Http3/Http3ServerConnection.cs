@@ -88,11 +88,12 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         Func<Http3Request, IReadOnlyList<string>, string?>? webTransportProtocolSelector = null,
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
-        QlogWriter? qlog = null)
+        QlogWriter? qlog = null,
+        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null)
         : this(certificate, _ => new Http3Response { Status = 500 }, transportParameters, requireRetry,
                qpackMaxTableCapacity, preferredGroups, resumptionCache, maxEarlyDataSize, statelessResetTokens,
                maxFieldSectionSize, maxRequestBodySize, connectHandler, enableDatagrams, webTransportMaxSessions,
-               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog)
+               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog, validatedRetry)
     {
         _streamingHandler = handler;
     }
@@ -147,11 +148,12 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         Func<Http3Request, IReadOnlyList<string>, string?>? webTransportProtocolSelector = null,
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
-        QlogWriter? qlog = null)
+        QlogWriter? qlog = null,
+        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null)
         : this(certificate, _ => new Http3Response { Status = 500 }, transportParameters, requireRetry,
                qpackMaxTableCapacity, preferredGroups, resumptionCache, maxEarlyDataSize, statelessResetTokens,
                maxFieldSectionSize, maxRequestBodySize, connectHandler, enableDatagrams, webTransportMaxSessions,
-               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog)
+               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog, validatedRetry)
     {
         _handler = handler;
     }
@@ -181,7 +183,8 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         Func<Http3Request, IReadOnlyList<string>, string?>? webTransportProtocolSelector = null,
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
-        QlogWriter? qlog = null)
+        QlogWriter? qlog = null,
+        Quic.Connection.QuicServerConnection.ValidatedRetry? validatedRetry = null)
     {
         _connectHandler = connectHandler;
         _wtMaxSessions = webTransportMaxSessions;
@@ -196,7 +199,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             transportParameters ??= new TransportParameters();
             transportParameters.MaxDatagramFrameSizeValue = 65535; // RFC 9221 §3 RECOMMENDED
         }
-        _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider, keyLog: keyLog, qlog: qlog);
+        _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider, keyLog: keyLog, qlog: qlog, validatedRetry: validatedRetry);
         _handler = (request, _) => Task.FromResult(handler(request));
         _qpack = new Http3Qpack(qpackMaxTableCapacity, weAreClient: false, FatalConnectionError)
         {

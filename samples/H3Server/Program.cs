@@ -19,11 +19,13 @@
 
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
 using org.GraphDefined.Vanaheimr.Hermod.Quic;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Qlog;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
@@ -46,6 +48,10 @@ var serverParams = new TransportParameters { MaxIdleTimeoutMs = idleMs };
 
 // Optional address validation via Retry (RFC 9000 §8.1): --retry.
 bool requireRetry = args.Contains("--retry");
+// --stateless-retry does the same thing the way a server under load has to: the Retry is answered
+// from the token alone, BEFORE a connection object exists (§8.1.2). --retry, by contrast, builds the
+// connection first and only then sends the Retry — fine for a demo, useless against a flood.
+RetryTokenGenerator? addressValidation = args.Contains("--stateless-retry") ? new RetryTokenGenerator() : null;
 // --keylog[=<path>]: TLS secrets in NSS key log format for Wireshark (debugging only!).
 // --qlog=<dir>: one qlog trace per connection (a qlog trace = exactly one connection).
 string? qlogDir = args.FirstOrDefault(a => a.StartsWith("--qlog="))?["--qlog=".Length..];
@@ -168,6 +174,41 @@ while (true)
         if (!PacketFormat.IsLongHeader(first) || PacketFormat.GetLongPacketType(first) != LongPacketType.Initial)
             continue;
 
+        // Stateless address validation (RFC 9000 §8.1.2) — before ANY state is allocated.
+        QuicServerConnection.ValidatedRetry? validatedRetry = null;
+        if (addressValidation is { } tokens)
+        {
+            if (datagram.Length < InitialPacketFactory.MinimumClientInitialSize ||
+                !LongHeader.TryParse(datagram, out LongHeaderPrefix? initial) || initial is null)
+                continue;
+
+            if (initial.Token.Length == 0)
+            {
+                var retryScid = new ConnectionId(RandomNumberGenerator.GetBytes(8));
+                byte[] retry = RetryPacket.Build(initial.Version, initial.SourceConnectionId, retryScid,
+                                                 tokens.Issue((IPEndPoint)from, initial.DestinationConnectionId, retryScid),
+                                                 initial.DestinationConnectionId);
+                socket.SendTo(retry, from);
+                Console.WriteLine($"Retry sent to {from} (address validation, no state held).");
+                continue;
+            }
+
+            if (!tokens.TryValidate(initial.Token, (IPEndPoint)from, out ConnectionId odcid, out ConnectionId issuedScid) ||
+                !initial.DestinationConnectionId.Equals(issuedScid) ||
+                !tokens.TryConsume(initial.Token))
+            {
+                byte[] refusal = StatelessClose.Build(initial.Version, initial.DestinationConnectionId,
+                                                      initial.SourceConnectionId, TransportError.InvalidToken,
+                                                      "invalid retry token");
+                socket.SendTo(refusal, from);
+                Console.WriteLine($"INVALID_TOKEN sent to {from} (RFC 9000 §8.1.2).");
+                continue;
+            }
+
+            validatedRetry = new QuicServerConnection.ValidatedRetry(odcid, issuedScid);
+            Console.WriteLine($"Address of {from} validated via Retry token.");
+        }
+
         conn = new ServerConn(new Http3ServerConnection(certificate, Handle, serverParams, requireRetry,
             preferredGroups: preferGroups, resumptionCache: resumptionCache, maxEarlyDataSize: 0xFFFFFFFF,
             statelessResetTokens: statelessResetTokens,
@@ -180,7 +221,8 @@ while (true)
             enableDatagrams: true,              // RFC 9297/9221: HTTP datagrams
             webTransportMaxSessions: 4,         // draft-webtrans-http3: WebTransport
             webTransportHandler: HandleWebTransport,
-            webTransportProtocolSelector: SelectWebTransportProtocol), from); // draft §3.3
+            webTransportProtocolSelector: SelectWebTransportProtocol, // draft §3.3
+            validatedRetry: validatedRetry), from);
         connections.Add(conn);
         Console.WriteLine($"New connection from {from}");
     }

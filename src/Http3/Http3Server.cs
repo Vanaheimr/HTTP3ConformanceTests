@@ -19,7 +19,11 @@
 
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 
+using org.GraphDefined.Vanaheimr.Hermod.Quic;
+
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Connection;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Packets;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 
@@ -47,7 +51,8 @@ public sealed class Http3Server : IAsyncDisposable
         public IPEndPoint Endpoint { get; set; } = endpoint;
     }
 
-    private readonly Func<Http3ServerConnection> _connectionFactory;
+    private readonly Func<QuicServerConnection.ValidatedRetry?, Http3ServerConnection> _connectionFactory;
+    private readonly RetryTokenGenerator? _addressValidation;
     private readonly StatelessResetTokenGenerator? _statelessResetTokens;
     private readonly TimeProvider _timeProvider;
     private readonly int _requestedPort;
@@ -72,9 +77,11 @@ public sealed class Http3Server : IAsyncDisposable
     /// default <see cref="Http3ServerConnection"/>.
     /// </summary>
     public Http3Server(ServerCertificate certificate, Func<Http3Request, Http3Response> handler, int port = 443,
-                       TimeProvider? timeProvider = null, KeyLog? keyLog = null)
-        : this(port, () => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider, keyLog: keyLog),
-               timeProvider: timeProvider)
+                       TimeProvider? timeProvider = null, KeyLog? keyLog = null,
+                       RetryTokenGenerator? addressValidation = null)
+        : this(port, retry => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider,
+                                                       keyLog: keyLog, validatedRetry: retry),
+               timeProvider: timeProvider, addressValidation: addressValidation)
     { }
 
     /// <summary>
@@ -83,9 +90,11 @@ public sealed class Http3Server : IAsyncDisposable
     /// connections. The token is cancelled when the client aborts the request or the server stops.
     /// </summary>
     public Http3Server(ServerCertificate certificate, Func<Http3Request, CancellationToken, Task<Http3Response>> handler,
-                       int port = 443, TimeProvider? timeProvider = null, KeyLog? keyLog = null)
-        : this(port, () => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider, keyLog: keyLog),
-               timeProvider: timeProvider)
+                       int port = 443, TimeProvider? timeProvider = null, KeyLog? keyLog = null,
+                       RetryTokenGenerator? addressValidation = null)
+        : this(port, retry => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider,
+                                                       keyLog: keyLog, validatedRetry: retry),
+               timeProvider: timeProvider, addressValidation: addressValidation)
     { }
 
     /// <summary>
@@ -95,9 +104,11 @@ public sealed class Http3Server : IAsyncDisposable
     /// </summary>
     public Http3Server(ServerCertificate certificate,
                        Func<Http3Request, Http3RequestBody, CancellationToken, Task<Http3Response>> handler,
-                       int port = 443, TimeProvider? timeProvider = null, KeyLog? keyLog = null)
-        : this(port, () => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider, keyLog: keyLog),
-               timeProvider: timeProvider)
+                       int port = 443, TimeProvider? timeProvider = null, KeyLog? keyLog = null,
+                       RetryTokenGenerator? addressValidation = null)
+        : this(port, retry => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider,
+                                                       keyLog: keyLog, validatedRetry: retry),
+               timeProvider: timeProvider, addressValidation: addressValidation)
     { }
 
     /// <summary>
@@ -113,6 +124,28 @@ public sealed class Http3Server : IAsyncDisposable
                        StatelessResetTokenGenerator? statelessResetTokens = null,
                        TimeProvider? timeProvider = null,
                        int maxConnections = DefaultMaxConnections)
+        // A factory that ignores the Retry result cannot serve an address-validating listener: the
+        // connection would not adopt the connection ID we already promised the client.
+        : this(port, _ => connectionFactory(), statelessResetTokens, timeProvider, maxConnections, addressValidation: null)
+    { }
+
+    /// <summary>
+    /// As above, but with stateless address validation (RFC 9000 §8.1.2). The factory receives the
+    /// validated Retry — the DCID of the client's first Initial and the connection ID we chose in the
+    /// Retry packet — and MUST pass it on to the <see cref="Http3ServerConnection"/>, otherwise the
+    /// connection uses a different connection ID than the one the client was told to use.
+    /// </summary>
+    /// <param name="addressValidation">
+    /// When set, every connection attempt without a valid token is answered with a Retry — built and
+    /// sent WITHOUT creating a connection. Under a spoofed-source flood the server then pays one AEAD
+    /// seal per packet instead of a connection object, and the answer goes to the forged address,
+    /// where it dies. <c>null</c> disables address validation.
+    /// </param>
+    public Http3Server(int port, Func<QuicServerConnection.ValidatedRetry?, Http3ServerConnection> connectionFactory,
+                       StatelessResetTokenGenerator? statelessResetTokens = null,
+                       TimeProvider? timeProvider = null,
+                       int maxConnections = DefaultMaxConnections,
+                       RetryTokenGenerator? addressValidation = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxConnections, 1);
         _requestedPort = port;
@@ -120,6 +153,7 @@ public sealed class Http3Server : IAsyncDisposable
         _statelessResetTokens = statelessResetTokens;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _maxConnections = maxConnections;
+        _addressValidation = addressValidation;
     }
 
     /// <summary>
@@ -240,6 +274,11 @@ public sealed class Http3Server : IAsyncDisposable
             if (!PacketFormat.IsLongHeader(first) || PacketFormat.GetLongPacketType(first) != LongPacketType.Initial)
                 return;
 
+            // Address validation happens BEFORE any state exists — that is the whole point.
+            QuicServerConnection.ValidatedRetry? validatedRetry = null;
+            if (_addressValidation is not null && !TryValidateAddress(datagram, from, out validatedRetry))
+                return;
+
             // Connection limit: beyond it drop SILENTLY. Any answer would be an amplification
             // vector, and every handshake costs a certificate signature.
             if (_connections.Count >= _maxConnections)
@@ -248,7 +287,7 @@ public sealed class Http3Server : IAsyncDisposable
                 return;
             }
 
-            conn = new ServerConn(_connectionFactory(), from);
+            conn = new ServerConn(_connectionFactory(validatedRetry), from);
             _connections.Add(conn);
             _byEndpoint[from] = conn;
             if (dcid is { } initialDcid)
@@ -266,6 +305,74 @@ public sealed class Http3Server : IAsyncDisposable
         conn.Connection.ProcessDatagram(datagram);
         Flush(conn);
     }
+
+    /// <summary>
+    /// Stateless address validation for an Initial that would otherwise create a connection
+    /// (RFC 9000 §8.1.2). Returns <c>true</c> when the handshake may proceed; <paramref name="retry"/>
+    /// then carries what the connection needs to know about the Retry that already happened.
+    /// <para>
+    /// Nothing here allocates per-attempt state: the token IS the state. A flood from spoofed
+    /// addresses therefore produces Retry packets sent to those addresses and nothing else — no
+    /// connection object, no TLS, no certificate signature.
+    /// </para>
+    /// </summary>
+    private bool TryValidateAddress(byte[] datagram, IPEndPoint from,
+                                    out QuicServerConnection.ValidatedRetry? retry)
+    {
+        retry = null;
+        RetryTokenGenerator tokens = _addressValidation!;
+
+        // A datagram carrying an Initial must be at least 1200 bytes (RFC 9000 §14.1). Answering a
+        // smaller one would make us an amplifier, so it is dropped without a word.
+        if (datagram.Length < InitialPacketFactory.MinimumClientInitialSize)
+            return false;
+        if (!LongHeader.TryParse(datagram, out LongHeaderPrefix? prefix) || prefix is null)
+            return false;
+
+        if (prefix.Token.Length == 0)
+        {
+            // First contact: send a Retry and forget everything about it. The connection ID we pick
+            // here becomes the client's DCID (§7.2) and is carried inside the token, so the eventual
+            // connection can adopt it.
+            var retrySourceCid = new ConnectionId(RandomNumberGenerator.GetBytes(LocalCidLength));
+            byte[] token = tokens.Issue(from, prefix.DestinationConnectionId, retrySourceCid);
+            byte[] packet = RetryPacket.Build(prefix.Version, prefix.SourceConnectionId, retrySourceCid,
+                                              token, prefix.DestinationConnectionId);
+            _udp!.Send(packet, packet.Length, from);
+            RetriesSent++;
+            return false;
+        }
+
+        if (!tokens.TryValidate(prefix.Token, from, out ConnectionId originalDcid, out ConnectionId retrySourceCid2) ||
+            // The token names the connection ID we handed out; the Initial must actually be addressed
+            // to it. Otherwise a token could be pasted onto a packet for a different connection.
+            !prefix.DestinationConnectionId.Equals(retrySourceCid2) ||
+            !tokens.TryConsume(prefix.Token))
+        {
+            // §8.1.2: the client will not accept a second Retry, so tell it plainly instead of
+            // letting it wait for a handshake timeout. This costs no state — see StatelessClose.
+            byte[] refusal = StatelessClose.Build(prefix.Version, prefix.DestinationConnectionId,
+                                                  prefix.SourceConnectionId, TransportError.InvalidToken,
+                                                  "invalid retry token");
+            _udp!.Send(refusal, refusal.Length, from);
+            TokensRejected++;
+            return false;
+        }
+
+        retry = new QuicServerConnection.ValidatedRetry(originalDcid, retrySourceCid2);
+        return true;
+    }
+
+    /// <summary>
+    /// Number of Retry packets sent for address validation (diagnostics).
+    /// </summary>
+    public long RetriesSent { get; private set; }
+
+    /// <summary>
+    /// Number of Initials refused with INVALID_TOKEN — a forged, expired, replayed or misdirected
+    /// token (diagnostics).
+    /// </summary>
+    public long TokensRejected { get; private set; }
 
     private void RunTimers()
     {

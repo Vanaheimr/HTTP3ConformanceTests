@@ -160,8 +160,13 @@ public abstract class QuicEndpoint : IDisposable
     /// </summary>
     private enum ConnectionState { Active, Closing, Draining, Closed }
 
+    /// <param name="sourceConnectionId">
+    /// Our own connection ID. Normally random — supplied only when it has already been announced to
+    /// the peer, i.e. after a <b>stateless</b> Retry: the SCID of that Retry packet is the client's
+    /// DCID from then on (RFC 9000 §7.2), so the connection created afterwards has to adopt it.
+    /// </param>
     protected QuicEndpoint(TransportParameters? transportParameters, uint version, TimeProvider? timeProvider = null,
-                           QlogWriter? qlog = null)
+                           QlogWriter? qlog = null, ConnectionId? sourceConnectionId = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
         _startTimestamp = _timeProvider.GetTimestamp();
@@ -170,7 +175,7 @@ public abstract class QuicEndpoint : IDisposable
         _localConnMaxData = LocalParams.InitialMaxDataValue;
         if (LocalParams.InitialMaxDataValue > 0)
             _connWindowTuner = new ReceiveWindowTuner(LocalParams.InitialMaxDataValue, MaxConnReceiveWindow);
-        Scid = new ConnectionId(RandomNumberGenerator.GetBytes(8));
+        Scid = sourceConnectionId ?? new ConnectionId(RandomNumberGenerator.GetBytes(8));
         _cids = new ConnectionIdManager(Scid); // local handshake CID = sequence 0
         _addressValidated = !IsServer;         // the client regards the server address as validated
         // RFC 9002 §6.2.2.1/§A.6: for the client the peer counts as validated only after a Handshake
