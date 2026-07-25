@@ -69,6 +69,41 @@ public class Http3AsyncApiTests
     }
 
     [Test]
+    public async Task LargeTransfer_OverRealSockets_CompletesInReasonableTime()
+    {
+        // Regression guard for the facade I/O loops. Both pump loops used to process ONE datagram
+        // per await cycle (plus an abandoned Task.Delay timer each pass), which capped throughput
+        // at roughly 150 KB/s — a 3 MB transfer did not finish within 60 s at all. Draining the
+        // socket per pass fixed that; the bound below is generous (measured: well under a second)
+        // but still catches a return to per-datagram async round trips.
+        const int size = 3_000_000;
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+        byte[] payload = new byte[size];
+        new Random(7).NextBytes(payload);
+
+        await using var server = new Http3Server(cert,
+            request => new Http3Response { Status = 200, Body = request.Body.Length > 0 ? [1] : payload }, port: 0);
+        server.Start();
+        await using var client = new Http3Client("localhost", server.Port, validation);
+        await client.ConnectAsync(TimeSpan.FromSeconds(10));
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Http3Response download = await client.GetAsync("/big").WaitAsync(TimeSpan.FromSeconds(30));
+        long downloadMs = watch.ElapsedMilliseconds;
+        watch.Restart();
+        Http3Response upload = await client.PostAsync("/up", payload, "application/octet-stream")
+                                           .WaitAsync(TimeSpan.FromSeconds(30));
+        long uploadMs = watch.ElapsedMilliseconds;
+
+        Assert.That(download.Body, Has.Length.EqualTo(size));
+        Assert.That(upload.Status, Is.EqualTo(200));
+        Assert.That(downloadMs, Is.LessThan(15_000), $"3 MB download took {downloadMs} ms.");
+        Assert.That(uploadMs, Is.LessThan(15_000), $"3 MB upload took {uploadMs} ms.");
+        TestContext.Out.WriteLine($"3 MB down {downloadMs} ms / up {uploadMs} ms");
+    }
+
+    [Test]
     public async Task StreamingBody_OverRealLoopbackUdp_ArrivesByteExact()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");

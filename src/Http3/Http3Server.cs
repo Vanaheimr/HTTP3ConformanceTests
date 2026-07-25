@@ -117,6 +117,12 @@ public sealed class Http3Server : IAsyncDisposable
         _loopTask = Task.Run(LoopAsync, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Upper bound on datagrams processed per loop pass — keeps one busy peer from starving the
+    /// timers of every other connection.
+    /// </summary>
+    private const int MaxDatagramsPerBatch = 64;
+
     private async Task LoopAsync()
     {
         Task<UdpReceiveResult>? receive = null;
@@ -125,13 +131,31 @@ public sealed class Http3Server : IAsyncDisposable
             try
             {
                 receive ??= _udp!.ReceiveAsync(_cts.Token).AsTask();
-                Task finished = await Task.WhenAny(receive, Task.Delay(TickInterval, _timeProvider, _cts.Token)).ConfigureAwait(false);
 
-                if (finished == receive)
+                if (!receive.IsCompleted)
                 {
-                    UdpReceiveResult result = await receive.ConfigureAwait(false);
+                    // Wait for a datagram OR the tick — and CANCEL the timer afterwards, instead of
+                    // abandoning one per loop pass.
+                    using var tick = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                    await Task.WhenAny(receive, Task.Delay(TickInterval, _timeProvider, tick.Token)).ConfigureAwait(false);
+                    tick.Cancel();
+                }
+
+                if (receive.IsCompletedSuccessfully)
+                {
+                    UdpReceiveResult result = receive.Result;
                     receive = null;
                     HandleDatagram(result.Buffer, result.RemoteEndPoint);
+
+                    // Drain what is already queued instead of paying a full async round trip per
+                    // datagram — the dominant cost while a client uploads. No async receive is
+                    // outstanding at this point, so the synchronous read is safe.
+                    for (int batched = 1; batched < MaxDatagramsPerBatch && _udp!.Available > 0; batched++)
+                    {
+                        IPEndPoint? from = null;
+                        byte[] datagram = _udp.Receive(ref from);
+                        HandleDatagram(datagram, from!);
+                    }
                 }
                 else
                     RunTimers();

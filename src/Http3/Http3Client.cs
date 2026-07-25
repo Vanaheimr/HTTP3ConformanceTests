@@ -230,6 +230,12 @@ public sealed class Http3Client : IAsyncDisposable
 
     // ---- Pump -----------------------------------------------------------------------------
 
+    /// <summary>
+    /// Upper bound on datagrams processed under one lock hold. Keeps a burst from starving the API
+    /// calls that share the mutex, while still amortising the async machinery over many packets.
+    /// </summary>
+    private const int MaxDatagramsPerBatch = 64;
+
     private async Task PumpLoopAsync()
     {
         Task<UdpReceiveResult>? receive = null;
@@ -238,16 +244,40 @@ public sealed class Http3Client : IAsyncDisposable
             try
             {
                 receive ??= _udp!.ReceiveAsync(_cts.Token).AsTask();
-                Task finished = await Task.WhenAny(receive, Task.Delay(TickInterval, _timeProvider, _cts.Token)).ConfigureAwait(false);
+
+                if (!receive.IsCompleted)
+                {
+                    // Wait for a datagram OR the tick — and CANCEL the timer afterwards. Leaving it
+                    // to expire would abandon one timer per loop pass, i.e. thousands during a
+                    // download.
+                    using var tick = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                    await Task.WhenAny(receive, Task.Delay(TickInterval, _timeProvider, tick.Token)).ConfigureAwait(false);
+                    tick.Cancel();
+                }
+
+                UdpReceiveResult? first = null;
+                if (receive.IsCompletedSuccessfully)
+                {
+                    first = receive.Result;
+                    receive = null;
+                }
 
                 await _mutex.WaitAsync(_cts.Token).ConfigureAwait(false);
                 try
                 {
-                    if (finished == receive)
+                    if (first is { } result)
                     {
-                        UdpReceiveResult result = await receive.ConfigureAwait(false);
-                        receive = null;
                         _connection.ProcessDatagram(result.Buffer);
+
+                        // Drain whatever else is already queued on the socket in the SAME lock hold.
+                        // One datagram per await cycle would cost a full async round trip plus a
+                        // lock acquisition per packet — the dominant cost during a download.
+                        // No async receive is outstanding here, so the synchronous read is safe.
+                        for (int batched = 1; batched < MaxDatagramsPerBatch && _udp!.Available > 0; batched++)
+                        {
+                            IPEndPoint? from = null;
+                            _connection.ProcessDatagram(_udp.Receive(ref from));
+                        }
                     }
                     _connection.CheckTimeouts();
                     FlushLocked();

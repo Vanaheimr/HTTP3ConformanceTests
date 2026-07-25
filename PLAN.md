@@ -753,6 +753,22 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
   - Deliberately NOT included: streaming REQUEST bodies (the handler would have to be invoked at
     HEADERS instead of FIN, which moves content-length/malformed validation into a streaming model
     and touches the CONNECT/WebTransport paths) — separate task.
+- ✅ **Throughput of the socket facades** — both pump loops (`Http3Client.PumpLoopAsync`,
+  `Http3Server.LoopAsync`) processed exactly ONE datagram per await cycle: per packet a
+  `Task.WhenAny`, a freshly allocated `Task.Delay` timer that was then **abandoned** (never
+  cancelled, so one orphaned timer per pass), and for the client additionally a semaphore
+  acquisition. That capped a transfer at ≈150 KB/s and got worse with size; 1.5 MB did not finish
+  within 60 s at all. Telling detail: `curl --http3` pulled 300 KB from the SAME server in 34 ms, and
+  the same transfers ran in milliseconds in-process — so neither the QUIC core nor the server logic
+  was at fault, only the facade I/O.
+  **Fix:** after the first datagram, drain whatever is already queued on the socket
+  (`UdpClient.Available` + synchronous `Receive`, no async receive outstanding at that moment) —
+  for the client all within ONE lock hold — capped at 64 datagrams per pass for fairness; and cancel
+  the tick timer instead of abandoning it.
+  **Measured (3 MB over real loopback UDP, median of several runs):** download **2327 ms → ~130 ms**
+  at 800 KB (≈18×), 3 MB from "60 s timeout" to **~520–840 ms**; upload 3 MB **~500–900 ms**
+  (≈5 MiB/s). Regression guard `LargeTransfer_OverRealSockets_CompletesInReasonableTime` (3 MB up and
+  down, generous 15 s bound). **Live:** `curl --http3` `/big` 300 000 B in 46 ms, interop 8/8.
 - ✅ **async API — Task-based facades over real sockets** (`src/Http3/Http3Client.cs` /
   `Http3Server.cs`): the deterministic, transport-agnostic core remains untouched (all tests still
   synchronous in-process); on top, the facades own the UDP socket and a background pump
