@@ -85,7 +85,8 @@ src/
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
 tests/
-  Http3.Tests/           # 403 NUnit tests, incl. RFC test vectors and "evil" raw-QUIC peers
+  Http3.Tests/           # 496 NUnit tests, incl. RFC test vectors, "evil" raw-QUIC peers and
+                         # a seeded lossy link (drop/reorder/duplicate)
 samples/
   H3Get/                 # HTTP/3 client CLI (GET/POST, cancel, GOAWAY, 0-RTT, … — see README)
   H3Server/              # Demo server over UDP (CID demux, Retry, stateless reset, GOAWAY, …)
@@ -99,9 +100,30 @@ HTTP/3 layer. Project/assembly names stay short. Usings in #region Usings blocks
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: 403 tests green, milestones M1–M3
-reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 + 126 KB HTML ·
-M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost UDP).
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **496 tests green**, milestones
+M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
+126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
+UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
+
+**Since the critical review (2026-07-24).** The phases below were "done" in the sense of protocol
+coverage; a review of scale, hardening and tooling found otherwise. What came out of it — details
+in the phases themselves, since that is where they belong:
+
+| Area | Was | Now |
+|---|---|---|
+| ACK state (RFC 9000 §13.2.4) | grew for the whole connection, O(n²) per ACK | pruned; 5 MB in-process 1185 → ~230 ms |
+| Packet size (§14) | control frames unbounded ⇒ **3899-byte** datagrams | spread across packets, ≤ 1200 B |
+| HANDSHAKE_DONE (§13.3) | never retransmitted ⇒ handshake deadlock | retransmitted until acknowledged |
+| Client PTO (RFC 9002 §6.2.2.1) | stopped probing before address validation ⇒ deadlock | keeps probing + PING probe |
+| 0-RTT replay (RFC 8446 §8) | unmitigated | single-use tickets + freshness + expiry + cap |
+| Server handler | synchronous, inline on the pump | async overload; pump polls, never awaits |
+| Bodies | fully buffered `byte[]`, both directions | streaming in **both** directions, with backpressure |
+| Facade throughput | ~150 KB/s, 1.5 MB never finished | socket drained per pass; 3 MB in ~0.5 s |
+| Server demux | linear scan per datagram, unbounded connections | CID index + connection cap + 413 body limit |
+| Debug tooling | none of the three planned items existed | lossy link, SSLKEYLOGFILE, qlog — all three |
+
+Two of those RFC violations (§13.3 and RFC 9002 §6.2.2.1) were found by the new lossy link and
+could not have been found by the previous perfect in-process link at all.
 
 ### ✅ Phase 0 — Setup & primitives (small)
 - ✅ Create solution + projects, .NET 10, `net10.0`, nullable, `AllowUnsafeBlocks` only where needed.
@@ -470,7 +492,7 @@ Deliberately left open: server push (MAY), classic CONNECT proxying.
 - ✅ **Milestone M2 reached:** `GET https://cloudflare-quic.com/` delivers status 200 + 126 KB
   HTML over our own stack (QPACK-decoded headers, body reassembled).
 - ✅ **Client interop matrix — 8 independent QUIC implementations** (all live over UDP, with
-  **full** certificate chain + hostname validation, without `-k`; as of 2026-07-23):
+  **full** certificate chain + hostname validation, without `-k`; last re-verified 2026-07-24):
 
   | Target | Foreign stack | KEX / suite / cert | Result |
   |---|---|---|---|
@@ -512,7 +534,7 @@ Deliberately left open: server push (MAY), classic CONNECT proxying.
     the HTTP/3-capable curl sits as an unpacked package in the session scratchpad; in WSL it is
     preinstalled.)
 
-### 🔶 Phase 8 — Robustness & server completeness
+### ✅ Phase 8 — Robustness & server completeness
 - ✅ **Version negotiation** (RFC 9000 §6): the server sends a VN packet on an unsupported version
   (`VersionNegotiationPacket`, DCID/SCID swapped, supported versions listed). **Anti-amplification
   (§6.1/§14.1):** no VN for datagrams < 1200 B. **GREASE (§6.3):** a reserved version matching
@@ -652,7 +674,7 @@ Deliberately left open: server push (MAY), classic CONNECT proxying.
     formerly failing 6/8/14/25/47/50/72), 2 `LossRecovery` unit tests and the HANDSHAKE_DONE
     retransmission test. **Live:** interop 8/8, `H3Get --loss=10` against Cloudflare status 200
     (17 datagrams dropped and bridged).
-- Grease: tolerate the peer's reserved frame/stream types.
+- ✅ Grease: tolerate the peer's reserved frame/stream types.
 
 ### ✅ Phase 9 — Performance & nice-to-have — COMPLETED
 *(0-RTT and the PQ/crypto extras are sorted here historically and have long been ✅; the async API,
@@ -939,7 +961,7 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
 
 ## Test & debug strategy (from the start!)
 
-1. **RFC test vectors as unit tests:** RFC 9001 Appendix A (Initial packets, Retry tag,
+1. ✅ **RFC test vectors as unit tests:** RFC 9001 Appendix A (Initial packets, Retry tag,
    ChaCha20 vectors), RFC 8448 (TLS key schedule), RFC 7541 Appendix C (Huffman).
 2. ✅ **`SSLKEYLOGFILE` export** → Wireshark decrypts our own QUIC packets. `KeyLog` (Quic.Tls) writes
    the NSS key log format (`<LABEL> <client random> <secret>`) with all TLS 1.3 secrets of RFC 8446
@@ -1085,7 +1107,7 @@ WebTransport (draft-13) — see phase 7.)*
   RESET_STREAM_AT, WT protocol negotiation (§3.3) and the keying-material exporter (§4.7), see
   phase 7.
 
-## Recommended order of the first steps
+## Recommended order of the first steps (historical — all done)
 
 1. ✅ Phase 0 + VarInt with tests (half a day).
 2. ✅ Get the RFC 9001 Appendix A vectors running (Initial secrets, AEAD, header protection) —
@@ -1093,12 +1115,44 @@ WebTransport (draft-13) — see phase 7.)*
 3. ✅ Build the ClientHello, send an Initial packet to cloudflare-quic.com, parse the ServerHello —
    from here on, every step gets real server feedback instead of dry runs.
 
-**Next (as of 2026-07-23):** ALL phases (0–9) are complete — RFC 9114 feature audit,
-transport-error matrix, all extensions (Priorities/WebSockets/datagrams/WebTransport complete incl.
-RESET_STREAM_AT), PQ crypto (ML-KEM hybrid + ML-DSA), async API, curl interop and the performance
-extras (zero-alloc, UDP batching/GSO, window auto-tuning). Client interop is confirmed against
-**8 independent QUIC stacks** (quiche/nginx/Google/mvfst/lsquic/msquic/quic-go/Akamai — matrix at
-M2). Remaining extras: browser interop (Firefox/Chrome, need trusted certificates) or the
+## Status and what is genuinely still open (as of 2026-07-24)
+
+**Done:** all phases 0–9 — RFC 9114 feature audit, transport-error matrix, every extension
+(Priorities/WebSockets/datagrams/WebTransport incl. RESET_STREAM_AT), PQ crypto (ML-KEM hybrid +
+ML-DSA), async API, curl interop, the performance extras (zero-alloc, UDP batching/GSO, window
+auto-tuning) — **plus** the post-review round summarised in the table at the top: five RFC MUST
+violations fixed, streaming in both directions, the throughput ceiling removed, server hardening,
+and all three debug-tooling items that this plan had promised "from the start". Client interop is
+confirmed against **8 independent QUIC stacks** (quiche/nginx/Google/mvfst/lsquic/msquic/quic-go/
+Akamai — matrix at M2), server interop against `curl --http3` (ngtcp2/LibreSSL and OpenSSL-QUIC).
+
+**Open, roughly by value:**
+
+1. **Stateless Retry under load** (RFC 9000 §8.1) — the connection cap bounds state, but a
+   spoofed-source flood can still fill it: `requireRetry` only takes effect once the connection
+   object (and its signature) already exists. Needs `Http3Server` to answer statelessly and
+   `QuicServerConnection` to accept an externally issued token.
+2. **CI** — there is none, and `dotnet test` on the solution exits 1 because the `libs/` submodules
+   inherit `TreatWarningsAsErrors` from the root `Directory.Build.props`. Until then every "N tests
+   green" here rests on local runs.
+3. **Receive-side GRO + per-connection parallelism** — send-side GSO exists; the per-datagram async
+   round trip is gone, so what remains is batched receive and getting connections off one loop.
+4. **ClientHello random after a HelloRetryRequest** (RFC 8446 §4.1.2) — CH2 currently gets a fresh
+   random, which the allowed-changes list does not permit. Small, self-contained MUST fix.
+5. **Protocol extras:** NEW_TOKEN issuance/replay (§8.1.3), DPLPMTUD (RFC 8899 — datagrams are
+   pinned near 1200 B, so ~20 % of throughput is unused on a 1500-MTU path), preferred_address
+   (§9.6), ACK frequency, client certificates/mTLS.
+6. **Observability** — no EventSource/metrics; nothing about a running connection is measurable
+   from outside (qlog covers debugging, not production monitoring).
+7. **Housekeeping** — German comments remain in the MSBuild files (`Directory.Build.props`, four
+   `.csproj`), missed by the 2026-07-23 translation pass.
+
+**Known inconsistency:** `Http3RequestBody` is thread-safe, `Http3Tunnel` is not. The tunnel gets
+away with it only because its consumer (the RFC 6455 WebSocket framing) never leaves the pump
+thread; a tunnel consumer that awaits real I/O would hit the same intermittent corruption that the
+streaming request body did.
+
+Longer-term extras unchanged: browser interop (Firefox/Chrome need trusted certificates) and the
 migration back into Hermod (deduplicating the WebSocket copies).
 
 ## References

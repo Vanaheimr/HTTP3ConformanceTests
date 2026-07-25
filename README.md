@@ -525,7 +525,8 @@ src/Http3.Qpack/   QPACK (static table, Huffman, encoder/decoder)
 src/Http3/         HTTP/3 (frames, client/server connection, malformed validation, priorities,
                    Extended-CONNECT tunnel) + WebSocket/ (RFC 6455) + WebTransport/ (draft-13)
                    + async API (Http3Client/Http3Server: Task facades with socket + background pump)
-tests/Http3.Tests/ NUnit tests (403), incl. RFC test vectors and "evil" raw-QUIC peers
+tests/Http3.Tests/ NUnit tests (496), incl. RFC test vectors, "evil" raw-QUIC peers and a
+                   seeded lossy link (drop/reorder/duplicate)
 samples/H3Get/     HTTP/3 client: GET/POST against cloudflare-quic.com or our own server
                    (incl. --interop [matrix against 8 foreign stacks], --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
                    --rotate-cid, --qpack-dynamic, --mlkem, --x448, --chacha20, --loss, --hold, -k)
