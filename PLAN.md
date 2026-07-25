@@ -122,6 +122,7 @@ in the phases themselves, since that is where they belong:
 | Server demux | linear scan per datagram, unbounded connections | CID index + connection cap + 413 body limit |
 | Debug tooling | none of the three planned items existed | lossy link, SSLKEYLOGFILE, qlog — all three |
 | Retry (§8.1.2) | connection built first, THEN the Retry ⇒ state per spoofed packet | answered from the token alone, before any state |
+| Language | German comments left in the five MSBuild files | repo is English throughout, verified by sweep |
 
 Two of those RFC violations (§13.3 and RFC 9002 §6.2.2.1) were found by the new lossy link and
 could not have been found by the previous perfect in-process link at all.
@@ -1163,8 +1164,6 @@ Akamai — matrix at M2), server interop against `curl --http3` (ngtcp2/LibreSSL
    (§9.6), ACK frequency, client certificates/mTLS.
 5. **Observability** — no EventSource/metrics; nothing about a running connection is measurable
    from outside (qlog covers debugging, not production monitoring).
-6. **Housekeeping** — German comments remain in the MSBuild files (`Directory.Build.props`, four
-   `.csproj`), missed by the 2026-07-23 translation pass.
 
 **Known inconsistency:** `Http3RequestBody` is thread-safe, `Http3Tunnel` is not. The tunnel gets
 away with it only because its consumer (the RFC 6455 WebSocket framing) never leaves the pump

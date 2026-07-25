@@ -4,7 +4,7 @@
     <RootNamespace>org.GraphDefined.Vanaheimr.Hermod.Quic.Tls</RootNamespace>
   </PropertyGroup>
 
-  <!-- TargetFramework, Nullable, ImplicitUsings etc. kommen aus Directory.Build.props -->
+  <!-- TargetFramework, Nullable, ImplicitUsings etc. come from Directory.Build.props -->
 
   <ItemGroup>
     <InternalsVisibleTo Include="Http3.Tests" />

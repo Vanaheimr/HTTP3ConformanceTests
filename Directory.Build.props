@@ -1,20 +1,20 @@
 <Project>
 
-  <!-- Zentrale Einstellungen für alle Projekte (src + tests). -->
+  <!-- Central settings for all projects (src + tests). -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
-    <!-- Wir setzen direkt auf UDP/Span auf; unsafe/Intrinsics dort erlauben, wo nötig. -->
+    <!-- We build directly on UDP/Span; allow unsafe/intrinsics where needed. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-    <!-- Qualität: Warnungen ernst nehmen. -->
+    <!-- Quality: take warnings seriously. -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
 
-    <!-- Keine großen Abhängigkeiten – reine BCL. -->
+    <!-- No large dependencies — pure BCL. -->
     <Deterministic>true</Deterministic>
   </PropertyGroup>
 

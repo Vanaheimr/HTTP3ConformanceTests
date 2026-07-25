@@ -5,7 +5,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Gemeinsame Einstellungen kommen aus Directory.Build.props -->
+    <!-- Shared settings come from Directory.Build.props -->
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>

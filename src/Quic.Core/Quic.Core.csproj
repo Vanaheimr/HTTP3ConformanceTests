@@ -4,6 +4,6 @@
     <RootNamespace>org.GraphDefined.Vanaheimr.Hermod.Quic.Core</RootNamespace>
   </PropertyGroup>
 
-  <!-- TargetFramework, Nullable, ImplicitUsings etc. kommen aus Directory.Build.props -->
+  <!-- TargetFramework, Nullable, ImplicitUsings etc. come from Directory.Build.props -->
 
 </Project>
