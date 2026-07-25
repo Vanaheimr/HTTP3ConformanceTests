@@ -40,7 +40,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
 {
     private readonly QuicServerConnection _quic;
-    private readonly Func<Http3Request, Http3Response> _handler;
+    // Normalised handler: the synchronous overload is wrapped, so the pump has ONE shape to drive.
+    private readonly Func<Http3Request, CancellationToken, Task<Http3Response>> _handler;
     private readonly Dictionary<ulong, RequestState> _requests = [];
     private readonly Http3Qpack _qpack;
     private bool _http3Initialized;
@@ -54,6 +55,15 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     private readonly Func<Http3Request, IReadOnlyList<string>, string?>? _webTransportProtocolSelector;
     private int _wtSessionCount;
 
+    /// <summary>
+    /// Asynchronous handler (RECOMMENDED for real servers): the request is dispatched, the pump
+    /// continues immediately and the response is sent once the task completes. A slow handler
+    /// therefore no longer blocks the connection — nor, in <see cref="Http3Server"/>, all the others
+    /// sharing the loop.
+    /// <para>The <see cref="CancellationToken"/> is cancelled when the client aborts the request
+    /// (RFC 9114 §4.1.1) or the connection ends, so the handler can stop work that has become
+    /// pointless.</para>
+    /// </summary>
     /// <param name="qpackMaxTableCapacity">
     /// Announced maximum QPACK table capacity (RFC 9204). The default of 4096 enables the dynamic
     /// table; a purely static client (capacity 0) never triggers it, so it is interop-safe.
@@ -76,6 +86,39 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     /// first) and picks ONE of them (the 2xx response carries it as <c>WT-Protocol</c>) or <c>null</c>
     /// (no header). A choice outside the offered list is discarded (draft MUST).
     /// </param>
+    public Http3ServerConnection(
+        ServerCertificate certificate,
+        Func<Http3Request, CancellationToken, Task<Http3Response>> handler,
+        TransportParameters? transportParameters = null,
+        bool requireRetry = false,
+        ulong qpackMaxTableCapacity = 4096,
+        IReadOnlyList<Quic.Tls.NamedGroup>? preferredGroups = null,
+        Quic.Tls.ServerResumptionCache? resumptionCache = null,
+        uint maxEarlyDataSize = 0,
+        Quic.Packets.StatelessResetTokenGenerator? statelessResetTokens = null,
+        ulong? maxFieldSectionSize = null,
+        Func<Http3Request, Http3ConnectResult>? connectHandler = null,
+        bool enableDatagrams = false,
+        ulong webTransportMaxSessions = 0,
+        Func<Http3Request, Action<WebTransportSession>?>? webTransportHandler = null,
+        Func<Http3Request, IReadOnlyList<string>, string?>? webTransportProtocolSelector = null,
+        TimeProvider? timeProvider = null,
+        KeyLog? keyLog = null,
+        QlogWriter? qlog = null)
+        : this(certificate, _ => new Http3Response { Status = 500 }, transportParameters, requireRetry,
+               qpackMaxTableCapacity, preferredGroups, resumptionCache, maxEarlyDataSize, statelessResetTokens,
+               maxFieldSectionSize, connectHandler, enableDatagrams, webTransportMaxSessions,
+               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog)
+    {
+        _handler = handler;
+    }
+
+    /// <summary>
+    /// Synchronous handler — convenience for simple servers and the deterministic in-process tests.
+    /// The handler runs INLINE on the pump, so a slow handler blocks this connection (and in
+    /// <see cref="Http3Server"/> every other one on the same loop). Real servers should use the
+    /// asynchronous overload.
+    /// </summary>
     public Http3ServerConnection(
         ServerCertificate certificate,
         Func<Http3Request, Http3Response> handler,
@@ -110,7 +153,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             transportParameters.MaxDatagramFrameSizeValue = 65535; // RFC 9221 §3 RECOMMENDED
         }
         _quic = new QuicServerConnection(certificate, transportParameters, requireRetry: requireRetry, preferredGroups: preferredGroups, resumptionCache: resumptionCache, maxEarlyDataSize: maxEarlyDataSize, statelessResetTokens: statelessResetTokens, timeProvider: timeProvider, keyLog: keyLog, qlog: qlog);
-        _handler = handler;
+        _handler = (request, _) => Task.FromResult(handler(request));
         _qpack = new Http3Qpack(qpackMaxTableCapacity, weAreClient: false, FatalConnectionError)
         {
             OnPriorityUpdate = ApplyPriorityUpdate, // RFC 9218 §7.2
@@ -371,7 +414,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     /// <summary>
     /// There are still accepted but unanswered requests (serve to completion after the GOAWAY, §5.2).
     /// </summary>
-    public bool HasPendingRequests => _requests.Values.Any(s => !s.Responded);
+    public bool HasPendingRequests => _requests.Values.Any(s => !s.ResponseComplete);
 
     /// <summary>
     /// Number of requests already handed to the handler (and answered).
@@ -431,6 +474,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     {
         _quic.CheckLossDetectionTimeout();
         _quic.CheckIdleTimeout();
+        Pump(); // also drives completed handler tasks and streaming bodies (no traffic needed)
     }
 
     public IReadOnlyList<byte[]> GetDatagramsToSend() => _quic.GetDatagramsToSend();
@@ -574,8 +618,19 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
                         request = request with { Body = [.. state.Body] };
                     if (state.Trailers.Count > 0)
                         request = request with { Trailers = state.Trailers };
-                    SendResponse(state.Stream.Id.Value, state.Stream, _handler(request));
-                    state.Responded = true;
+                    // Dispatch: the handler may run asynchronously — the pump does not wait for it,
+                    // it polls the task below in PumpResponses.
+                    state.Cancellation = new CancellationTokenSource();
+                    state.Responded = true; // no further frames of this stream are processed
+                    try
+                    {
+                        state.HandlerTask = _handler(request, state.Cancellation.Token);
+                    }
+                    catch (Exception)
+                    {
+                        // A handler that throws synchronously must not kill the connection.
+                        state.HandlerTask = Task.FromResult(new Http3Response { Status = 500 });
+                    }
                     RequestsHandled++;
                 }
             }
@@ -586,6 +641,8 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         foreach (ulong claimed in _webTransportClaimed)
             _requests.Remove(claimed);
         _webTransportClaimed.Clear();
+
+        PumpResponses();
 
         // Dispatch HTTP datagrams LAST (RFC 9297 §2.1): this way request streams/tunnels from the
         // same flight are already set up instead of discarding the datagrams as "unknown".
@@ -835,7 +892,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             }
             // This server does not support classic CONNECT (proxy tunnel).
             state.Stream.AbortRead(Http3Error.NoError);
-            SendResponse(state.Stream.Id.Value, state.Stream, new Http3Response { Status = 501 });
+            SendResponse(state.Stream.Id.Value, state.Stream, new Http3Response { Status = 501 }, state);
             state.Responded = true;
             return true;
         }
@@ -892,7 +949,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         if (onSession is null)
         {
             state.Stream.AbortRead(Http3Error.NoError); // §3.2: no matching resource ⇒ 404
-            SendResponse(state.Stream.Id.Value, state.Stream, new Http3Response { Status = 404 });
+            SendResponse(state.Stream.Id.Value, state.Stream, new Http3Response { Status = 404 }, state);
             state.Responded = true;
             return true;
         }
@@ -949,7 +1006,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     {
         _ = reason;
         state.Stream.AbortRead(Http3Error.MessageError);
-        SendResponse(state.Stream.Id.Value, state.Stream, new Http3Response { Status = 400 });
+        SendResponse(state.Stream.Id.Value, state.Stream, new Http3Response { Status = 400 }, state);
         state.Responded = true; // ends frame processing for this stream
     }
 
@@ -973,7 +1030,126 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         return new Http3Request(method, scheme, authority, path) { AdditionalHeaders = extra, Protocol = protocol };
     }
 
-    private void SendResponse(ulong streamId, QuicStream stream, Http3Response response)
+    /// <summary>
+    /// Chunk size pulled from a streaming body per read.
+    /// </summary>
+    private const int BodyChunkSize = 16 * 1024;
+
+    /// <summary>
+    /// Backpressure watermark: no new chunk is read while this many bytes are still waiting to go
+    /// out on the stream. Without it a fast producer (e.g. a MemoryStream) would be drained into
+    /// memory at full speed and streaming would buy nothing.
+    /// </summary>
+    private const int BodyHighWatermark = 64 * 1024;
+
+    /// <summary>
+    /// Drives everything that cannot be finished synchronously: handler tasks that have completed,
+    /// and streaming response bodies. Runs on every pump — i.e. on incoming datagrams AND on the
+    /// timer tick, so a response gets out even without any traffic.
+    /// </summary>
+    private void PumpResponses()
+    {
+        foreach (RequestState state in _requests.Values.ToList())
+        {
+            // The client aborted the request (RFC 9114 §4.1.1) ⇒ cancel the handler and stop.
+            if (state.Cancellation is { IsCancellationRequested: false } cts &&
+                (state.Stream.IsResetByPeer || state.Stream.Send.IsReset))
+            {
+                cts.Cancel();
+                state.DisposeResponseResources();
+                state.ResponseComplete = true;
+                continue;
+            }
+
+            if (state.HandlerTask is { IsCompleted: true } task)
+            {
+                state.HandlerTask = null;
+                Http3Response response = task.Status switch
+                {
+                    TaskStatus.RanToCompletion => task.Result,
+                    // A failed or cancelled handler becomes a 500 — never a connection error.
+                    _ => new Http3Response { Status = 500 },
+                };
+                BeginResponse(state, response);
+            }
+
+            if (state.BodyStream is not null)
+                PumpResponseBody(state);
+        }
+    }
+
+    /// <summary>
+    /// Streams the response body: one chunk per completed read, and a new read only once the send
+    /// buffer has drained below <see cref="BodyHighWatermark"/>. On end of stream the trailers and
+    /// the FIN follow.
+    /// </summary>
+    private void PumpResponseBody(RequestState state)
+    {
+        // A completed read becomes a DATA frame.
+        if (state.BodyRead is { IsCompleted: true } read)
+        {
+            state.BodyRead = null;
+            int count;
+            try
+            {
+                count = read.Status == TaskStatus.RanToCompletion ? read.Result : 0;
+            }
+            catch (Exception)
+            {
+                count = 0; // a broken body source ends the body — the headers are already out
+            }
+
+            if (count <= 0)
+            {
+                FinishResponse(state, state.PendingTrailers);
+                return;
+            }
+            state.Stream.Write(Http3Frames.Build(Http3FrameType.Data, state.ReadBuffer.AsSpan(0, count)));
+        }
+
+        // Fetch the next chunk only while the peer has room — that is the backpressure.
+        if (state.BodyRead is null && state.BodyStream is { } body &&
+            state.Stream.Send.PendingBytes < BodyHighWatermark)
+        {
+            state.ReadBuffer ??= new byte[BodyChunkSize];
+            try
+            {
+                state.BodyRead = body.ReadAsync(state.ReadBuffer.AsMemory()).AsTask();
+            }
+            catch (Exception)
+            {
+                FinishResponse(state, state.PendingTrailers);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes the trailer section (if any) and closes the stream.
+    /// </summary>
+    private void FinishResponse(RequestState state, IReadOnlyList<HeaderField> trailers)
+    {
+        ulong? peerLimit = _qpack.PeerMaxFieldSectionSize;
+        if (trailers.Count > 0 && // trailer section (§4.1 item 3); oversized trailers are dropped
+            (peerLimit is not { } tl || Http3Qpack.FieldSectionSize(trailers) <= tl))
+            state.Stream.Write(Http3Frames.Build(Http3FrameType.Headers,
+                _qpack.EncodeHeaders(state.Stream.Id.Value, [.. trailers])));
+        state.Stream.Finish();
+        state.DisposeResponseResources();
+        state.ReadBuffer = null;
+        state.ResponseComplete = true;
+    }
+
+    /// <summary>
+    /// Sends the response header section and either the buffered body (immediately) or arms the
+    /// streaming body (<see cref="Http3Response.BodyStream"/>).
+    /// </summary>
+    private void BeginResponse(RequestState state, Http3Response response)
+    {
+        SendResponse(state.Stream.Id.Value, state.Stream, response, state);
+    }
+
+    private void SendResponse(ulong streamId, QuicStream stream, Http3Response response,
+                              RequestState? state = null)
     {
         // §4.2.2 SHOULD NOT: do not send a field section above the limit announced by the client.
         ulong? peerLimit = _qpack.PeerMaxFieldSectionSize;
@@ -999,12 +1175,26 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         }
 
         stream.Write(Http3Frames.Build(Http3FrameType.Headers, _qpack.EncodeHeaders(streamId, fields)));
+
+        // Streaming body: headers are out, the rest is pulled chunk by chunk in PumpResponseBody.
+        if (state is not null && response.BodyStream is { } bodyStream)
+        {
+            state.BodyStream = bodyStream;
+            state.PendingTrailers = response.Trailers;
+            return;
+        }
+
         if (response.Body.Length > 0)
             stream.Write(Http3Frames.Build(Http3FrameType.Data, response.Body));
         if (response.Trailers.Count > 0 && // trailer section (§4.1 item 3); oversized trailers are dropped
             (peerLimit is not { } tl || Http3Qpack.FieldSectionSize(response.Trailers) <= tl))
             stream.Write(Http3Frames.Build(Http3FrameType.Headers, _qpack.EncodeHeaders(streamId, [.. response.Trailers])));
         stream.Finish();
+        if (state is not null)
+        {
+            state.DisposeResponseResources();
+            state.ResponseComplete = true;
+        }
     }
 
     private byte[] BuildSettings()
@@ -1066,6 +1256,35 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         public Http3Tunnel? Tunnel { get; set; }   // Extended-CONNECT tunnel (RFC 8441/9220), otherwise null
         public WebTransportSession? WebTransportSession { get; set; } // WebTransport session (draft-webtrans-http3)
         public ByteQueue CapsuleBuffer { get; } = new(); // capsule-protocol bytes of the WT CONNECT stream
+
+        /// <summary>
+        /// The response has been produced (or the request rejected) ⇒ stop processing further frames
+        /// of this stream. With an async handler this is already true while the handler still runs.
+        /// </summary>
         public bool Responded { get; set; }
+
+        /// <summary>
+        /// The response is completely on the wire (incl. body/trailers/FIN). Only then is the
+        /// request really finished — which is what a graceful shutdown has to wait for.
+        /// </summary>
+        public bool ResponseComplete { get; set; }
+
+        // --- async handler ---
+        public Task<Http3Response>? HandlerTask { get; set; }
+        public CancellationTokenSource? Cancellation { get; set; }
+
+        // --- streaming response body ---
+        public Stream? BodyStream { get; set; }
+        public byte[]? ReadBuffer { get; set; }
+        public Task<int>? BodyRead { get; set; }
+        public IReadOnlyList<HeaderField> PendingTrailers { get; set; } = [];
+
+        public void DisposeResponseResources()
+        {
+            Cancellation?.Dispose();
+            Cancellation = null;
+            BodyStream?.Dispose();
+            BodyStream = null;
+        }
     }
 }

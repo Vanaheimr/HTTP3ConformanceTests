@@ -36,6 +36,67 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 public class Http3AsyncApiTests
 {
     [Test]
+    public async Task AsyncHandler_SlowRequest_DoesNotBlockTheServerLoop()
+    {
+        // Over REAL sockets: while one request is parked in the handler, another connection must
+        // still be served. With the synchronous handler this would deadlock the whole loop.
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+        var gate = new TaskCompletionSource();
+
+        await using var server = new Http3Server(cert, async (request, token) =>
+        {
+            if (request.Path == "/slow")
+                await gate.Task.WaitAsync(token).ConfigureAwait(false);
+            return new Http3Response { Status = 200, Body = Encoding.UTF8.GetBytes($"ok {request.Path}") };
+        }, port: 0);
+        server.Start();
+
+        await using var slowClient = new Http3Client("localhost", server.Port, validation);
+        await slowClient.ConnectAsync(TimeSpan.FromSeconds(10));
+        Task<Http3Response> slow = slowClient.GetAsync("/slow");
+
+        await using var fastClient = new Http3Client("localhost", server.Port, validation);
+        await fastClient.ConnectAsync(TimeSpan.FromSeconds(10));
+        Http3Response fast = await fastClient.GetAsync("/fast").WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.That(fast.BodyText, Is.EqualTo("ok /fast"), "The second connection must be served meanwhile.");
+        Assert.That(slow.IsCompleted, Is.False, "The slow request is still parked.");
+
+        gate.SetResult();
+        Http3Response slowResponse = await slow.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.That(slowResponse.BodyText, Is.EqualTo("ok /slow"));
+    }
+
+    [Test]
+    public async Task StreamingBody_OverRealLoopbackUdp_ArrivesByteExact()
+    {
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+        byte[] payload = new byte[200_000];
+        new Random(42).NextBytes(payload);
+
+        await using var server = new Http3Server(cert,
+            (_, _) => Task.FromResult(new Http3Response
+            {
+                Status = 200,
+                BodyStream = new MemoryStream(payload, writable: false),
+            }), port: 0);
+        server.Start();
+
+        await using var client = new Http3Client("localhost", server.Port, validation);
+        await client.ConnectAsync(TimeSpan.FromSeconds(10));
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Http3Response response = await client.GetAsync("/stream").WaitAsync(TimeSpan.FromSeconds(60));
+        watch.Stop();
+
+        Assert.That(response.Status, Is.EqualTo(200));
+        Assert.That(response.Body, Is.EqualTo(payload), "streamed over real UDP, byte-exact.");
+        TestContext.Out.WriteLine($"200 KB streamed over real UDP in {watch.ElapsedMilliseconds} ms");
+    }
+
+    [Test]
     public async Task GetAsync_OverRealLoopbackUdp_Returns200()
     {
         using var cert = ServerCertificate.CreateSelfSigned("localhost");

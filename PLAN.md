@@ -727,6 +727,32 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
   slow drainage, capping, limit ≥ starting value; QUIC end-to-end: connection window grows under
   sustained transfer). **Live:** Cloudflare GET also with `--small` (48 KiB starting window) over
   real RTT, curl 200 KB POST upload echoed byte-exactly.
+- ✅ **Asynchronous request handler + streaming response bodies** — until now the handler was
+  `Func<Http3Request, Http3Response>` running INLINE on the pump (one slow request stalled the
+  connection, and in `Http3Server` every other one on the same loop), and the body was a fully
+  buffered `byte[]`.
+  - **Async handler**: new overload `Func<Http3Request, CancellationToken, Task<Http3Response>>` on
+    `Http3ServerConnection`/`Http3Server`. The deterministic pump model is preserved — the pump
+    NEVER awaits, it dispatches the handler and polls the task (`PumpResponses`), so all tests stay
+    synchronous and reproducible. The synchronous overload remains (wrapped in `Task.FromResult`).
+    A handler that throws or is cancelled becomes a **500**, never a connection error. The token is
+    cancelled when the client aborts the request (RFC 9114 §4.1.1).
+  - **Streaming response body**: `Http3Response.BodyStream` — the server pulls 16 KB chunks and
+    emits them as DATA frames; a new read only happens while less than 64 KB is waiting on the
+    stream (`StreamSendBuffer.PendingBytes`, new). That watermark is what makes it streaming rather
+    than buffering: **without it a 4 MB body is read into memory in full even though the peer grants
+    no credit** (verified — the test fails with the watermark removed). End of stream ⇒ trailer
+    section + FIN, then the source is disposed.
+  - `CheckTimeouts` now also pumps, otherwise a handler completing without incoming traffic would
+    never get its response out; `HasPendingRequests` (graceful shutdown) waits for the response to
+    be fully on the wire, not merely produced.
+  - 12 tests (async dispatch, slow request does not block a second one — in-process AND over real
+    sockets, handler exception ⇒ 500, sync overload unchanged, 300 KB streamed byte-exact,
+    backpressure, trailers + dispose, empty body, cancellation). **Live:** `curl --http3` against
+    `H3Server` unchanged (GET/POST/`/big` 300 000 B in 34 ms/`/hints`), interop 8/8.
+  - Deliberately NOT included: streaming REQUEST bodies (the handler would have to be invoked at
+    HEADERS instead of FIN, which moves content-length/malformed validation into a streaming model
+    and touches the CONNECT/WebTransport paths) — separate task.
 - ✅ **async API — Task-based facades over real sockets** (`src/Http3/Http3Client.cs` /
   `Http3Server.cs`): the deterministic, transport-agnostic core remains untouched (all tests still
   synchronous in-process); on top, the facades own the UDP socket and a background pump

@@ -81,6 +81,13 @@ public sealed class StreamSendBuffer(ulong streamId)
     public ulong ReliableSize { get; private set; }
 
     /// <summary>
+    /// Bytes written but not yet emitted in frames. The backpressure signal for a streaming
+    /// producer: keep filling only while this stays below a watermark, otherwise a fast producer
+    /// would buffer the whole body in memory and defeat the point of streaming.
+    /// </summary>
+    public int PendingBytes => _pending.Count;
+
+    /// <summary>
     /// There is still unemitted data or a pending FIN.
     /// </summary>
     public bool HasPending => !IsReset && (_pending.Count > 0 || (_finQueued && !_finSent));

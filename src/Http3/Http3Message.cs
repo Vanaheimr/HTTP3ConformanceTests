@@ -113,6 +113,15 @@ public sealed class Http3Response
     public byte[] Body { get; init; } = [];
 
     /// <summary>
+    /// Streaming response body — the alternative to the fully buffered <see cref="Body"/>. The
+    /// server pulls chunks from the stream and emits them as DATA frames as the send window allows,
+    /// so a large or open-ended body never has to sit in memory. Read to the end (0 bytes) marks the
+    /// end of the body; the server disposes the stream afterwards. When set, <see cref="Body"/> is
+    /// ignored.
+    /// </summary>
+    public Stream? BodyStream { get; init; }
+
+    /// <summary>
     /// Interim responses (1xx) that preceded or should precede the final response —
     /// when sending, the server writes one separate HEADERS section per entry BEFORE the final one.
     /// </summary>

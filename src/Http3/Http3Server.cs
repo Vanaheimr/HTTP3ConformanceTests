@@ -70,6 +70,17 @@ public sealed class Http3Server : IAsyncDisposable
     { }
 
     /// <summary>
+    /// Same, but with an asynchronous handler — the recommended form. The handler runs off the loop:
+    /// after its first await the loop carries on, so a slow request no longer stalls the other
+    /// connections. The token is cancelled when the client aborts the request or the server stops.
+    /// </summary>
+    public Http3Server(ServerCertificate certificate, Func<Http3Request, CancellationToken, Task<Http3Response>> handler,
+                       int port = 443, TimeProvider? timeProvider = null, KeyLog? keyLog = null)
+        : this(port, () => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider, keyLog: keyLog),
+               timeProvider: timeProvider)
+    { }
+
+    /// <summary>
     /// Fully configurable: <paramref name="connectionFactory"/> creates the (arbitrarily configured)
     /// connection per client — Extended CONNECT, datagrams, WebTransport, resumption etc. included.
     /// </summary>
@@ -188,8 +199,27 @@ public sealed class Http3Server : IAsyncDisposable
         });
     }
 
+    /// <summary>
+    /// Sends everything the connection currently has queued. Streaming bodies produce their data in
+    /// portions, so we keep pumping while packets keep coming instead of emitting one chunk per
+    /// 20 ms tick — the loop is bounded so one connection cannot monopolise it.
+    /// </summary>
     private void Flush(ServerConn conn)
-        => _sender.Send(_udp!.Client, conn.Connection.GetDatagramsToSend(), conn.Endpoint);
+    {
+        for (int round = 0; round < MaxFlushRoundsPerPass; round++)
+        {
+            IReadOnlyList<byte[]> datagrams = conn.Connection.GetDatagramsToSend();
+            if (datagrams.Count == 0)
+                return;
+            _sender.Send(_udp!.Client, datagrams, conn.Endpoint);
+            conn.Connection.CheckTimeouts(); // drives handler tasks and the next body chunk
+        }
+    }
+
+    /// <summary>
+    /// Upper bound on send rounds per connection and pass — fairness between connections.
+    /// </summary>
+    private const int MaxFlushRoundsPerPass = 16;
 
     /// <summary>
     /// Reads the destination connection ID: for long headers from the header itself, for short
