@@ -81,6 +81,18 @@ public sealed class Http3Server : IAsyncDisposable
     { }
 
     /// <summary>
+    /// Same, with a streaming request body: the handler starts right after the header section and
+    /// reads the body as it arrives, so a large upload never has to be buffered. A handler that
+    /// reads slowly throttles the peer via QUIC flow control.
+    /// </summary>
+    public Http3Server(ServerCertificate certificate,
+                       Func<Http3Request, Http3RequestBody, CancellationToken, Task<Http3Response>> handler,
+                       int port = 443, TimeProvider? timeProvider = null, KeyLog? keyLog = null)
+        : this(port, () => new Http3ServerConnection(certificate, handler, timeProvider: timeProvider, keyLog: keyLog),
+               timeProvider: timeProvider)
+    { }
+
+    /// <summary>
     /// Fully configurable: <paramref name="connectionFactory"/> creates the (arbitrarily configured)
     /// connection per client — Extended CONNECT, datagrams, WebTransport, resumption etc. included.
     /// </summary>

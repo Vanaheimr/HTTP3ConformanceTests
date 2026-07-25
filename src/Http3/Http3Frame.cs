@@ -62,6 +62,25 @@ public static class Http3Frames
     /// <paramref name="consumed"/> indicates how many bytes were consumed – the rest is a
     /// still-incomplete frame (wait for more stream data).
     /// </summary>
+    /// <summary>
+    /// Reads only the HEADER of the next frame (type + length) without waiting for its payload.
+    /// Needed for streaming request bodies: a DATA frame can carry the entire upload, so waiting for
+    /// it to be complete would buffer exactly what streaming is meant to avoid.
+    /// </summary>
+    /// <param name="headerLength">Bytes consumed by type + length.</param>
+    public static bool TryReadFrameHeader(ReadOnlySpan<byte> buffer, out ulong type, out ulong length,
+                                          out int headerLength)
+    {
+        var reader = new BufferReader(buffer);
+        type = 0;
+        length = 0;
+        headerLength = 0;
+        if (!reader.TryReadVarInt(out type) || !reader.TryReadVarInt(out length))
+            return false; // header not yet complete
+        headerLength = reader.Position;
+        return true;
+    }
+
     public static bool TryReadAll(ReadOnlyMemory<byte> buffer, out List<Http3Frame> frames, out int consumed)
     {
         frames = [];

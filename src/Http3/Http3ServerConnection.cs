@@ -42,6 +42,10 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     private readonly QuicServerConnection _quic;
     // Normalised handler: the synchronous overload is wrapped, so the pump has ONE shape to drive.
     private readonly Func<Http3Request, CancellationToken, Task<Http3Response>> _handler;
+
+    // Optional streaming handler: invoked right after the header section, with the body still
+    // arriving. When set, it takes precedence over _handler for ordinary requests.
+    private readonly Func<Http3Request, Http3RequestBody, CancellationToken, Task<Http3Response>>? _streamingHandler;
     private readonly Dictionary<ulong, RequestState> _requests = [];
     private readonly Http3Qpack _qpack;
     private bool _http3Initialized;
@@ -54,6 +58,43 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     private readonly Func<Http3Request, Action<WebTransportSession>?>? _webTransportHandler;
     private readonly Func<Http3Request, IReadOnlyList<string>, string?>? _webTransportProtocolSelector;
     private int _wtSessionCount;
+
+    /// <summary>
+    /// Streaming handler: invoked right after the header section, with the request body still
+    /// arriving. The <see cref="Http3RequestBody"/> is read asynchronously, so a large upload is
+    /// processed as it flows instead of being buffered in full. A handler that reads slowly
+    /// throttles the peer via QUIC flow control (see <see cref="Http3RequestBody.HighWatermark"/>).
+    /// <para>Note the shifted contract compared with the buffered handlers: it runs BEFORE the
+    /// request is complete, so <see cref="Http3Request.Body"/> is empty and trailers are not yet
+    /// known. The content-length consistency check (RFC 9114 §4.1.2) therefore happens at the end of
+    /// the body; a violation aborts the request stream with H3_MESSAGE_ERROR.</para>
+    /// </summary>
+    public Http3ServerConnection(
+        ServerCertificate certificate,
+        Func<Http3Request, Http3RequestBody, CancellationToken, Task<Http3Response>> handler,
+        TransportParameters? transportParameters = null,
+        bool requireRetry = false,
+        ulong qpackMaxTableCapacity = 4096,
+        IReadOnlyList<Quic.Tls.NamedGroup>? preferredGroups = null,
+        Quic.Tls.ServerResumptionCache? resumptionCache = null,
+        uint maxEarlyDataSize = 0,
+        Quic.Packets.StatelessResetTokenGenerator? statelessResetTokens = null,
+        ulong? maxFieldSectionSize = null,
+        Func<Http3Request, Http3ConnectResult>? connectHandler = null,
+        bool enableDatagrams = false,
+        ulong webTransportMaxSessions = 0,
+        Func<Http3Request, Action<WebTransportSession>?>? webTransportHandler = null,
+        Func<Http3Request, IReadOnlyList<string>, string?>? webTransportProtocolSelector = null,
+        TimeProvider? timeProvider = null,
+        KeyLog? keyLog = null,
+        QlogWriter? qlog = null)
+        : this(certificate, _ => new Http3Response { Status = 500 }, transportParameters, requireRetry,
+               qpackMaxTableCapacity, preferredGroups, resumptionCache, maxEarlyDataSize, statelessResetTokens,
+               maxFieldSectionSize, connectHandler, enableDatagrams, webTransportMaxSessions,
+               webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog)
+    {
+        _streamingHandler = handler;
+    }
 
     /// <summary>
     /// Asynchronous handler (RECOMMENDED for real servers): the request is dispatched, the pump
@@ -538,6 +579,12 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
                 continue;
             }
 
+            // Backpressure for a streaming request body: while the handler has not consumed what it
+            // was given, leave the data ON the QUIC stream. Its receive window then stays shut and
+            // the peer stops sending — instead of us buffering the upload in memory.
+            if (state.RequestBody is { IsSaturated: true })
+                continue;
+
             byte[] chunk = state.Stream.Read();
             if (chunk.Length > 0)
                 state.Buffer.Append(chunk);
@@ -564,7 +611,15 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
                     continue; // header still incomplete — next pump
             }
 
-            if (state.Buffer.Count > 0 &&
+            // Streaming body: consume DATA frames INCREMENTALLY. A client may pack the whole upload
+            // into a single DATA frame — waiting for it to be complete (as TryReadAll does) would
+            // buffer exactly what streaming is supposed to avoid.
+            if (state.RequestBody is not null)
+                ConsumeStreamingData(state);
+
+            // While a DATA frame is open, the buffer starts in the MIDDLE of its payload — the frame
+            // parser must not look at it, or it would read payload bytes as a frame header.
+            if (state.DataRemaining == 0 && state.Buffer.Count > 0 &&
                 Http3Frames.TryReadAll(state.Buffer.Memory, out List<Http3Frame> frames, out int consumed))
             {
                 foreach (Http3Frame frame in frames)
@@ -578,6 +633,11 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             while (state.Pending.Count > 0 && !state.Responded)
             {
                 Http3Frame frame = state.Pending.Peek();
+                // Streaming body: while the handler has not consumed what it already has, the DATA
+                // frame stays queued — same mechanism as a blocked QPACK section. Together with the
+                // read stop above, the QUIC receive window closes and the peer throttles.
+                if (frame.Type == Http3FrameType.Data && state.RequestBody is { IsSaturated: true })
+                    break;
                 if (!ProcessRequestFrame(state, frame, out bool blocked))
                     return; // connection error reported
                 if (blocked)
@@ -596,7 +656,13 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
 
             // Respond as soon as the message is COMPLETE (FIN received, all frames processed) —
             // only then is the request body final (RFC 9114 §4.1).
-            if (!state.Responded && state.Stream.IsReceiveComplete && state.Pending.Count == 0)
+            // Streaming request: the FIN ends the body, the response comes from the handler task.
+            if (state.RequestBody is not null && state.Stream.IsReceiveComplete &&
+                state.Pending.Count == 0 && state.DataRemaining == 0 && state.Buffer.Count == 0)
+                CompleteStreamingBody(state);
+
+            if (!state.Responded && state.RequestBody is null &&
+                state.Stream.IsReceiveComplete && state.Pending.Count == 0)
             {
                 // §7.1: a stream ending cleanly in the middle of a frame is an H3_FRAME_ERROR.
                 if (state.Buffer.Count > 0)
@@ -815,6 +881,10 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
                     // waiting for a FIN would be pointless for a tunnel.
                     if (state.Request.Method == "CONNECT")
                         return HandleConnect(state);
+
+                    // Streaming handler: start right here, with the body still arriving.
+                    if (_streamingHandler is not null)
+                        StartStreamingHandler(state);
                 }
                 else
                 {
@@ -833,7 +903,10 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
                 FatalConnectionError(Http3Error.FrameUnexpected, "DATA outside message content"); // §4.1
                 return false;
             case Http3FrameType.Data:
-                state.Body.AddRange(frame.Payload.ToArray());
+                if (state.RequestBody is { } streamingBody)
+                    streamingBody.Deliver(frame.Payload.Span); // straight to the handler
+                else
+                    state.Body.AddRange(frame.Payload.ToArray());
                 return true;
 
             case Http3FrameType.Settings:
@@ -1043,6 +1116,89 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
     private const int BodyHighWatermark = 64 * 1024;
 
     /// <summary>
+    /// Starts a streaming handler right after the header section: it receives the request (whose
+    /// <see cref="Http3Request.Body"/> stays empty) plus the body reader that the pump feeds from
+    /// the DATA frames as they arrive.
+    /// </summary>
+    private void StartStreamingHandler(RequestState state)
+    {
+        state.RequestBody = new Http3RequestBody();
+        state.Cancellation = new CancellationTokenSource();
+        // NOTE: deliberately NOT Responded = true. That flag stops frame processing for the stream —
+        // but a streaming request needs exactly that to continue, since its body arrives as DATA
+        // frames. The buffered "respond at FIN" path is excluded via RequestBody instead.
+        RequestsHandled++;
+        try
+        {
+            state.HandlerTask = _streamingHandler!(state.Request!, state.RequestBody, state.Cancellation.Token);
+        }
+        catch (Exception)
+        {
+            state.HandlerTask = Task.FromResult(new Http3Response { Status = 500 });
+        }
+    }
+
+    /// <summary>
+    /// Consumes DATA frames of a streaming request piece by piece: an open frame's payload is handed
+    /// to the reader as it arrives, and a following frame header is only opened once the reader has
+    /// capacity again. Frames other than DATA are left to the normal parser.
+    /// </summary>
+    private void ConsumeStreamingData(RequestState state)
+    {
+        Http3RequestBody body = state.RequestBody!;
+        while (state.Buffer.Count > 0)
+        {
+            if (state.DataRemaining > 0)
+            {
+                if (body.IsSaturated)
+                    return; // reader full ⇒ leave the rest in the buffer/on the stream
+                int take = (int)Math.Min(state.DataRemaining, (ulong)state.Buffer.Count);
+                body.Deliver(state.Buffer.Memory.Span[..take]);
+                state.Buffer.Consume(take);
+                state.DataRemaining -= (ulong)take;
+                continue;
+            }
+
+            // Only open a NEW DATA frame here; everything else belongs to the normal parser.
+            if (!Http3Frames.TryReadFrameHeader(state.Buffer.Memory.Span, out ulong type, out ulong length,
+                                                out int headerLength) ||
+                type != Http3FrameType.Data)
+                return;
+            if (!state.HeadersReceived || state.TrailersSeen)
+                return; // §4.1 violation — let the normal parser report it
+            if (body.IsSaturated)
+                return;
+
+            state.Buffer.Consume(headerLength);
+            state.DataRemaining = length;
+        }
+    }
+
+    /// <summary>
+    /// Ends the body of a streaming request: checks the content-length consistency
+    /// (RFC 9114 §4.1.2) and signals end of stream to the reader.
+    /// </summary>
+    private void CompleteStreamingBody(RequestState state)
+    {
+        if (state.RequestBody is not { } body || state.BodyCompleted)
+            return;
+        state.BodyCompleted = true;
+
+        if (Http3MessageValidator.ValidateContentLength(state.Request!.AdditionalHeaders,
+                body.TotalReceived, contentNeverPresent: false) is { } problem)
+        {
+            // The handler is already running — we cannot answer with a 400 any more, so the request
+            // stream is aborted with H3_MESSAGE_ERROR (§4.1.2) and the reader sees the error.
+            body.Fail(new InvalidOperationException($"malformed request: {problem}"));
+            state.Stream.Reset(Http3Error.MessageError);
+            state.Stream.AbortRead(Http3Error.MessageError);
+            state.Cancellation?.Cancel();
+            return;
+        }
+        body.Complete();
+    }
+
+    /// <summary>
     /// Drives everything that cannot be finished synchronously: handler tasks that have completed,
     /// and streaming response bodies. Runs on every pump — i.e. on incoming datagrams AND on the
     /// timer tick, so a response gets out even without any traffic.
@@ -1055,6 +1211,9 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             if (state.Cancellation is { IsCancellationRequested: false } cts &&
                 (state.Stream.IsResetByPeer || state.Stream.Send.IsReset))
             {
+                // A reader waiting on the body must not hang forever.
+                state.RequestBody?.Fail(new OperationCanceledException("the request was aborted"));
+                state.BodyCompleted = true;
                 cts.Cancel();
                 state.DisposeResponseResources();
                 state.ResponseComplete = true;
@@ -1272,6 +1431,20 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         // --- async handler ---
         public Task<Http3Response>? HandlerTask { get; set; }
         public CancellationTokenSource? Cancellation { get; set; }
+
+        /// <summary>
+        /// Body reader of a streaming request (set only with a streaming handler).
+        /// </summary>
+        public Http3RequestBody? RequestBody { get; set; }
+
+        /// <summary>End of body already signalled to the reader (FIN or abort).</summary>
+        public bool BodyCompleted { get; set; }
+
+        /// <summary>
+        /// Bytes still outstanding of the DATA frame currently being consumed incrementally
+        /// (streaming body only). &gt; 0 means: everything arriving next is payload.
+        /// </summary>
+        public ulong DataRemaining { get; set; }
 
         // --- streaming response body ---
         public Stream? BodyStream { get; set; }

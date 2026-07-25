@@ -750,9 +750,25 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
     sockets, handler exception ⇒ 500, sync overload unchanged, 300 KB streamed byte-exact,
     backpressure, trailers + dispose, empty body, cancellation). **Live:** `curl --http3` against
     `H3Server` unchanged (GET/POST/`/big` 300 000 B in 34 ms/`/hints`), interop 8/8.
-  - Deliberately NOT included: streaming REQUEST bodies (the handler would have to be invoked at
-    HEADERS instead of FIN, which moves content-length/malformed validation into a streaming model
-    and touches the CONNECT/WebTransport paths) — separate task.
+  - **Streaming request body**: third handler overload
+    `Func<Http3Request, Http3RequestBody, CancellationToken, Task<Http3Response>>` — invoked right
+    after the header section, with the upload still arriving. Three things this needed:
+    - **Incremental DATA parsing.** A client packs the whole upload into ONE DATA frame, and
+      `Http3Frames.TryReadAll` only yields complete frames — so waiting for it would buffer exactly
+      what streaming avoids. New `TryReadFrameHeader` + `ConsumeStreamingData` hand payload bytes
+      over as they arrive. While a DATA frame is open the normal parser MUST NOT look at the buffer,
+      or it reads payload bytes as a frame header (that bug produced corrupted uploads).
+    - **The `Responded` flag could not be reused.** It means "stop processing frames of this
+      stream" — the opposite of what a streaming request needs, since its body arrives as frames.
+      The buffered "respond at FIN" path is excluded via `RequestBody` instead.
+    - **`Http3RequestBody` is thread-safe**, unlike `Http3Tunnel`. A handler that awaits anything
+      else resumes on a thread-pool thread and reads from there, concurrently with the pump. A
+      waiting read is completed OUTSIDE the lock so a continuation that reads again cannot deadlock.
+    Backpressure: above a 64 KB watermark the connection stops taking data off the QUIC stream and
+    leaves the DATA frame queued, so the receive window closes and the peer throttles (verified: a
+    handler that reads nothing keeps 2 MB from piling up). Content-length is checked at the end of
+    the body; a violation aborts the stream with H3_MESSAGE_ERROR and the reader sees the error, as
+    does an abort by the client. 9 tests. **Live:** `curl --http3` POSTs 500 KB, echoed byte-exact.
 - ✅ **Throughput of the socket facades** — both pump loops (`Http3Client.PumpLoopAsync`,
   `Http3Server.LoopAsync`) processed exactly ONE datagram per await cycle: per packet a
   `Task.WhenAny`, a freshly allocated `Task.Delay` timer that was then **abandoned** (never
