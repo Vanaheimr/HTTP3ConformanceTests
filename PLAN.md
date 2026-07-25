@@ -769,6 +769,24 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
     handler that reads nothing keeps 2 MB from piling up). Content-length is checked at the end of
     the body; a violation aborts the stream with H3_MESSAGE_ERROR and the reader sees the error, as
     does an abort by the client. 9 tests. **Live:** `curl --http3` POSTs 500 KB, echoed byte-exact.
+- ✅ **Server hardening (DoS)** — the facade held its connections in an unbounded `List` that was
+  scanned LINEARLY per datagram, so the per-packet cost grew with the number of clients; and every
+  Initial packet created a connection incl. a certificate signature.
+  - **Connection limit** (`maxConnections`, default 1024): beyond it Initials are dropped
+    **silently** — every answer would be an amplification vector. Counted in `ConnectionsRefused`;
+    existing connections keep being served.
+  - **Demux index** `ConnectionId → connection` (plus one for the endpoint) instead of the linear
+    scan; filled lazily on the first packet for an ID, cleaned up when a connection is reaped. With
+    8 random CID bytes a collision between connections is negligible.
+  - **Request body limit** (`maxRequestBodySize`, default unlimited ⇒ no behaviour change): a
+    buffered body above it is answered with **413** + read abort, instead of being collected to the
+    end in memory. Streaming handlers are deliberately exempt — they decide themselves how much they
+    consume. H3Server sets 8 MiB as an example.
+  - 4 tests (limit + existing connections stay alive, 12 clients routed correctly, 413, streaming
+    exempt). **Live:** `curl --http3` incl. a 500 KB POST unchanged, interop 8/8.
+  - Still open (separate task): **stateless Retry** (RFC 9000 §8.1) — a spoofed-source flood can
+    still fill the cap, because address validation currently happens only after the connection
+    object exists.
 - ✅ **Throughput of the socket facades** — both pump loops (`Http3Client.PumpLoopAsync`,
   `Http3Server.LoopAsync`) processed exactly ONE datagram per await cycle: per packet a
   `Task.WhenAny`, a freshly allocated `Task.Delay` timer that was then **abandoned** (never

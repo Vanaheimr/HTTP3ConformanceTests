@@ -175,6 +175,7 @@ while (true)
             qlog: qlogDir is null ? null
                 : QlogWriter.ToFile(Path.Combine(qlogDir, $"conn-{++qlogCounter:D3}.sqlog"), isServer: true),
             maxFieldSectionSize: 16_384,        // RFC 9114 §4.2.2: oversized request headers ⇒ 431
+            maxRequestBodySize: 8 * 1024 * 1024, // buffered bodies above this ⇒ 413 (own limit)
             connectHandler: HandleConnect,      // RFC 9220: WebSockets via Extended CONNECT
             enableDatagrams: true,              // RFC 9297/9221: HTTP datagrams
             webTransportMaxSessions: 4,         // draft-webtrans-http3: WebTransport

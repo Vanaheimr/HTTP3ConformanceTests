@@ -80,6 +80,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         uint maxEarlyDataSize = 0,
         Quic.Packets.StatelessResetTokenGenerator? statelessResetTokens = null,
         ulong? maxFieldSectionSize = null,
+        ulong? maxRequestBodySize = null,
         Func<Http3Request, Http3ConnectResult>? connectHandler = null,
         bool enableDatagrams = false,
         ulong webTransportMaxSessions = 0,
@@ -90,7 +91,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         QlogWriter? qlog = null)
         : this(certificate, _ => new Http3Response { Status = 500 }, transportParameters, requireRetry,
                qpackMaxTableCapacity, preferredGroups, resumptionCache, maxEarlyDataSize, statelessResetTokens,
-               maxFieldSectionSize, connectHandler, enableDatagrams, webTransportMaxSessions,
+               maxFieldSectionSize, maxRequestBodySize, connectHandler, enableDatagrams, webTransportMaxSessions,
                webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog)
     {
         _streamingHandler = handler;
@@ -138,6 +139,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         uint maxEarlyDataSize = 0,
         Quic.Packets.StatelessResetTokenGenerator? statelessResetTokens = null,
         ulong? maxFieldSectionSize = null,
+        ulong? maxRequestBodySize = null,
         Func<Http3Request, Http3ConnectResult>? connectHandler = null,
         bool enableDatagrams = false,
         ulong webTransportMaxSessions = 0,
@@ -148,7 +150,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         QlogWriter? qlog = null)
         : this(certificate, _ => new Http3Response { Status = 500 }, transportParameters, requireRetry,
                qpackMaxTableCapacity, preferredGroups, resumptionCache, maxEarlyDataSize, statelessResetTokens,
-               maxFieldSectionSize, connectHandler, enableDatagrams, webTransportMaxSessions,
+               maxFieldSectionSize, maxRequestBodySize, connectHandler, enableDatagrams, webTransportMaxSessions,
                webTransportHandler, webTransportProtocolSelector, timeProvider, keyLog, qlog)
     {
         _handler = handler;
@@ -171,6 +173,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
         uint maxEarlyDataSize = 0,
         Quic.Packets.StatelessResetTokenGenerator? statelessResetTokens = null,
         ulong? maxFieldSectionSize = null,
+        ulong? maxRequestBodySize = null,
         Func<Http3Request, Http3ConnectResult>? connectHandler = null,
         bool enableDatagrams = false,
         ulong webTransportMaxSessions = 0,
@@ -202,6 +205,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
                 _webTransport.ClaimStream(stream, sessionId, leftover, bidirectional: false),
         };
         _localMaxFieldSectionSize = maxFieldSectionSize;
+        _maxRequestBodySize = maxRequestBodySize;
     }
 
     /// <summary>
@@ -230,6 +234,7 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             _pendingPriorityUpdates[streamId] = priority;
     }
 
+    private readonly ulong? _maxRequestBodySize; // RFC 9114 has no limit of its own — ours (413)
     private readonly ulong? _localMaxFieldSectionSize; // our announced limit (RFC 9114 §4.2.2)
     private readonly Func<Http3Request, Http3ConnectResult>? _connectHandler; // Extended CONNECT (RFC 8441/9220)
     private readonly bool _localDatagramsEnabled;      // HTTP datagrams enabled locally (RFC 9297)
@@ -904,9 +909,22 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
                 return false;
             case Http3FrameType.Data:
                 if (state.RequestBody is { } streamingBody)
+                {
                     streamingBody.Deliver(frame.Payload.Span); // straight to the handler
-                else
-                    state.Body.AddRange(frame.Payload.ToArray());
+                    return true;
+                }
+                state.Body.AddRange(frame.Payload.ToArray());
+                // Body limit (our own — RFC 9114 defines none): a buffered body grows in memory, so
+                // an oversized upload is refused with 413 instead of being collected to the end.
+                // Streaming handlers are exempt: they decide themselves how much they consume.
+                if (_maxRequestBodySize is { } bodyLimit && (ulong)state.Body.Count > bodyLimit)
+                {
+                    state.Stream.AbortRead(Http3Error.NoError); // §4.1 early-response pattern
+                    SendResponse(state.Stream.Id.Value, state.Stream,
+                                 new Http3Response { Status = 413 }, state); // Content Too Large
+                    state.Responded = true;
+                    return true;
+                }
                 return true;
 
             case Http3FrameType.Settings:

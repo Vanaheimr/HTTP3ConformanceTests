@@ -51,7 +51,15 @@ public sealed class Http3Server : IAsyncDisposable
     private readonly StatelessResetTokenGenerator? _statelessResetTokens;
     private readonly TimeProvider _timeProvider;
     private readonly int _requestedPort;
+    private readonly int _maxConnections;
     private readonly List<ServerConn> _connections = [];
+
+    // Demux index: connection ID -> connection. Without it every datagram cost a linear scan over
+    // ALL connections, so the per-packet cost grew with the number of clients — an easy lever for
+    // an attacker. Filled lazily on the first packet for a connection ID; 8 random bytes make a
+    // collision between connections negligible.
+    private readonly Dictionary<ConnectionId, ServerConn> _byConnectionId = [];
+    private readonly Dictionary<IPEndPoint, ServerConn> _byEndpoint = [];
     private readonly CancellationTokenSource _cts = new();
     private readonly UdpBatchSender _sender = new();
 
@@ -96,15 +104,33 @@ public sealed class Http3Server : IAsyncDisposable
     /// Fully configurable: <paramref name="connectionFactory"/> creates the (arbitrarily configured)
     /// connection per client — Extended CONNECT, datagrams, WebTransport, resumption etc. included.
     /// </summary>
+    /// <param name="maxConnections">
+    /// Upper bound on simultaneously held connections. Beyond it new Initial packets are dropped
+    /// SILENTLY — every answer would be an amplification vector, and a handshake costs a signature.
+    /// See <see cref="ConnectionsRefused"/>.
+    /// </param>
     public Http3Server(int port, Func<Http3ServerConnection> connectionFactory,
                        StatelessResetTokenGenerator? statelessResetTokens = null,
-                       TimeProvider? timeProvider = null)
+                       TimeProvider? timeProvider = null,
+                       int maxConnections = DefaultMaxConnections)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxConnections, 1);
         _requestedPort = port;
         _connectionFactory = connectionFactory;
         _statelessResetTokens = statelessResetTokens;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _maxConnections = maxConnections;
     }
+
+    /// <summary>
+    /// Default upper bound on simultaneous connections.
+    /// </summary>
+    public const int DefaultMaxConnections = 1024;
+
+    /// <summary>
+    /// Number of Initial packets rejected because the connection limit was reached (diagnostics).
+    /// </summary>
+    public long ConnectionsRefused { get; private set; }
 
     /// <summary>
     /// The actually bound UDP port (with 0 in the constructor: the one assigned by the OS).
@@ -180,12 +206,22 @@ public sealed class Http3Server : IAsyncDisposable
 
     private void HandleDatagram(byte[] datagram, IPEndPoint from)
     {
-        // 1) Via the destination connection ID (stable after the handshake, even on an address change) …
-        ServerConn? conn = ExtractDcid(datagram) is { } dcid
-            ? _connections.FirstOrDefault(c => c.Connection.OwnsConnectionId(dcid))
-            : null;
+        // 1) Via the destination connection ID (stable after the handshake, even on an address change).
+        //    Index first, linear scan only on a miss — and the result is then cached.
+        ServerConn? conn = null;
+        ConnectionId? dcid = ExtractDcid(datagram);
+        if (dcid is { } id)
+        {
+            if (!_byConnectionId.TryGetValue(id, out conn))
+            {
+                conn = _connections.FirstOrDefault(c => c.Connection.OwnsConnectionId(id));
+                if (conn is not null)
+                    _byConnectionId[id] = conn; // learn the ID, no scan next time
+            }
+        }
         // 2) … otherwise via the sender address (handshake / new connection).
-        conn ??= _connections.FirstOrDefault(c => c.Endpoint.Equals(from));
+        if (conn is null && _byEndpoint.TryGetValue(from, out ServerConn? byEndpoint))
+            conn = byEndpoint;
 
         if (conn is null)
         {
@@ -204,13 +240,26 @@ public sealed class Http3Server : IAsyncDisposable
             if (!PacketFormat.IsLongHeader(first) || PacketFormat.GetLongPacketType(first) != LongPacketType.Initial)
                 return;
 
+            // Connection limit: beyond it drop SILENTLY. Any answer would be an amplification
+            // vector, and every handshake costs a certificate signature.
+            if (_connections.Count >= _maxConnections)
+            {
+                ConnectionsRefused++;
+                return;
+            }
+
             conn = new ServerConn(_connectionFactory(), from);
             _connections.Add(conn);
+            _byEndpoint[from] = conn;
+            if (dcid is { } initialDcid)
+                _byConnectionId[initialDcid] = conn;
         }
         else if (!conn.Endpoint.Equals(from))
         {
             // Connection migration (RFC 9000 §9): validate the new path.
+            _byEndpoint.Remove(conn.Endpoint);
             conn.Endpoint = from;
+            _byEndpoint[from] = conn;
             conn.Connection.InitiatePathValidation();
         }
 
@@ -230,6 +279,7 @@ public sealed class Http3Server : IAsyncDisposable
         {
             if (!conn.Connection.IsIdleTimedOut)
                 return false;
+            Forget(conn);
             conn.Connection.Dispose();
             return true;
         });
@@ -258,6 +308,16 @@ public sealed class Http3Server : IAsyncDisposable
     private const int MaxFlushRoundsPerPass = 16;
 
     /// <summary>
+    /// Removes a closed connection from both demux indexes, so their entries cannot outlive it.
+    /// </summary>
+    private void Forget(ServerConn conn)
+    {
+        _byEndpoint.Remove(conn.Endpoint);
+        foreach (ConnectionId id in _byConnectionId.Where(e => e.Value == conn).Select(e => e.Key).ToList())
+            _byConnectionId.Remove(id);
+    }
+
+    /// <summary>
     /// Reads the destination connection ID: for long headers from the header itself, for short
     /// headers the first <see cref="LocalCidLength"/> bytes after the first byte (our CIDs are 8 bytes long).
     /// </summary>
@@ -281,6 +341,8 @@ public sealed class Http3Server : IAsyncDisposable
         foreach (ServerConn conn in _connections)
             conn.Connection.Dispose();
         _connections.Clear();
+        _byConnectionId.Clear();
+        _byEndpoint.Clear();
         _udp?.Dispose();
         _cts.Dispose();
     }
