@@ -1,9 +1,7 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Quic.Core\Quic.Core.csproj" />
-    <ProjectReference Include="..\..\src\Quic\Quic.csproj" />
-    <ProjectReference Include="..\..\src\Quic.Tls\Quic.Tls.csproj" />
+    <ProjectReference Include="..\..\libs\Hermod\Hermod\Hermod.csproj" />
     <ProjectReference Include="..\..\src\Http3\Http3.csproj" />
   </ItemGroup>
 

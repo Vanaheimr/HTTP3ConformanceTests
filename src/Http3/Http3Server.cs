@@ -191,7 +191,7 @@ public sealed class Http3Server : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_loopTask is not null)
             throw new InvalidOperationException("Start has already been called.");
-        _udp = new UdpClient(new IPEndPoint(IPAddress.Any, _requestedPort));
+        _udp = new UdpClient(new IPEndPoint(System.Net.IPAddress.Any, _requestedPort));
         Port = ((IPEndPoint)_udp.Client.LocalEndPoint!).Port;
         _loopTask = Task.Run(LoopAsync, CancellationToken.None);
     }

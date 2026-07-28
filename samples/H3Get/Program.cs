@@ -548,7 +548,7 @@ if (rotateCid)
 if (migrate)
 {
     using var migratedSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { ReceiveTimeout = 1500 };
-    migratedSocket.Bind(new IPEndPoint(IPAddress.Any, 0));
+    migratedSocket.Bind(new IPEndPoint(System.Net.IPAddress.Any, 0));
     Console.WriteLine($"\n== Connection migration == new local port {((IPEndPoint)migratedSocket.LocalEndPoint!).Port}; second GET over the new path …");
 
     ulong migStream = http3.SendRequest(Http3Request.Get(host, path));
@@ -563,7 +563,7 @@ if (migrate)
         {
             try
             {
-                EndPoint f = new IPEndPoint(IPAddress.Any, 0);
+                EndPoint f = new IPEndPoint(System.Net.IPAddress.Any, 0);
                 int m = migratedSocket.ReceiveFrom(buf, ref f);
                 http3.ProcessDatagram(buf.AsSpan(0, m));
             }
@@ -614,7 +614,7 @@ void ExchangeWith(Http3ClientConnection conn, Socket sock)
     {
         try
         {
-            EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+            EndPoint from = new IPEndPoint(System.Net.IPAddress.Any, 0);
             int n = sock.ReceiveFrom(buffer, ref from);
             if (Drop()) continue; // incoming loss
             conn.ProcessDatagram(buffer.AsSpan(0, n));
@@ -735,7 +735,7 @@ static bool TryInterop(string targetHost, out string crypto, out string result)
             {
                 try
                 {
-                    EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                    EndPoint from = new IPEndPoint(System.Net.IPAddress.Any, 0);
                     int n = socket.ReceiveFrom(buffer, ref from);
                     conn.ProcessDatagram(buffer.AsSpan(0, n));
                 }

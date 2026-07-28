@@ -529,22 +529,22 @@ time** in [INTEROP.md](INTEROP.md) (`dotnet run --project samples/H3Get -- --int
   plus the RFC 8439 block vector and a packet round-trip; the suite is negotiated and confirmed live
   against Cloudflare (`H3Get … --chacha20`)
 
-Building blocks in `src/Quic/Crypto/`: `TlsHkdf`, `TrafficKeys`, `InitialSecrets`,
+Building blocks in `libs/Hermod/Hermod/QUIC/Crypto/`: `TlsHkdf`, `TrafficKeys`, `InitialSecrets`,
 `PacketProtection` (AEAD **AES-GCM/ChaCha20-Poly1305** + header protection + packet-number
 reconstruction), `ChaCha20` (raw block for the HP mask), `RetryIntegrity`.
 
 ## Structure
 
 ```
-src/Quic.Core/     Shared primitives (VarInt from RFC 9000 §16, buffer reader/writer, ByteQueue/GsoBatcher) — used by all layers
-src/Quic.Tls/      QUIC-TLS binding: TLS 1.3 in the QUIC profile (messages, key schedule, ECDHE), no
-                   record layer — no back-reference to Quic (references only Quic.Core)
-src/Quic/          QUIC transport (crypto, packets, frames, streams, connection); uses Quic.Tls
+libs/Hermod/       QUIC lives in Hermod as of 2026-07-28 — Hermod/QUIC/ holds the transport
+                   (buffers, crypto, packets, frames, streams, connection, recovery, qlog) and
+                   TLS/ the TLS 1.3 handshake engine; its 299 tests are in HermodTests/QUIC/.
+                   Namespaces are unchanged (org.GraphDefined.Vanaheimr.Hermod.Quic.*).
 src/Http3.Qpack/   QPACK (static table, Huffman, encoder/decoder)
 src/Http3/         HTTP/3 (frames, client/server connection, malformed validation, priorities,
                    Extended-CONNECT tunnel) + WebSocket/ (RFC 6455) + WebTransport/ (draft-13)
                    + async API (Http3Client/Http3Server: Task facades with socket + background pump)
-tests/Http3.Tests/ NUnit tests (523), incl. RFC test vectors, "evil" raw-QUIC peers and a
+tests/Http3.Tests/ NUnit tests (224 HTTP/3; the 299 QUIC ones moved to HermodTests/QUIC/), incl. RFC test vectors, "evil" raw-QUIC peers and a
                    seeded lossy link (drop/reorder/duplicate)
 samples/H3Get/     HTTP/3 client: GET/POST against cloudflare-quic.com or our own server
                    (incl. --interop [matrix against 8 foreign stacks], --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,

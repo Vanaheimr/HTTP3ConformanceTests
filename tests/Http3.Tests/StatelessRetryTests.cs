@@ -40,7 +40,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3.Tests;
 public class StatelessRetryTests
 {
     private static IPEndPoint Client(string address = "192.0.2.10", int port = 4711)
-        => new(IPAddress.Parse(address), port);
+        => new(System.Net.IPAddress.Parse(address), port);
 
     private static ConnectionId Cid(params byte[] bytes) => new(bytes);
 
@@ -252,11 +252,11 @@ public class StatelessRetryTests
     /// </summary>
     private static async Task<List<UdpClient>> FloodAsync(int serverPort, int attempts)
     {
-        var target = new IPEndPoint(IPAddress.Loopback, serverPort);
+        var target = new IPEndPoint(System.Net.IPAddress.Loopback, serverPort);
         var sockets = new List<UdpClient>(attempts);
         for (int i = 0; i < attempts; i++)
         {
-            var socket = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            var socket = new UdpClient(new IPEndPoint(System.Net.IPAddress.Loopback, 0));
             sockets.Add(socket);
             byte[] initial = FakeInitial();
             socket.Send(initial, initial.Length, target);
@@ -283,8 +283,8 @@ public class StatelessRetryTests
             _ => new Http3Response { Status = 200 }, port: 0, addressValidation: new RetryTokenGenerator());
         server.Start();
 
-        using var attacker = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-        var target = new IPEndPoint(IPAddress.Loopback, server.Port);
+        using var attacker = new UdpClient(new IPEndPoint(System.Net.IPAddress.Loopback, 0));
+        var target = new IPEndPoint(System.Net.IPAddress.Loopback, server.Port);
         byte[] initial = FakeInitial(token: RandomNumberGenerator.GetBytes(48));
         attacker.Send(initial, initial.Length, target);
 

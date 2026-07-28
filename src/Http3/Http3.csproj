@@ -5,8 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Quic.Core\Quic.Core.csproj" />
-    <ProjectReference Include="..\Quic\Quic.csproj" />
+    <ProjectReference Include="..\..\libs\Hermod\Hermod\Hermod.csproj" />
     <ProjectReference Include="..\Http3.Qpack\Http3.Qpack.csproj" />
   </ItemGroup>
 

@@ -126,7 +126,7 @@ if (requireRetry)
 Console.WriteLine("Waiting for HTTP/3 clients … (Ctrl+C to stop)\n");
 
 using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { ReceiveTimeout = 1000 };
-socket.Bind(new IPEndPoint(IPAddress.Any, port));
+socket.Bind(new IPEndPoint(System.Net.IPAddress.Any, port));
 
 // Connections are demultiplexed primarily via the connection ID (not via the address), so that a
 // connection migration (RFC 9000 §9) — a client changing its address — hits the same connection.
@@ -139,7 +139,7 @@ byte[] buffer = new byte[2048];
 
 while (true)
 {
-    EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+    EndPoint from = new IPEndPoint(System.Net.IPAddress.Any, 0);
     int n;
     try
     {

@@ -10,10 +10,7 @@
     <Project Path="samples/H3Server/H3Server.csproj" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/Quic.Core/Quic.Core.csproj" />
     <Project Path="src/Http3.Qpack/Http3.Qpack.csproj" />
-    <Project Path="src/Quic/Quic.csproj" />
-    <Project Path="src/Quic.Tls/Quic.Tls.csproj" />
     <Project Path="src/Http3/Http3.csproj" />
   </Folder>
   <Folder Name="/tests/">

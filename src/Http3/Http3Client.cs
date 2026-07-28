@@ -104,7 +104,7 @@ public sealed class Http3Client : IAsyncDisposable
         if (_pumpTask is not null)
             throw new InvalidOperationException("ConnectAsync has already been called.");
 
-        IPAddress address = (await Dns.GetHostAddressesAsync(_host, cancellationToken).ConfigureAwait(false))
+        System.Net.IPAddress address = (await Dns.GetHostAddressesAsync(_host, cancellationToken).ConfigureAwait(false))
             .First(a => a.AddressFamily == AddressFamily.InterNetwork);
         _udp = new UdpClient(AddressFamily.InterNetwork);
         DisableIcmpUnreachableException(_udp);

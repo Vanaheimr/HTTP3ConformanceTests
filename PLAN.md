@@ -100,7 +100,7 @@ HTTP/3 layer. Project/assembly names stay short. Usings in #region Usings blocks
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **523 tests green**, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **523 tests green** (299 QUIC in HermodTests, 224 HTTP/3 here), milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1022,7 +1022,7 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
    directions. 7 tests (format, empty values, environment gate, client-random offset, all secrets
    over a real handshake, **both endpoints log identical lines**, 0-RTT early secret).
 3. ✅ **qlog** (structured event log per connection) → visualisation with qvis. `QlogWriter`
-   (`src/Quic/Qlog/`) writes **JSON Text Sequences** (`application/qlog+json-seq`, RFC 7464: one
+   (`libs/Hermod/Hermod/QUIC/Qlog/`) writes **JSON Text Sequences** (`application/qlog+json-seq`, RFC 7464: one
    record per line behind a 0x1E record separator) — streamable, and a recording stays usable even
    if the process is killed. Events: `packet_sent`/`packet_received` (with the full frame list),
    `packet_dropped`, `packet_lost` (trigger reordering/time threshold), `recovery_metrics_updated`
