@@ -3,5 +3,11 @@ obj/
 *.user
 .vs/
 [Tt]est[Rr]esults/
+
+# Debug output and secrets the stack can write into the working tree.
+# All three are reachable outside bin/: --qlog=<dir>, SSLKEYLOGFILE and
+# --secret-file=<path> all take an arbitrary destination.
 *.qlog
+*.sqlog
 sslkeylog.txt
+stateless-reset-secret.bin
