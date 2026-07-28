@@ -1,4 +1,4 @@
-# HTTP/3 from Scratch — Implementation Plan
+# HTTP/3 Conformance Tests — Implementation Plan
 
 **Goal:** a complete HTTP/3 stack (client + server) in C# on .NET 10, sitting directly on UDP
 sockets. No external dependencies — only the BCL (`System.Net.Sockets`,
@@ -54,7 +54,7 @@ not a complete TLS stack.
 ## Project structure
 
 ```
-HTTP3FromScratch.slnx
+HTTP3ConformanceTests.slnx
 src/
   Quic.Core/             # Shared primitives – used by all layers
     VarInt.cs            # QUIC variable-length integers (RFC 9000 §16)

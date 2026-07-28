@@ -117,7 +117,7 @@ string secretPath = args.FirstOrDefault(a => a.StartsWith("--secret-file=", Stri
 byte[] statelessResetSecret = LoadOrCreateSecret(secretPath, out bool secretCreated);
 var statelessResetTokens = new StatelessResetTokenGenerator(statelessResetSecret);
 
-Console.WriteLine($"== HTTP/3 from Scratch — server on UDP/{port} ==");
+Console.WriteLine($"== HTTP/3 Conformance Tests — server on UDP/{port} ==");
 Console.WriteLine($"Certificate: {certificate.Certificate.Subject} ({certificate.SignatureScheme}, thumbprint {certificate.Certificate.Thumbprint[..16]}…)");
 Console.WriteLine($"Idle timeout: {idleMs} ms (announced; effectively at least 3·PTO)");
 Console.WriteLine($"Stateless-reset secret: {secretPath} ({(secretCreated ? "newly created" : "loaded — survives restarts")})");
@@ -488,7 +488,7 @@ static Http3Response Handle(Http3Request request)
 
     string html = $"""
         <!DOCTYPE html>
-        <html><head><title>HTTP/3 from Scratch</title></head>
+        <html><head><title>HTTP/3 Conformance Tests</title></head>
         <body>
           <h1>Hello from a hand-built HTTP/3 server!</h1>
           <p>You requested <code>{request.Method} {request.Path}</code>.</p>

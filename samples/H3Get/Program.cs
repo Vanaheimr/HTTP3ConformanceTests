@@ -56,7 +56,7 @@ int dropped = 0;
 if (args.Contains("--interop"))
     return RunInteropMatrix();
 
-Console.WriteLine($"== HTTP/3 from Scratch — GET https://{host}{path}"
+Console.WriteLine($"== HTTP/3 Conformance Tests — GET https://{host}{path}"
                   + (lossPercent > 0 ? $" (artificial packet loss {lossPercent} %)" : "") + " ==\n");
 
 using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { ReceiveTimeout = 1500 };
@@ -688,7 +688,7 @@ static int RunInteropMatrix()
         ("www.akamai.com",        "Akamai QUIC"),
     ];
 
-    Console.WriteLine("== HTTP/3 from Scratch — interop matrix (full certificate validation) ==\n");
+    Console.WriteLine("== HTTP/3 Conformance Tests — interop matrix (full certificate validation) ==\n");
     Console.WriteLine($"{"Target",-24} {"Stack",-20} {"Group/Suite/Cert",-34} Result");
     Console.WriteLine(new string('-', 100));
 
