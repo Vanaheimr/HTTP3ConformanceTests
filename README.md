@@ -1,4 +1,4 @@
-# HTTP/3 from Scratch
+# HTTP/3 Conformance Tests
 
 An HTTP/3 stack (QUIC + TLS 1.3 + HTTP/3) in pure C# on .NET 10, sitting directly on UDP sockets —
 **without large dependencies**, just the .NET Base Class Library.
@@ -569,3 +569,9 @@ dotnet test
 ```
 
 Prerequisite: .NET 10 SDK.
+
+
+## License
+
+Apache License, Version 2.0 — see [LICENSE](LICENSE). The same licence the source
+headers have carried all along; the file itself was simply missing.
