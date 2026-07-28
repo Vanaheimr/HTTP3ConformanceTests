@@ -125,6 +125,7 @@ in the phases themselves, since that is where they belong:
 | Client certs (§4.3.2) | not implemented; a CertificateRequest was silently absorbed | full mTLS, both roles, Require/Request policy |
 | Handshake failure | escaped `ProcessDatagram` into the accept loop | CONNECTION_CLOSE with the right CRYPTO_ERROR alert |
 | Language | German comments left in the five MSBuild files | repo is English throughout, verified by sweep |
+| CI | none — every "N tests green" rested on one machine | GitHub Actions in all three repos, green |
 
 Two of those RFC violations (§13.3 and RFC 9002 §6.2.2.1) were found by the new lossy link and
 could not have been found by the previous perfect in-process link at all.
@@ -1173,18 +1174,15 @@ Akamai — matrix at M2), server interop against `curl --http3` (ngtcp2/LibreSSL
 
 **Open, roughly by value:**
 
-1. **CI** — there is none, and `dotnet test` on the solution exits 1 because the `libs/` submodules
-   inherit `TreatWarningsAsErrors` from the root `Directory.Build.props`. Until then every "N tests
-   green" here rests on local runs.
-2. **Receive-side GRO + per-connection parallelism** — send-side GSO exists; the per-datagram async
+1. **Receive-side GRO + per-connection parallelism** — send-side GSO exists; the per-datagram async
    round trip is gone, so what remains is batched receive and getting connections off one loop.
-3. **ClientHello random after a HelloRetryRequest** (RFC 8446 §4.1.2) — CH2 currently gets a fresh
+2. **ClientHello random after a HelloRetryRequest** (RFC 8446 §4.1.2) — CH2 currently gets a fresh
    random, which the allowed-changes list does not permit. Small, self-contained MUST fix.
-4. **Protocol extras:** NEW_TOKEN issuance/replay (§8.1.3 — the token machinery now exists, only
+3. **Protocol extras:** NEW_TOKEN issuance/replay (§8.1.3 — the token machinery now exists, only
    the frame and the client-side replay are missing), DPLPMTUD (RFC 8899 — datagrams are
    pinned near 1200 B, so ~20 % of throughput is unused on a 1500-MTU path), preferred_address
    (§9.6), ACK frequency.
-5. **Observability** — no EventSource/metrics; nothing about a running connection is measurable
+4. **Observability** — no EventSource/metrics; nothing about a running connection is measurable
    from outside (qlog covers debugging, not production monitoring).
 
 **Known inconsistency:** `Http3RequestBody` is thread-safe, `Http3Tunnel` is not. The tunnel gets
