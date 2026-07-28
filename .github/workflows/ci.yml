@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # windows-latest, not ubuntu: this is the platform the suite is verified on.
+    # Hermod pulls in System.Diagnostics.PerformanceCounter, System.IO.Ports and
+    # System.Drawing.Common, and certificate chain building differs between the
+    # Windows and OpenSSL backends - we hit that difference with Ed25519 already.
+    # Linux would be cheaper and is worth adding as a second matrix entry, but
+    # not before someone has actually seen it pass there.
+    runs-on: windows-latest
+    steps:
+      # The QUIC/TLS stack lives in the Hermod submodule, Styx below that —
+      # without a recursive checkout nothing here compiles at all.
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build HTTP3ConformanceTests.slnx --configuration Release
+
+      # 224 tests, none of which touch the network: the whole HTTP/3 stack is
+      # exercised in-process against our own QUIC server, so this is a real
+      # gate rather than a connectivity check.
+      - name: Test
+        run: dotnet test tests/Http3.Tests/Http3.Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal"
