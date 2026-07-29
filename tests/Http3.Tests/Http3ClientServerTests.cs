@@ -284,8 +284,13 @@ public class Http3ClientServerTests
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
         Http3Response Handler(Http3Request request) => new() { Status = 200, Body = [] };
 
-        // The server announces a short idle timeout (300 ms). After the handshake the in-process RTT
-        // is tiny ⇒ 3·PTO ≪ 300 ms, so the negotiated value dominates.
+        // The server announces a short idle timeout (300 ms), but on the real clock that is NOT the
+        // instant the connection dies: RFC 9000 §10.1 raises the effective bound to at least 3·PTO,
+        // and on an in-process pair the RTT estimate measures the handshake's own signature and
+        // verification work rather than any network delay. Measured here, 25–90 ms of "RTT" put
+        // 3·PTO anywhere between roughly 250 ms and 750 ms — the upper end being a cold process.
+        // Hence a deadline instead of a fixed sleep; the exact timing is pinned down deterministically
+        // by TimeProviderTests.IdleTimeout_Expires_WhenOnlyTheFakeClockAdvances.
         var serverParams = new TransportParameters { MaxIdleTimeoutMs = 300 };
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
         using var server = new Http3ServerConnection(cert, Handler, serverParams);
@@ -303,9 +308,13 @@ public class Http3ClientServerTests
         Assert.That(client.HandshakeConfirmed, Is.True, "Handshake must come about.");
         Assert.That(server.IsIdleTimedOut, Is.False);
 
-        // Without further packet exchange more than the negotiated idle timeout passes.
-        Thread.Sleep(600);
-        server.CheckTimeouts();
+        // Without further packet exchange the connection falls silent and must die on its own.
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        while (!server.IsIdleTimedOut && DateTimeOffset.UtcNow < deadline)
+        {
+            Thread.Sleep(50);
+            server.CheckTimeouts();
+        }
 
         Assert.That(server.IsIdleTimedOut, Is.True, "The server must close the connection after the idle timeout.");
         Assert.That(server.GetDatagramsToSend(), Is.Empty); // closed silently ⇒ no more datagrams

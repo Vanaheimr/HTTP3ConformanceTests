@@ -180,8 +180,14 @@ public class StreamCancellationTests
         };
 
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
-        using var server = new Http3ServerConnection(cert, Handler);
-        using var client = new Http3ClientConnection("localhost", certificateValidation: validation);
+        // The cancelled response leaves a burst of unacknowledged packets in flight, and the second
+        // request only moves once the congestion window frees up again. Acknowledgments may be held
+        // back for up to max_ack_delay (RFC 9000 §13.2.2), a deadline a pump loop on a standing clock
+        // never reaches — so the clock steps past it between rounds.
+        var clock = new FakeTimeProvider();
+        using var server = new Http3ServerConnection(cert, Handler, timeProvider: clock);
+        using var client = new Http3ClientConnection("localhost", certificateValidation: validation,
+                                                     timeProvider: clock);
         client.Start();
 
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
@@ -214,6 +220,7 @@ public class StreamCancellationTests
         Http3Response? response = null;
         for (int round = 0; round < 50 && response is null; round++)
         {
+            clock.Advance(TimeSpan.FromMilliseconds(30));
             Pump(client, server);
             client.TryGetResponse(second, out response);
         }
