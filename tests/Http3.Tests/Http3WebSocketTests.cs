@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2010-2026 GraphDefined GmbH <achim.friedland@graphdefined.com>
  * This file is part of Vanaheimr Hermod <https://www.github.com/Vanaheimr/Hermod>
  *
@@ -149,6 +149,38 @@ public class Http3WebSocketTests
         Assert.That(serverLoopEnded(), Is.True, "The server echo loop must end after the close.");
         Assert.That(client.IsClosing, Is.False);
         Assert.That(server.IsClosing, Is.False);
+    }
+
+    [Test]
+    public void ATunnelWriteGoesOutEvenWhenThePeerIsSilent()
+    {
+        // Tunnel writes are queued and drained by the pump, so that an application may write from
+        // any thread. The drain used to happen only inside ProcessDatagram — which made outgoing
+        // data depend on incoming data: with a quiet peer the write simply sat in the queue.
+        // Acknowledgment traffic hid it, because something was always arriving.
+        (Http3ClientConnection client, Http3ServerConnection server, ServerCertificate cert) = WebSocketServerPair(out _);
+        using ServerCertificate certGuard = cert;
+        using Http3ClientConnection c = client;
+        using Http3ServerConnection s = server;
+
+        (Http3Tunnel tunnel, IReadOnlyList<HeaderField> _) = OpenWebSocket(client, server, offerDeflate: false);
+        var ws = new WebSocketConnection(tunnel, WebSocketRole.Client);
+
+        // Drain whatever the CONNECT exchange left over, so the next pass starts quiet.
+        for (int round = 0; round < 5; round++)
+            Pump(client, server);
+
+        Task<WebSocketMessage?> echo = ws.ReceiveAsync(None);
+        ws.SendTextAsync("anyone there?", None);
+
+        // Exactly ONE round, and it starts with the client's own timer — nothing has arrived that
+        // could have driven the pump. If the queued write only left on an incoming datagram, the
+        // server would have nothing to echo and this round would come back empty-handed.
+        Pump(client, server);
+
+        Assert.That(echo.IsCompleted, Is.True,
+                    "A queued tunnel write must not wait for the peer to send something first.");
+        Assert.That(Encoding.UTF8.GetString(echo.Result!.Payload), Is.EqualTo("anyone there?"));
     }
 
     [Test]

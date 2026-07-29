@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2010-2026 GraphDefined GmbH <achim.friedland@graphdefined.com>
  * This file is part of Vanaheimr Hermod <https://www.github.com/Vanaheimr/Hermod>
  *
@@ -290,6 +290,13 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
     {
         _quic.CheckLossDetectionTimeout();
         _quic.CheckIdleTimeout();
+        // Like the server: work that is waiting to go OUT must not depend on something coming IN.
+        // Tunnel writes are queued and drained by the pump (they are marshalled off the caller's
+        // thread), and Pump used to run only on a received datagram — so an application that wrote
+        // into a tunnel while the peer happened to be silent had its data sit in the queue until the
+        // peer sent something of its own. Acknowledgments used to hide that by keeping traffic
+        // flowing in both directions at all times.
+        Pump();
     }
 
     public IReadOnlyList<byte[]> GetDatagramsToSend() => _quic.GetDatagramsToSend();
