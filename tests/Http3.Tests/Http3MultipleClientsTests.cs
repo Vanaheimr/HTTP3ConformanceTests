@@ -136,6 +136,45 @@ public class Http3MultipleClientsTests
     }
 
     [Test]
+    public async Task EightConcurrentClients_EachGetTheirOwnMegabyteIntact()
+    {
+        // The load case the parallel receive pass exists for: connections are processed on
+        // different threads, so anything shared between them would show up here as a wrong or
+        // truncated body rather than as a crash.
+        const int size = 1_000_000;
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+
+        // Each client asks for its own filler byte, so a body that came from the wrong connection
+        // cannot pass as correct.
+        await using var server = new Http3Server(cert, request =>
+        {
+            byte fill = byte.Parse(request.Path.TrimStart('/'));
+            byte[] body = new byte[size];
+            Array.Fill(body, fill);
+            return new Http3Response { Status = 200, Body = body };
+        }, port: 0);
+        server.Start();
+
+        async Task<(int Fill, byte[] Body)> Fetch(int fill)
+        {
+            await using var client = new Http3Client("localhost", server.Port, validation);
+            await client.ConnectAsync(ConnectTimeout);
+            Http3Response response = await client.GetAsync($"/{fill}").WaitAsync(RequestTimeout);
+            return (fill, response.Body);
+        }
+
+        (int Fill, byte[] Body)[] results = await Task.WhenAll(Enumerable.Range(1, 8).Select(Fetch));
+
+        foreach ((int fill, byte[] body) in results)
+        {
+            Assert.That(body, Has.Length.EqualTo(size), $"Client {fill} got a truncated body.");
+            Assert.That(Array.TrueForAll(body, b => b == fill), Is.True,
+                        $"Client {fill} got bytes belonging to another connection.");
+        }
+    }
+
+    [Test]
     public async Task TwoClientsAtOnce_StayIndependent()
     {
         // Both connections are live at the same time and interleave their requests — the demux by

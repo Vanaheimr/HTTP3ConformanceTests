@@ -50,6 +50,12 @@ public sealed class Http3Server : IAsyncDisposable
     {
         public Http3ServerConnection Connection { get; } = connection;
         public IPEndPoint Endpoint { get; set; } = endpoint;
+
+        /// <summary>
+        /// Datagrams routed to this connection but not yet processed. Filled on the receive loop,
+        /// drained by whichever worker takes this connection — never by two at once.
+        /// </summary>
+        public List<byte[]> Inbound { get; } = [];
     }
 
     private readonly Func<QuicServerConnection.ValidatedRetry?, Http3ServerConnection> _connectionFactory;
@@ -259,6 +265,8 @@ public sealed class Http3Server : IAsyncDisposable
                         byte[] datagram = _udp.Receive(ref from);
                         HandleDatagram(datagram, from!);
                     }
+
+                    ProcessInbound(); // the whole batch at once, connections in parallel
                 }
                 else
                     RunTimers();
@@ -348,8 +356,59 @@ public sealed class Http3Server : IAsyncDisposable
             conn.Connection.InitiatePathValidation();
         }
 
-        conn.Connection.ProcessDatagram(datagram);
-        Flush(conn);
+        // Queued rather than processed here: routing has to stay on the loop thread, because it is
+        // what mutates the connection maps. The expensive part — decrypting, frame handling, packet
+        // building — is per-connection and disjoint, so it runs afterwards, in parallel.
+        conn.Inbound.Add(datagram);
+    }
+
+    /// <summary>
+    /// Processes what the receive pass routed, one worker per connection. Connections share nothing
+    /// but the socket, so different ones can run at once — while a single connection stays strictly
+    /// single-threaded, which the whole core depends on.
+    /// <para>
+    /// The measurement that motivated this: aggregate throughput on 16 cores stayed pinned at about
+    /// two of them no matter how many connections were active, and actually fell as connections were
+    /// added, because everything queued behind one loop.
+    /// </para>
+    /// </summary>
+    private void ProcessInbound()
+    {
+        var busy = new List<ServerConn>();
+        foreach (ServerConn conn in _connections)
+            if (conn.Inbound.Count > 0)
+                busy.Add(conn);
+
+        if (busy.Count == 0)
+            return;
+
+        // One connection is the common case; the parallel machinery would cost more than it saves.
+        if (busy.Count == 1)
+        {
+            Drain(busy[0], _sender);
+            return;
+        }
+
+        Parallel.ForEach(busy,
+                         () => new UdpBatchSender(), // per worker: the batcher holds a work buffer
+                         (conn, _, sender) => { Drain(conn, sender); return sender; },
+                         _ => { });
+    }
+
+    private void Drain(ServerConn conn, UdpBatchSender sender)
+    {
+        // Contained per connection, and deliberately so. One broken peer must not take the loop
+        // down with it — and inside Parallel.ForEach an escaping exception would arrive at the loop
+        // wrapped in an AggregateException, past the catch clauses that used to handle it.
+        try
+        {
+            foreach (byte[] datagram in conn.Inbound)
+                conn.Connection.ProcessDatagram(datagram);
+            conn.Inbound.Clear();
+            Flush(conn, sender);
+        }
+        catch (ObjectDisposedException) { }
+        catch (SocketException) { }
     }
 
     /// <summary>
@@ -473,11 +532,25 @@ public sealed class Http3Server : IAsyncDisposable
 
     private void RunTimers()
     {
-        foreach (ServerConn conn in _connections)
+        // Same shape as the receive pass: per-connection work, disjoint state, so it may run wide.
+        if (_connections.Count == 1)
         {
-            conn.Connection.CheckTimeouts();
-            if (!conn.Connection.IsIdleTimedOut)
-                Flush(conn);
+            _connections[0].Connection.CheckTimeouts();
+            if (!_connections[0].Connection.IsIdleTimedOut)
+                Flush(_connections[0], _sender);
+        }
+        else if (_connections.Count > 1)
+        {
+            Parallel.ForEach(_connections,
+                             () => new UdpBatchSender(),
+                             (conn, _, sender) =>
+                             {
+                                 conn.Connection.CheckTimeouts();
+                                 if (!conn.Connection.IsIdleTimedOut)
+                                     Flush(conn, sender);
+                                 return sender;
+                             },
+                             _ => { });
         }
         _connections.RemoveAll(conn =>
         {
@@ -498,14 +571,14 @@ public sealed class Http3Server : IAsyncDisposable
     /// portions, so we keep pumping while packets keep coming instead of emitting one chunk per
     /// 20 ms tick — the loop is bounded so one connection cannot monopolise it.
     /// </summary>
-    private void Flush(ServerConn conn)
+    private void Flush(ServerConn conn, UdpBatchSender sender)
     {
         for (int round = 0; round < MaxFlushRoundsPerPass; round++)
         {
             IReadOnlyList<byte[]> datagrams = conn.Connection.GetDatagramsToSend();
             if (datagrams.Count == 0)
                 return;
-            _sender.Send(_udp!.Client, datagrams, conn.Endpoint);
+            sender.Send(_udp!.Client, datagrams, conn.Endpoint);
             conn.Connection.CheckTimeouts(); // drives handler tasks and the next body chunk
         }
     }
