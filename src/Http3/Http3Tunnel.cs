@@ -31,15 +31,27 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 /// <see cref="IHTTP2Tunnel"/> interface, so the RFC 6455 <see cref="WebSocketConnection"/>
 /// runs over it unchanged.
 ///
-/// Concurrency: the tunnel — like the whole stack — is designed single-threaded. Outstanding
-/// <see cref="ReadAsync"/> tasks are completed SYNCHRONOUSLY in the pump call
-/// (<c>ProcessDatagram</c>); their continuations (e.g. the WebSocket layer's frame parsing incl.
-/// automatic pong/close answers) thus run inline on the pump thread and write into the stream
-/// race-free.
+/// <para>
+/// <b>Concurrency — receive side:</b> guarded, like <see cref="Http3RequestBody"/>. A consumer that
+/// awaits real I/O between two reads resumes on a thread-pool thread and then reads concurrently
+/// with the pump delivering into this tunnel, so the queue, the pending read and the datagram buffer
+/// are all under a lock. A waiting read is always completed OUTSIDE that lock: its continuation runs
+/// inline on the completing thread and may read again immediately, which would otherwise re-enter
+/// mid-operation.
+/// </para>
+/// <para>
+/// <b>Concurrency — send side: NOT guarded.</b> <see cref="WriteAsync"/>, <see cref="Complete"/> and
+/// <see cref="Abort"/> reach straight into the QUIC stream's send buffer, which the pump also drives
+/// and which has no lock of its own. They are safe from the pump thread — which includes a
+/// continuation running inline on it, the case the WebSocket layer relies on — and unsafe from
+/// anywhere else. Making them safe means marshalling writes to the pump rather than adding a lock
+/// here, because the race is with the pump's own use of that buffer.
+/// </para>
 /// </summary>
 public sealed class Http3Tunnel : IHTTP2Tunnel
 {
     private readonly QuicStream _stream;
+    private readonly Lock _lock = new();
     private readonly Queue<byte[]> _received = new();
     private TaskCompletionSource<byte[]?>? _pendingRead;
     private bool _ended;
@@ -53,12 +65,22 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     /// </summary>
     public Task<byte[]?> ReadAsync(CancellationToken CancellationToken)
     {
-        if (_received.Count > 0)
-            return Task.FromResult<byte[]?>(_received.Dequeue());
-        if (_ended)
-            return Task.FromResult<byte[]?>(null);
-        _pendingRead ??= new TaskCompletionSource<byte[]?>();
-        return _pendingRead.Task;
+        if (CancellationToken.IsCancellationRequested)
+            return Task.FromCanceled<byte[]?>(CancellationToken);
+
+        lock (_lock)
+        {
+            if (_received.Count > 0)
+                return Task.FromResult<byte[]?>(_received.Dequeue());
+            if (_ended)
+                return Task.FromResult<byte[]?>(null);
+            if (_pendingRead is not null)
+                throw new InvalidOperationException("Only one read at a time is supported.");
+
+            // Nothing there yet — the pump completes this task as soon as a DATA frame arrives.
+            _pendingRead = new TaskCompletionSource<byte[]?>();
+            return _pendingRead.Task;
+        }
     }
 
     /// <summary>
@@ -89,13 +111,20 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     /// </summary>
     internal void Deliver(byte[] chunk)
     {
-        if (_pendingRead is { } pending)
+        TaskCompletionSource<byte[]?>? toComplete = null;
+        lock (_lock)
         {
-            _pendingRead = null;
-            pending.SetResult(chunk); // the continuation runs inline on the pump thread (see above)
+            if (_ended)
+                return; // the peer already finished — anything after that is not ours to hand on
+            if (_pendingRead is { } pending)
+            {
+                _pendingRead = null;
+                toComplete = pending;
+            }
+            else
+                _received.Enqueue(chunk);
         }
-        else
-            _received.Enqueue(chunk);
+        toComplete?.TrySetResult(chunk); // outside the lock — the continuation may read again at once
     }
 
     /// <summary>
@@ -104,12 +133,16 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     /// </summary>
     internal void End()
     {
-        _ended = true;
-        if (_pendingRead is { } pending)
+        TaskCompletionSource<byte[]?>? toComplete;
+        lock (_lock)
         {
+            if (_ended)
+                return;
+            _ended = true;
+            toComplete = _pendingRead;
             _pendingRead = null;
-            pending.TrySetResult(null);
         }
+        toComplete?.TrySetResult(null); // outside the lock, for the same reason as in Deliver
     }
 
     // ---- HTTP datagrams (RFC 9297) — unreliable messages alongside the byte stream ----------
@@ -130,13 +163,16 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     /// </summary>
     public bool TryReceiveDatagram(out byte[]? payload)
     {
-        if (_datagrams.Count > 0)
+        lock (_lock)
         {
-            payload = _datagrams.Dequeue();
-            return true;
+            if (_datagrams.Count > 0)
+            {
+                payload = _datagrams.Dequeue();
+                return true;
+            }
+            payload = null;
+            return false;
         }
-        payload = null;
-        return false;
     }
 
     /// <summary>
@@ -145,9 +181,12 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     /// </summary>
     internal void DeliverDatagram(byte[] payload)
     {
-        if (_datagrams.Count >= MaxBufferedDatagrams)
-            _datagrams.Dequeue();
-        _datagrams.Enqueue(payload);
+        lock (_lock)
+        {
+            if (_datagrams.Count >= MaxBufferedDatagrams)
+                _datagrams.Dequeue();
+            _datagrams.Enqueue(payload);
+        }
     }
 }
 
