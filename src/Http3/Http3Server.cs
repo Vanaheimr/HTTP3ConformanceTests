@@ -283,7 +283,9 @@ public sealed class Http3Server : IAsyncDisposable
 
             // Address validation happens BEFORE any state exists — that is the whole point.
             QuicServerConnection.ValidatedRetry? validatedRetry = null;
-            if (_addressValidation is not null && !TryValidateAddress(datagram, from, out validatedRetry))
+            bool validatedByNewToken = false;
+            if (_addressValidation is not null &&
+                !TryValidateAddress(datagram, from, out validatedRetry, out validatedByNewToken))
                 return;
 
             // Connection limit: beyond it drop SILENTLY. Any answer would be an amplification
@@ -295,6 +297,19 @@ public sealed class Http3Server : IAsyncDisposable
             }
 
             conn = new ServerConn(_connectionFactory(validatedRetry), from);
+
+            // A token for this client's NEXT connection (§8.1.3). Prepared here because only the
+            // listener knows the address; the connection holds it back until the handshake is
+            // complete, so it is never handed to an unproven address. If the address was validated
+            // by a NEW_TOKEN token rather than a Retry, say so — no Retry happened, so the
+            // connection must not act as if one had.
+            if (_addressValidation is { } issuer)
+            {
+                if (validatedByNewToken)
+                    conn.Connection.Quic.MarkClientAddressValidated();
+                conn.Connection.Quic.NewTokenToSend = issuer.IssueNewToken(from.Address);
+            }
+
             _connections.Add(conn);
             _byEndpoint[from] = conn;
             if (dcid is { } initialDcid)
@@ -324,9 +339,11 @@ public sealed class Http3Server : IAsyncDisposable
     /// </para>
     /// </summary>
     private bool TryValidateAddress(byte[] datagram, IPEndPoint from,
-                                    out QuicServerConnection.ValidatedRetry? retry)
+                                    out QuicServerConnection.ValidatedRetry? retry,
+                                    out bool validatedByNewToken)
     {
         retry = null;
+        validatedByNewToken = false;
         RetryTokenGenerator tokens = _addressValidation!;
 
         // A datagram carrying an Initial must be at least 1200 bytes (RFC 9000 §14.1). Answering a
@@ -335,6 +352,18 @@ public sealed class Http3Server : IAsyncDisposable
             return false;
         if (!LongHeader.TryParse(datagram, out LongHeaderPrefix? prefix) || prefix is null)
             return false;
+
+        // A token from a NEW_TOKEN frame of an earlier connection (§8.1.3): it proves the address
+        // without a round trip, so no Retry is sent and no Retry state is implied. Checked FIRST
+        // because it is the cheap, common case once a client has connected before.
+        if (prefix.Token.Length > 0 &&
+            tokens.TryValidateNewToken(prefix.Token, from.Address) &&
+            tokens.TryConsumeNewToken(prefix.Token))
+        {
+            _newTokensAccepted++;
+            validatedByNewToken = true;
+            return true; // retry stays null: the address is validated, but nothing was retried
+        }
 
         if (prefix.Token.Length == 0)
         {
@@ -356,8 +385,30 @@ public sealed class Http3Server : IAsyncDisposable
             !prefix.DestinationConnectionId.Equals(retrySourceCid2) ||
             !tokens.TryConsume(prefix.Token))
         {
-            // §8.1.2: the client will not accept a second Retry, so tell it plainly instead of
-            // letting it wait for a handshake timeout. This costs no state — see StatelessClose.
+            // Which failure is this? The two token kinds get different answers, and §8.1.1 exists
+            // precisely so the server can tell them apart.
+            bool isRetryToken = tokens.TryReadKind(prefix.Token, from, out RetryTokenGenerator.TokenKind kind) &&
+                                kind == RetryTokenGenerator.TokenKind.Retry;
+
+            if (!isRetryToken)
+            {
+                // §8.1.3: "If the token is invalid, then the server SHOULD proceed as if the client
+                // did not have a validated address, including potentially sending a Retry packet."
+                // The note there spells out why refusing would be wrong: the client may be presenting
+                // a NEW_TOKEN token we can no longer validate — expired, or issued under a secret
+                // this process no longer has — and discarding it would fail the connection outright.
+                var freshRetryCid = new ConnectionId(RandomNumberGenerator.GetBytes(LocalCidLength));
+                byte[] freshToken = tokens.Issue(from, prefix.DestinationConnectionId, freshRetryCid);
+                byte[] retryPacket = RetryPacket.Build(prefix.Version, prefix.SourceConnectionId, freshRetryCid,
+                                                       freshToken, prefix.DestinationConnectionId);
+                _udp!.Send(retryPacket, retryPacket.Length, from);
+                RetriesSent++;
+                _newTokensRejected++;
+                return false;
+            }
+
+            // §8.1.2: a bad RETRY token is different — the client will not accept a second Retry, so
+            // tell it plainly instead of letting it wait for a handshake timeout. Costs no state.
             byte[] refusal = StatelessClose.Build(prefix.Version, prefix.DestinationConnectionId,
                                                   prefix.SourceConnectionId, TransportError.InvalidToken,
                                                   "invalid retry token");
@@ -380,6 +431,21 @@ public sealed class Http3Server : IAsyncDisposable
     /// token (diagnostics).
     /// </summary>
     public long TokensRejected { get; private set; }
+
+    private long _newTokensAccepted;
+    private long _newTokensRejected;
+
+    /// <summary>
+    /// Initials whose NEW_TOKEN token validated, so the connection started without a Retry
+    /// (diagnostics). This is the round trip §8.1.3 exists to save.
+    /// </summary>
+    public long NewTokensAccepted => _newTokensAccepted;
+
+    /// <summary>
+    /// Initials carrying a token that was not a valid Retry token and answered with a Retry
+    /// (diagnostics) — an expired or already-spent NEW_TOKEN token, or one we cannot read at all.
+    /// </summary>
+    public long NewTokensRejected => _newTokensRejected;
 
     private void RunTimers()
     {

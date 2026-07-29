@@ -273,10 +273,70 @@ public class StatelessRetryTests
     }
 
     [Test]
-    public async Task ForgedToken_IsRefusedWithoutCreatingAConnection()
+    public async Task AValidNewTokenSkipsTheRetry()
     {
-        // RFC 9000 §8.1.2: the client cannot be sent another Retry, so it is told INVALID_TOKEN —
-        // "a server has not established any state for the connection at this point".
+        // The point of §8.1.3: a client that connected before presents the token it was given, and
+        // the server validates the address from the token alone — no Retry, so no extra round trip.
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var tokens = new RetryTokenGenerator();
+
+        await using var server = new Http3Server(cert,
+            _ => new Http3Response { Status = 200 }, port: 0, addressValidation: tokens);
+        server.Start();
+
+        using var client = new UdpClient(new IPEndPoint(System.Net.IPAddress.Loopback, 0));
+        var target = new IPEndPoint(System.Net.IPAddress.Loopback, server.Port);
+
+        byte[] initial = FakeInitial(token: tokens.IssueNewToken(System.Net.IPAddress.Loopback));
+        client.Send(initial, initial.Length, target);
+
+        await WaitUntil(() => server.NewTokensAccepted > 0, TimeSpan.FromSeconds(10));
+
+        Assert.That(server.NewTokensAccepted, Is.EqualTo(1));
+        Assert.That(server.RetriesSent, Is.Zero, "That round trip is exactly what the token saves.");
+        Assert.That(server.TokensRejected, Is.Zero);
+    }
+
+    [Test]
+    public async Task AReplayedNewTokenDoesNotSkipTheRetry()
+    {
+        // §8.1.4: NEW_TOKEN tokens "SHOULD NOT be accepted multiple times" — otherwise a replayed
+        // token would let an attacker use the server as an amplifier from a spoofed address.
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var tokens = new RetryTokenGenerator();
+
+        await using var server = new Http3Server(cert,
+            _ => new Http3Response { Status = 200 }, port: 0, addressValidation: tokens);
+        server.Start();
+
+        using var client = new UdpClient(new IPEndPoint(System.Net.IPAddress.Loopback, 0));
+        var target = new IPEndPoint(System.Net.IPAddress.Loopback, server.Port);
+        byte[] token = tokens.IssueNewToken(System.Net.IPAddress.Loopback);
+
+        byte[] first = FakeInitial(token: token);
+        client.Send(first, first.Length, target);
+        await WaitUntil(() => server.NewTokensAccepted > 0, TimeSpan.FromSeconds(10));
+
+        // The same token again, from a fresh source port so it is not routed to the connection above.
+        using var replayer = new UdpClient(new IPEndPoint(System.Net.IPAddress.Loopback, 0));
+        byte[] second = FakeInitial(token: token);
+        replayer.Send(second, second.Length, target);
+        await WaitUntil(() => server.RetriesSent > 0, TimeSpan.FromSeconds(10));
+
+        Assert.That(server.NewTokensAccepted, Is.EqualTo(1), "The second use must not count as valid.");
+        Assert.That(server.RetriesSent, Is.EqualTo(1), "The replay falls back to address validation.");
+    }
+
+    [Test]
+    public async Task UnreadableToken_GetsARetry_NotARefusal()
+    {
+        // Once the server also issues NEW_TOKEN tokens (§8.1.3), a token it cannot decrypt is no
+        // longer attributable to either mechanism — it may well be one of our own NEW_TOKEN tokens,
+        // expired or issued under a secret this process no longer holds. §8.1.3: "If the token is
+        // invalid, then the server SHOULD proceed as if the client did not have a validated address,
+        // including potentially sending a Retry packet." The note there is explicit that discarding
+        // would fail such a connection outright. §8.1.2's INVALID_TOKEN is reserved for a token the
+        // server CAN read and knows to be a Retry token — see the test below.
         using var cert = ServerCertificate.CreateSelfSigned("localhost");
 
         await using var server = new Http3Server(cert,
@@ -288,13 +348,51 @@ public class StatelessRetryTests
         byte[] initial = FakeInitial(token: RandomNumberGenerator.GetBytes(48));
         attacker.Send(initial, initial.Length, target);
 
+        await WaitUntil(() => server.RetriesSent > 0, TimeSpan.FromSeconds(10));
+
+        Assert.That(server.RetriesSent, Is.EqualTo(1));
+        Assert.That(server.NewTokensRejected, Is.EqualTo(1));
+        Assert.That(server.TokensRejected, Is.Zero, "An unattributable token is not an invalid RETRY token.");
+        Assert.That(server.ConnectionCount, Is.Zero, "Still no state — the token is the state.");
+
+        attacker.Client.ReceiveTimeout = 5000;
+        IPEndPoint? from = null;
+        byte[] answer = attacker.Receive(ref from);
+        Assert.That(PacketFormat.IsLongHeader(answer[0]), Is.True);
+        Assert.That(PacketFormat.GetLongPacketType(answer[0]), Is.EqualTo(LongPacketType.Retry));
+    }
+
+    [Test]
+    public async Task InvalidRetryToken_IsRefusedWithInvalidToken()
+    {
+        // §8.1.2: "If a server receives a client Initial that contains an invalid Retry token but is
+        // otherwise valid, it knows the client will not accept another Retry token … the server
+        // SHOULD immediately close the connection with an INVALID_TOKEN error." The token here IS
+        // ours and IS of the Retry kind, so it is attributable — it just names a connection ID the
+        // Initial is not addressed to, which is how a token pasted onto a foreign packet looks.
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var tokens = new RetryTokenGenerator();
+
+        await using var server = new Http3Server(cert,
+            _ => new Http3Response { Status = 200 }, port: 0, addressValidation: tokens);
+        server.Start();
+
+        using var attacker = new UdpClient(new IPEndPoint(System.Net.IPAddress.Loopback, 0));
+        var target = new IPEndPoint(System.Net.IPAddress.Loopback, server.Port);
+        var source = (IPEndPoint)attacker.Client.LocalEndPoint!;
+
+        byte[] retryToken = tokens.Issue(source,
+                                         new ConnectionId(RandomNumberGenerator.GetBytes(8)),
+                                         new ConnectionId(RandomNumberGenerator.GetBytes(8)));
+        byte[] initial = FakeInitial(token: retryToken);
+        attacker.Send(initial, initial.Length, target);
+
         await WaitUntil(() => server.TokensRejected > 0, TimeSpan.FromSeconds(10));
 
         Assert.That(server.TokensRejected, Is.EqualTo(1));
-        Assert.That(server.ConnectionCount, Is.Zero, "A forged token must not open a connection.");
-        Assert.That(server.RetriesSent, Is.Zero, "And it must NOT trigger a second Retry (§8.1.2).");
+        Assert.That(server.ConnectionCount, Is.Zero);
+        Assert.That(server.RetriesSent, Is.Zero, "It must NOT trigger a second Retry (§8.1.2).");
 
-        // The refusal is a real Initial packet the client can read — not silence.
         attacker.Client.ReceiveTimeout = 5000;
         IPEndPoint? from = null;
         byte[] answer = attacker.Receive(ref from);

@@ -74,7 +74,8 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
         TimeProvider? timeProvider = null,
         KeyLog? keyLog = null,
         QlogWriter? qlog = null,
-        Quic.Tls.ServerCertificate? clientCertificate = null)
+        Quic.Tls.ServerCertificate? clientCertificate = null,
+        byte[]? addressValidationToken = null)
     {
         _wtMaxSessions = webTransportMaxSessions;
         if (webTransportMaxSessions > 0) // WebTransport requires HTTP/3 datagrams (draft §3.1)
@@ -85,7 +86,7 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
             transportParameters ??= new TransportParameters();
             transportParameters.MaxDatagramFrameSizeValue = 65535; // RFC 9221 §3 RECOMMENDED
         }
-        _quic = new QuicClientConnection(serverName, transportParameters, certificateValidation: certificateValidation, cipherSuites: cipherSuites, keyExchangeGroups: keyExchangeGroups, resumptionTicket: resumptionTicket, timeProvider: timeProvider, keyLog: keyLog, qlog: qlog, clientCertificate: clientCertificate);
+        _quic = new QuicClientConnection(serverName, transportParameters, certificateValidation: certificateValidation, cipherSuites: cipherSuites, keyExchangeGroups: keyExchangeGroups, resumptionTicket: resumptionTicket, timeProvider: timeProvider, keyLog: keyLog, qlog: qlog, clientCertificate: clientCertificate, addressValidationToken: addressValidationToken);
         _qpack = new Http3Qpack(qpackMaxTableCapacity, weAreClient: true, FatalConnectionError)
         {
             OnWebTransportUniStream = (stream, sessionId, leftover) =>
