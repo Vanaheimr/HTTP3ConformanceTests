@@ -40,12 +40,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 /// mid-operation.
 /// </para>
 /// <para>
-/// <b>Concurrency — send side: NOT guarded.</b> <see cref="WriteAsync"/>, <see cref="Complete"/> and
-/// <see cref="Abort"/> reach straight into the QUIC stream's send buffer, which the pump also drives
-/// and which has no lock of its own. They are safe from the pump thread — which includes a
-/// continuation running inline on it, the case the WebSocket layer relies on — and unsafe from
-/// anywhere else. Making them safe means marshalling writes to the pump rather than adding a lock
-/// here, because the race is with the pump's own use of that buffer.
+/// <b>Concurrency — send side:</b> marshalled, not locked. <see cref="WriteAsync"/>,
+/// <see cref="Complete"/> and <see cref="Abort"/> only append to an outbound queue; the pump drains
+/// it on its own thread via <see cref="PumpOutbound"/>. A lock would not do here: the race is with
+/// the pump's use of the QUIC stream's send buffer, not between two tunnel callers, and that buffer
+/// has no synchronisation of its own. The drain runs after the pump has processed incoming streams,
+/// so an answer written by a continuation running inline still leaves on the same pass.
+/// </para>
+/// <para>
+/// The one exception is <see cref="TrySendDatagram"/>, which stays pump-affine: it answers
+/// synchronously whether the datagram fit into a packet, and that answer cannot survive being
+/// deferred.
 /// </para>
 /// </summary>
 public sealed class Http3Tunnel : IHTTP2Tunnel
@@ -84,26 +89,84 @@ public sealed class Http3Tunnel : IHTTP2Tunnel
     }
 
     /// <summary>
-    /// Sends a chunk to the peer — as a DATA frame on the CONNECT stream (RFC 9114 §4.4).
+    /// Sends a chunk to the peer — as a DATA frame on the CONNECT stream (RFC 9114 §4.4). Queued for
+    /// the pump; the DATA frame is built here, so <paramref name="Data"/> may be reused on return.
     /// </summary>
     public Task WriteAsync(byte[] Data, CancellationToken CancellationToken)
     {
-        _stream.Write(Http3Frames.Build(Http3FrameType.Data, Data));
+        if (CancellationToken.IsCancellationRequested)
+            return Task.FromCanceled(CancellationToken);
+
+        byte[] frame = Http3Frames.Build(Http3FrameType.Data, Data);
+        lock (_lock)
+            _outbound.Enqueue((OutboundKind.Data, frame));
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Ends our own send direction in an orderly fashion (FIN ≙ TCP close, RFC 9220 §3).
+    /// Ends our own send direction in an orderly fashion (FIN ≙ TCP close, RFC 9220 §3). Queued
+    /// behind everything already written, so the FIN cannot overtake it.
     /// </summary>
-    public void Complete() => _stream.Finish();
+    public void Complete()
+    {
+        lock (_lock)
+            _outbound.Enqueue((OutboundKind.Finish, null));
+    }
 
     /// <summary>
     /// Aborts the tunnel abruptly (≙ TCP RST): RESET_STREAM/STOP_SENDING with H3_REQUEST_CANCELLED.
     /// </summary>
     public void Abort()
     {
-        _stream.Reset(Http3Error.RequestCancelled);
-        _stream.AbortRead(Http3Error.RequestCancelled);
+        lock (_lock)
+        {
+            // Queued but unsent data is dropped — that is what distinguishes a reset from a close.
+            _outbound.Clear();
+            _outbound.Enqueue((OutboundKind.Abort, null));
+        }
+    }
+
+    // ---- Outbound queue --------------------------------------------------------------------------
+
+    private enum OutboundKind { Data, Finish, Abort }
+
+    private readonly Queue<(OutboundKind Kind, byte[]? Frame)> _outbound = new();
+
+    /// <summary>
+    /// Called by the pump: puts everything the consumer has queued onto the QUIC stream. Runs after
+    /// incoming streams have been processed, so an answer written by an inline continuation of a
+    /// read still goes out on the same pass.
+    /// </summary>
+    internal void PumpOutbound()
+    {
+        while (true)
+        {
+            (OutboundKind Kind, byte[]? Frame) item;
+            lock (_lock)
+            {
+                if (_outbound.Count == 0)
+                    return;
+                item = _outbound.Dequeue();
+            }
+
+            // Outside the lock: these reach into the QUIC stream, which is the pump's own territory
+            // and must never be entered while holding a lock a consumer thread can be waiting on.
+            switch (item.Kind)
+            {
+                case OutboundKind.Data:
+                    _stream.Write(item.Frame!);
+                    break;
+
+                case OutboundKind.Finish:
+                    _stream.Finish();
+                    break;
+
+                case OutboundKind.Abort:
+                    _stream.Reset(Http3Error.RequestCancelled);
+                    _stream.AbortRead(Http3Error.RequestCancelled);
+                    break;
+            }
+        }
     }
 
     /// <summary>

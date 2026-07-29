@@ -731,6 +731,12 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
 
         PumpResponses();
 
+        // Tunnel writes: queued by the consumer — possibly on a thread-pool thread — and put on the
+        // stream here. Deliberately AFTER the stream processing above, so an answer written by a
+        // continuation running inline on a completed read still leaves on this same pass.
+        foreach (RequestState state in _requests.Values)
+            state.Tunnel?.PumpOutbound();
+
         // Dispatch HTTP datagrams LAST (RFC 9297 §2.1): this way request streams/tunnels from the
         // same flight are already set up instead of discarding the datagrams as "unknown".
         DispatchReceivedDatagrams();

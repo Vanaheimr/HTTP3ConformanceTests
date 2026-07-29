@@ -96,6 +96,86 @@ public class Http3TunnelConcurrencyTests
 
     #endregion
 
+    #region Send side (marshalled to the pump)
+
+    [Test]
+    public void WritesReachTheStreamOnlyOnceThePumpDrains()
+    {
+        var stream = new QuicStream(new StreamId(0));
+        var tunnel = new Http3Tunnel(stream);
+
+        tunnel.WriteAsync([1, 2, 3], CancellationToken.None);
+
+        // The whole point of the marshalling: the consumer's thread does not touch the send buffer.
+        Assert.That(stream.Send.PendingBytes, Is.Zero, "The write must not reach the stream directly.");
+
+        tunnel.PumpOutbound();
+        Assert.That(stream.Send.PendingBytes, Is.GreaterThan(0), "The pump must put the write on the stream.");
+    }
+
+    [Test]
+    public void TheFinCannotOvertakeWritesQueuedBeforeIt()
+    {
+        var stream = new QuicStream(new StreamId(0));
+        var tunnel = new Http3Tunnel(stream);
+
+        tunnel.WriteAsync([1, 2, 3], CancellationToken.None);
+        tunnel.Complete();
+        tunnel.PumpOutbound();
+
+        // Both happened, and the bytes are on the stream rather than lost behind the FIN.
+        Assert.That(stream.Send.PendingBytes, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public void AbortDropsWhatWasQueuedButNotYetSent()
+    {
+        var stream = new QuicStream(new StreamId(0));
+        var tunnel = new Http3Tunnel(stream);
+
+        tunnel.WriteAsync([1, 2, 3], CancellationToken.None);
+        tunnel.Abort();   // a reset, not a close: queued data is not delivered (RFC 9000 §2.4)
+        tunnel.PumpOutbound();
+
+        Assert.That(stream.Send.IsReset, Is.True);
+        Assert.That(stream.Send.PendingBytes, Is.Zero, "A reset must not still emit the queued chunk.");
+    }
+
+    /// <summary>
+    /// The case the marshalling exists for: a consumer resuming on a thread-pool thread writes while
+    /// the pump drains. Nothing may be lost, torn or reordered.
+    /// </summary>
+    [Test]
+    public void WritesFromAnotherThread_ArriveCompleteAndInOrder()
+    {
+        const int writes = 20_000;
+
+        var stream = new QuicStream(new StreamId(0));
+        var tunnel = new Http3Tunnel(stream);
+        bool writerDone = false;
+
+        Task writer = Task.Run(() =>
+        {
+            for (int i = 0; i < writes; i++)
+                tunnel.WriteAsync(BitConverter.GetBytes(i), CancellationToken.None);
+            Volatile.Write(ref writerDone, true);
+        });
+
+        Task pump = Task.Run(() =>
+        {
+            while (!Volatile.Read(ref writerDone))
+                tunnel.PumpOutbound();
+            tunnel.PumpOutbound(); // final drain
+        });
+
+        Assert.That(Task.WhenAll(writer, pump).Wait(TimeSpan.FromSeconds(30)), Is.True);
+
+        // Every write becomes one DATA frame: type 0x00, length 4, four payload bytes = 6 bytes each.
+        Assert.That(stream.Send.PendingBytes, Is.EqualTo(writes * 6), "Writes were lost or duplicated.");
+    }
+
+    #endregion
+
     #region Under concurrency
 
     /// <summary>

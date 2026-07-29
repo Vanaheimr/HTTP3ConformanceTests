@@ -698,6 +698,12 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
             }
         }
 
+        // Tunnel writes: queued by the consumer — possibly on a thread-pool thread — and put on the
+        // stream here. Deliberately AFTER the loop above, so an answer written by a continuation
+        // running inline on a completed read still leaves on this same pass.
+        foreach (RequestState state in _requests.Values)
+            state.Tunnel?.PumpOutbound();
+
         // Server-initiated bidi streams (draft §4.2): WT_STREAM (0x41) ‖ session ID ⇒ WebTransport.
         if (_wtMaxSessions > 0)
             RouteServerInitiatedWebTransportBidi();
