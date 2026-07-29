@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2010-2026 GraphDefined GmbH <achim.friedland@graphdefined.com>
  * This file is part of Vanaheimr Hermod <https://www.github.com/Vanaheimr/Hermod>
  *
@@ -192,6 +192,7 @@ public sealed class Http3Server : IAsyncDisposable
         if (_loopTask is not null)
             throw new InvalidOperationException("Start has already been called.");
         _udp = new UdpClient(new IPEndPoint(System.Net.IPAddress.Any, _requestedPort));
+        DisableIcmpUnreachableException(_udp);
         Port = ((IPEndPoint)_udp.Client.LocalEndPoint!).Port;
         _loopTask = Task.Run(LoopAsync, CancellationToken.None);
     }
@@ -201,6 +202,29 @@ public sealed class Http3Server : IAsyncDisposable
     /// timers of every other connection.
     /// </summary>
     private const int MaxDatagramsPerBatch = 64;
+
+    /// <summary>
+    /// Windows only: stop ICMP "port unreachable" from surfacing as a receive error on this socket.
+    /// <para>
+    /// A UDP server keeps sending to a peer that has vanished — loss recovery retransmits, and it
+    /// has no way to know the process behind the port is gone. Windows answers each of those with
+    /// ICMP, and by default turns it into a WSAECONNRESET on the NEXT receive of the socket that
+    /// sent it. The receive loop then spends its time on error completions rather than on
+    /// datagrams: one dead peer is survivable, several starve new handshakes entirely.
+    /// </para>
+    /// <para>
+    /// The client side has always done this; the server did not, which is why the symptom only ever
+    /// showed up with more than a couple of clients — and why nothing caught it, since no test
+    /// opened a second client against one server.
+    /// </para>
+    /// </summary>
+    private static void DisableIcmpUnreachableException(UdpClient udp)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        const int SIO_UDP_CONNRESET = unchecked((int)0x9800000C);
+        udp.Client.IOControl(SIO_UDP_CONNRESET, [0, 0, 0, 0], null);
+    }
 
     private async Task LoopAsync()
     {
