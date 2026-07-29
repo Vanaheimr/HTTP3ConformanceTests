@@ -48,8 +48,14 @@ public class TimeProviderTests
         ServerCertificate cert, FakeTimeProvider clock, TransportParameters? serverParams = null)
     {
         var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
-        var client = new QuicClientConnection("localhost", certificateValidation: validation, timeProvider: clock);
-        var server = new QuicServerConnection(cert, serverParams, timeProvider: clock);
+        // PMTU discovery off for the same reason the ACK flush below exists: its probes are
+        // ack-eliciting, so under a fake clock that jumps in 100-ms steps each one contributes a
+        // 100-ms RTT sample, and the 3×PTO idle floor then swallows the margins these tests measure.
+        // These tests are about timers, not about path MTU.
+        var client = new QuicClientConnection("localhost", certificateValidation: validation, timeProvider: clock,
+                                              maxDatagramSizeCeiling: QuicEndpoint.MaxDatagramSize);
+        var server = new QuicServerConnection(cert, serverParams, timeProvider: clock,
+                                              maxDatagramSizeCeiling: QuicEndpoint.MaxDatagramSize);
         client.Start();
         for (int round = 0; round < 20 && !client.HandshakeConfirmed; round++)
             Pump(client, server);

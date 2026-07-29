@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2010-2026 GraphDefined GmbH <achim.friedland@graphdefined.com>
  * This file is part of Vanaheimr Hermod <https://www.github.com/Vanaheimr/Hermod>
  *
@@ -21,6 +21,7 @@ using System.Threading;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 using org.GraphDefined.Vanaheimr.Hermod.Quic;
+using org.GraphDefined.Vanaheimr.Hermod.Quic.Recovery;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls;
 using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 
@@ -143,7 +144,11 @@ public class Http3ClientServerTests
         Assert.That(body.AsSpan().SequenceEqual(response.Body), Is.True, "The received body must match byte for byte.");
 
         // The MTU-limited emitter must not produce oversized datagrams.
-        Assert.That(maxServerDatagram <= 1300, Is.True, $"Server datagram too large: {maxServerDatagram} bytes.");
+        // Upper bound is the DPLPMTUD search ceiling, not the 1200-byte floor: once discovery has
+        // proven a larger path (RFC 9000 §14.3) the send path legitimately uses it, and a PMTU
+        // probe is larger still by definition (§14.2). Nothing may exceed the ceiling, though.
+        Assert.That(maxServerDatagram <= PathMtuDiscovery.DefaultSearchCeiling, Is.True,
+                    $"Server datagram too large: {maxServerDatagram} bytes.");
     }
 
     [Test]
@@ -266,7 +271,11 @@ public class Http3ClientServerTests
         Assert.That(System.Security.Cryptography.SHA256.HashData(requestBody).AsSpan().SequenceEqual(response.Body), Is.True, "The SHA-256 checksum of the upload must match — the body arrived byte for byte.");
 
         // The client emitter too stays MTU-limited.
-        Assert.That(maxClientDatagram <= 1300, Is.True, $"Client datagram too large: {maxClientDatagram} bytes.");
+        // Upper bound is the DPLPMTUD search ceiling, not the 1200-byte floor: once discovery has
+        // proven a larger path (RFC 9000 §14.3) the send path legitimately uses it, and a PMTU
+        // probe is larger still by definition (§14.2). Nothing may exceed the ceiling, though.
+        Assert.That(maxClientDatagram <= PathMtuDiscovery.DefaultSearchCeiling, Is.True,
+                    $"Client datagram too large: {maxClientDatagram} bytes.");
     }
 
     [Test]
