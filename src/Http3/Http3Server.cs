@@ -481,7 +481,11 @@ public sealed class Http3Server : IAsyncDisposable
         }
         _connections.RemoveAll(conn =>
         {
-            if (!conn.Connection.IsIdleTimedOut)
+            // Idle timeout OR a finished close. A peer that says goodbye (RFC 9000 §10.2) should not
+            // keep its streams and flow-control state alive here for another idle period — the
+            // draining phase is over once the state reaches Closed, and nothing is owed to it after
+            // that.
+            if (!conn.Connection.IsIdleTimedOut && !conn.Connection.IsClosed)
                 return false;
             Forget(conn);
             conn.Connection.Dispose();

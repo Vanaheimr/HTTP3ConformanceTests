@@ -293,6 +293,38 @@ public sealed class Http3Client : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Sends CONNECTION_CLOSE before the socket goes away (RFC 9000 §10.2, RFC 9114 §5.2 with
+    /// H3_NO_ERROR). Without it the client just vanishes: the server keeps the connection, its
+    /// streams and its flow-control state until the idle timeout — 30 s by default — and its loss
+    /// recovery keeps retransmitting at a port nobody is listening on. That storm of undeliverable
+    /// packets is what starved the server before the ICMP guard was added; the guard makes the
+    /// server survive rude peers, this makes us not be one.
+    /// <para>
+    /// Strictly best-effort and bounded: a dispose must not hang because a socket is already dead or
+    /// the pump is wedged. Whatever fails here is exactly the situation the peer's idle timeout
+    /// exists for.
+    /// </para>
+    /// </summary>
+    private async Task SayGoodbyeAsync()
+    {
+        try
+        {
+            if (!await _mutex.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false))
+                return; // the pump is busy — leave it to the peer's idle timeout
+            try
+            {
+                if (_udp is null || _connection.IsClosing)
+                    return;
+                _connection.CloseGracefully();
+                FlushLocked(); // the CONNECTION_CLOSE packet itself
+            }
+            finally { _mutex.Release(); }
+        }
+        catch (ObjectDisposedException) { }
+        catch (SocketException) { }
+    }
+
     private void FlushLocked()
     {
         if (_udp is null)
@@ -359,6 +391,9 @@ public sealed class Http3Client : IAsyncDisposable
         if (_disposed)
             return;
         _disposed = true;
+
+        await SayGoodbyeAsync().ConfigureAwait(false);
+
         _cts.Cancel();
         if (_pumpTask is { } pump)
             try { await pump.ConfigureAwait(false); } catch { /* pump shutdown */ }

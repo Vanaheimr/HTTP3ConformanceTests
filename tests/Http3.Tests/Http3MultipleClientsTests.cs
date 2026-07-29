@@ -92,6 +92,50 @@ public class Http3MultipleClientsTests
     }
 
     [Test]
+    public async Task DisposingAClient_ReleasesTheServerConnection_LongBeforeTheIdleTimeout()
+    {
+        // The client sends CONNECTION_CLOSE on dispose (RFC 9000 §10.2) instead of vanishing, and
+        // the server drops the connection once the close is done. Without either half the server
+        // would hold the streams and flow-control state for the full idle timeout — 30 s by default,
+        // which is what the bound below is really testing against.
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+        await using Http3Server server = StartServer(cert);
+
+        var client = new Http3Client("localhost", server.Port, validation);
+        await client.ConnectAsync(ConnectTimeout);
+        Assert.That((await client.GetAsync("/").WaitAsync(RequestTimeout)).Status, Is.EqualTo(200));
+        Assert.That(server.ConnectionCount, Is.EqualTo(1));
+
+        await client.DisposeAsync();
+
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        while (server.ConnectionCount > 0 && DateTimeOffset.UtcNow < deadline)
+            await Task.Delay(20);
+
+        Assert.That(server.ConnectionCount, Is.Zero,
+                    "A closed connection must not linger until the idle timeout.");
+    }
+
+    [Test]
+    public async Task ManyShortLivedClients_DoNotAccumulateOnTheServer()
+    {
+        using var cert = ServerCertificate.CreateSelfSigned("localhost");
+        var validation = new CertificateValidationOptions { CustomTrustRoots = [cert.Certificate] };
+        await using Http3Server server = StartServer(cert);
+
+        for (int i = 0; i < 10; i++)
+            Assert.That(await RequestAsync(server.Port, validation), Is.EqualTo(200), $"Client {i + 1}.");
+
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        while (server.ConnectionCount > 0 && DateTimeOffset.UtcNow < deadline)
+            await Task.Delay(20);
+
+        Assert.That(server.ConnectionCount, Is.Zero, "Ten clients came and went; none may be left behind.");
+        Assert.That(server.ConnectionsRefused, Is.Zero);
+    }
+
+    [Test]
     public async Task TwoClientsAtOnce_StayIndependent()
     {
         // Both connections are live at the same time and interleave their requests — the demux by
