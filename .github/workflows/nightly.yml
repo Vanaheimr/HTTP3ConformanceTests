@@ -1,0 +1,69 @@
+name: Nightly
+
+# ci.yml gates every push with the 224 in-process HTTP/3 tests. Those never
+# touch the network, which is what makes them a gate — and also what they
+# cannot tell us: whether the stack still talks to implementations that were
+# not written here.
+#
+# This workflow answers that, and only that. It reaches eight public HTTP/3
+# servers of eight different QUIC stacks, so it is allowed to be flaky in a way
+# a gate must not be.
+#
+# Two things worth knowing about scheduled workflows: they only ever run on the
+# default branch, and GitHub disables them after 60 days without any repository
+# activity. If this stops reporting, that is the first thing to check.
+on:
+  schedule:
+    # 02:43 UTC — after Hermod's nightly, and off the hour, where GitHub's
+    # scheduler is busiest and delays runs by tens of minutes.
+    - cron: '43 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  interop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build samples/H3Get/H3Get.csproj --configuration Release
+
+      # The client interop matrix — see INTEROP.md. Fresh connection per target,
+      # FULL certificate chain and hostname validation, no -k.
+      #
+      # Note what this does NOT gate on: H3Get exits non-zero only when ALL
+      # eight stacks are unreachable, so a night where six of eight broke still
+      # ends green. That threshold is deliberately not tightened yet — nobody
+      # has measured how many of these eight answer a datacentre IP at all.
+      # Akamai and Outlook run bot protection that treats hosted runners
+      # differently from a residential line, and picking a threshold before
+      # seeing the baseline would just produce a red that gets clicked away.
+      # Read the summary below for a few nights, then set one.
+      - name: Client interop matrix
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          dotnet run --project samples/H3Get --configuration Release --no-build -- --interop 2>&1 | tee interop.txt
+          {
+            echo '## Client interop matrix'
+            echo
+            echo '```'
+            cat interop.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Deliberately absent: the server side. INTEROP.md probes our own server
+      # with an HTTP/3-capable curl, but the curl preinstalled on windows-latest
+      # is a Schannel build WITHOUT HTTP/3 — it would report a failure that says
+      # nothing about our server. Adding this back means installing a real
+      # HTTP/3 curl in the job first.

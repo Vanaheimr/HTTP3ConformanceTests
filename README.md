@@ -1,6 +1,7 @@
 # HTTP/3 Conformance Tests
 
 [![CI](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/ci.yml/badge.svg)](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/ci.yml)
+[![Nightly](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/nightly.yml/badge.svg)](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/nightly.yml)
 
 An HTTP/3 stack (QUIC + TLS 1.3 + HTTP/3) in pure C# on .NET 10, sitting directly on UDP sockets —
 **without large dependencies**, just the .NET Base Class Library.
