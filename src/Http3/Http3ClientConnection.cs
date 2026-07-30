@@ -1064,6 +1064,8 @@ public sealed class Http3ClientConnection : IDisposable, IWebTransportHost
             {
                 writer.WriteVarInt(WebTransportConstants.SettingMaxSessions);
                 writer.WriteVarInt(_wtMaxSessions);
+                writer.WriteVarInt(WebTransportConstants.SettingMaxSessionsDraft07); // servers built against draft-07
+                writer.WriteVarInt(_wtMaxSessions);
                 writer.WriteVarInt(WebTransportConstants.SettingInitialMaxStreamsUni);
                 writer.WriteVarInt(LocalInitialMaxStreamsUni);
                 writer.WriteVarInt(WebTransportConstants.SettingInitialMaxStreamsBidi);

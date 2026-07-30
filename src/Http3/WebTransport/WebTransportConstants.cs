@@ -27,6 +27,15 @@ public static class WebTransportConstants
 
     /// <summary>SETTINGS_WT_MAX_SESSIONS — max. concurrent sessions; &gt;1 activates flow control (§5.1).</summary>
     public const ulong SettingMaxSessions = 0x14e9cd29;
+
+    /// <summary>
+    /// The same setting under the codepoint draft-07 assigned it (<c>SETTINGS_WEBTRANS_MAX_SESSIONS</c>
+    /// in quiche). Browsers are behind the draft: Chrome 150 logs 0x14e9cd29 as an unsupported setting
+    /// type and then refuses the opening handshake, because it looks for this value instead. We
+    /// announce and accept both, which costs an ignored SETTINGS entry per peer and is the only way a
+    /// browser can open a session at all.
+    /// </summary>
+    public const ulong SettingMaxSessionsDraft07 = 0xc671706a;
     public const ulong SettingInitialMaxStreamsUni = 0x2b64;
     public const ulong SettingInitialMaxStreamsBidi = 0x2b65;
     public const ulong SettingInitialMaxData = 0x2b61;

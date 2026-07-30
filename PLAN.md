@@ -1049,7 +1049,8 @@ the zero-allocation path, UDP batching and window auto-tuning likewise.)*
 5. **Interop targets (client side) ✅ 8 stacks:** quiche (Cloudflare), nginx, Google QUIC, mvfst
    (Meta), lsquic (LiteSpeed), msquic (Microsoft/outlook), quic-go (Caddy), Akamai — each status
    2xx/3xx with full cert validation. **Server side:** `curl --http3` ✅ (ngtcp2/LibreSSL on
-   Windows + OpenSSL-QUIC under WSL/Debian); Firefox/Chrome open (need trusted certificates).
+   Windows + OpenSSL-QUIC under WSL/Debian) and **Chrome 150 / Edge 150** ✅ (headless, 8/8 incl.
+   WebTransport, via `tools/browser-interop.ps1`); Firefox still open (own NSS trust store).
 6. **State-machine tests in-process:** our own client against our own server without a real
    network (in-memory "UDP"), so handshake tests run in milliseconds.
 
@@ -1160,7 +1161,7 @@ WebTransport (draft-13) — see phase 7.)*
 3. ✅ Build the ClientHello, send an Initial packet to cloudflare-quic.com, parse the ServerHello —
    from here on, every step gets real server feedback instead of dry runs.
 
-## Status and what is genuinely still open (as of 2026-07-25)
+## Status and what is genuinely still open (as of 2026-07-30)
 
 **Done:** all phases 0–9 — RFC 9114 feature audit, transport-error matrix, every extension
 (Priorities/WebSockets/datagrams/WebTransport incl. RESET_STREAM_AT), PQ crypto (ML-KEM hybrid +
@@ -1172,26 +1173,35 @@ validation (§8.1.2), which closes the last item with a security angle. Client i
 confirmed against **8 independent QUIC stacks** (quiche/nginx/Google/mvfst/lsquic/msquic/quic-go/
 Akamai — matrix at M2), server interop against `curl --http3` (ngtcp2/LibreSSL and OpenSSL-QUIC).
 
+Everything the previous revision of this section listed as open has since been done: receive-side GRO
+and per-connection parallelism, the ClientHello random after a HelloRetryRequest (RFC 8446 §4.1.2),
+NEW_TOKEN issuance/replay, DPLPMTUD, preferred_address, the ACK-frequency extension
+(draft-ietf-quic-ack-frequency-14), structured logging and metrics, and the thread-safety
+inconsistency between `Http3RequestBody` and `Http3Tunnel`.
+
+**Browser interop is done as well** (2026-07-30, see [INTEROP.md](INTEROP.md)): Chrome 150 and
+Edge 150 pass 8/8 against `H3Server`, WebTransport included. Three findings came out of it, all on our
+side of the wire:
+
+- The listening socket was IPv4-only. Browsers resolve `localhost` to `::1` first and, unlike `curl`,
+  do not fall back for QUIC — so `https://localhost:4433/` was silently unreachable while not a single
+  datagram reached the server. `H3Server` now binds dual-stack.
+- The server delayed its SETTINGS until the client's Finished, which put them behind HANDSHAKE_DONE.
+  Chrome decides whether a peer supports WebTransport the moment its handshake completes and gave up
+  with `net::ERR_METHOD_NOT_SUPPORTED` before ever sending the CONNECT. The control stream now opens as
+  soon as the 1-RTT write keys exist (RFC 9001 §4.1.1, RFC 9114 §6.2.1) — a round trip earlier for
+  every client, not just browsers. Regression test: `ServerSettingsTimingTests`.
+- `SETTINGS_WT_MAX_SESSIONS` moved codepoint between WebTransport drafts. We announce and accept both
+  0x14e9cd29 (draft-13) and 0xc671706a (draft-07, what quiche and therefore every browser knows).
+
 **Open, roughly by value:**
 
-1. **Receive-side GRO + per-connection parallelism** — send-side GSO exists; the per-datagram async
-   round trip is gone, so what remains is batched receive and getting connections off one loop.
-2. **ClientHello random after a HelloRetryRequest** (RFC 8446 §4.1.2) — CH2 currently gets a fresh
-   random, which the allowed-changes list does not permit. Small, self-contained MUST fix.
-3. **Protocol extras:** NEW_TOKEN issuance/replay (§8.1.3 — the token machinery now exists, only
-   the frame and the client-side replay are missing), DPLPMTUD (RFC 8899 — datagrams are
-   pinned near 1200 B, so ~20 % of throughput is unused on a 1500-MTU path), preferred_address
-   (§9.6), ACK frequency.
-4. **Observability** — no EventSource/metrics; nothing about a running connection is measurable
-   from outside (qlog covers debugging, not production monitoring).
-
-**Known inconsistency:** `Http3RequestBody` is thread-safe, `Http3Tunnel` is not. The tunnel gets
-away with it only because its consumer (the RFC 6455 WebSocket framing) never leaves the pump
-thread; a tunnel consumer that awaits real I/O would hit the same intermittent corruption that the
-streaming request body did.
-
-Longer-term extras unchanged: browser interop (Firefox/Chrome need trusted certificates) and the
-migration back into Hermod (deduplicating the WebSocket copies).
+1. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+   certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
+2. **Migration back into Hermod** — deduplicating the byte-identical WebSocket copies under
+   `src/Http3/WebSocket/`. Housekeeping, no protocol gain.
+3. **Interop nightly threshold** — the interop matrix needs a known-good runner baseline before a
+   failure count can gate the workflow.
 
 ## References
 

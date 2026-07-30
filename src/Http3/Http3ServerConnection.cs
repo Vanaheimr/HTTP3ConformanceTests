@@ -792,7 +792,11 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
 
     private void InitializeHttp3IfReady()
     {
-        if (_http3Initialized || !_quic.HandshakeComplete)
+        // 1-RTT write keys are enough — waiting for the client's Finished would delay SETTINGS by a
+        // round trip and, worse, put them behind HANDSHAKE_DONE in the same flight. Chrome decides
+        // whether a server supports WebTransport the moment the handshake completes, and a client that
+        // has not seen SETTINGS by then concludes it does not (net::ERR_METHOD_NOT_SUPPORTED).
+        if (_http3Initialized || !_quic.ApplicationKeysInstalled)
             return;
 
         QuicStream control = _quic.OpenUnidirectionalStream();
@@ -1423,6 +1427,8 @@ public sealed class Http3ServerConnection : IDisposable, IWebTransportHost
             if (_wtMaxSessions > 0) // draft-webtrans-http3 §3.1/§9.2
             {
                 writer.WriteVarInt(WebTransportConstants.SettingMaxSessions);
+                writer.WriteVarInt(_wtMaxSessions);
+                writer.WriteVarInt(WebTransportConstants.SettingMaxSessionsDraft07); // browsers still use this codepoint
                 writer.WriteVarInt(_wtMaxSessions);
                 writer.WriteVarInt(WebTransportConstants.SettingInitialMaxStreamsUni);
                 writer.WriteVarInt(LocalInitialMaxStreamsUni);

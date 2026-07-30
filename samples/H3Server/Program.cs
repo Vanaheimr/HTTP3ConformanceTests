@@ -22,6 +22,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
@@ -100,11 +101,34 @@ IReadOnlyList<NamedGroup>? preferGroups =
     : args.Contains("--x448") ? [NamedGroup.X448, NamedGroup.X25519, NamedGroup.Secp256r1]
     : null;
 
+// --cert[=<path.pfx>]: keep the ECDSA certificate (and thus its public key) across restarts. Needed
+// by any client that pins the key instead of validating a chain — a browser started with
+// Chrome's --ignore-certificate-errors-spki-list=<pin> would otherwise need a new pin every start.
+string? certArg = args.FirstOrDefault(a => a.StartsWith("--cert", StringComparison.Ordinal));
+string? certPath = certArg is null ? null
+    : certArg.StartsWith("--cert=", StringComparison.Ordinal) ? certArg["--cert=".Length..]
+    : Path.Combine(AppContext.BaseDirectory, "server-certificate.pfx");
+if (certPath is not null && (useMLDsa || useEd448 || useEd25519))
+{
+    Console.WriteLine("--cert stores an ECDSA P-256 certificate; combine it with neither --mldsa, --ed448 nor --ed25519.");
+    return;
+}
+
+// --cert-days=<n>: total certificate lifetime. WebTransport's serverCertificateHashes accepts an
+// ECDSA P-256 certificate only while it is valid for at most 14 days, so a browser can open a
+// WebTransport session against us only with a short-lived one (see /browser).
+TimeSpan? certValidity = args.FirstOrDefault(a => a.StartsWith("--cert-days=", StringComparison.Ordinal)) is { } daysArg
+                         && int.TryParse(daysArg["--cert-days=".Length..], out int days)
+    ? TimeSpan.FromDays(days)
+    : null;
+
+bool certCreated = false;
 using var certificate =
-    useMLDsa ? ServerCertificate.CreateSelfSignedMLDsa("localhost")
+    certPath is not null ? ServerCertificate.LoadOrCreatePkcs12(certPath, out certCreated, "localhost", certValidity)
+    : useMLDsa ? ServerCertificate.CreateSelfSignedMLDsa("localhost")
     : useEd448 ? ServerCertificate.CreateSelfSignedEd448("localhost")
     : useEd25519 ? ServerCertificate.CreateSelfSignedEd25519("localhost")
-    : ServerCertificate.CreateSelfSigned("localhost");
+    : ServerCertificate.CreateSelfSigned("localhost", certValidity);
 // Process-wide ticket store for session resumption (RFC 8446 §4.6.1): one instance for all connections.
 var resumptionCache = new ServerResumptionCache();
 
@@ -119,14 +143,25 @@ var statelessResetTokens = new StatelessResetTokenGenerator(statelessResetSecret
 
 Console.WriteLine($"== HTTP/3 Conformance Tests — server on UDP/{port} ==");
 Console.WriteLine($"Certificate: {certificate.Certificate.Subject} ({certificate.SignatureScheme}, thumbprint {certificate.Certificate.Thumbprint[..16]}…)");
+if (certPath is not null)
+    Console.WriteLine($"             {certPath} ({(certCreated ? "newly created" : "loaded — the pin below stays valid")})");
+Console.WriteLine($"SPKI pin: {certificate.SubjectPublicKeyInfoPin}  (Chrome: --ignore-certificate-errors-spki-list=<pin>)");
+// WebTransport's serverCertificateHashes needs the hash of the whole certificate, and only accepts it
+// while the certificate lives at most 14 days — /browser embeds both facts, so say so here too.
+bool webTransportHashUsable = certificate.SignatureScheme == SignatureScheme.EcdsaSecp256r1Sha256
+                              && certificate.Certificate.NotAfter - certificate.Certificate.NotBefore <= TimeSpan.FromDays(14);
+Console.WriteLine($"Cert hash: {certificate.CertificateHashSha256[..32]}…  "
+                  + $"(WebTransport serverCertificateHashes: {(webTransportHashUsable ? "usable" : "REJECTED — needs --cert-days=14 or less")})");
+Console.WriteLine($"Valid until {certificate.Certificate.NotAfter:yyyy-MM-dd HH:mm} local");
 Console.WriteLine($"Idle timeout: {idleMs} ms (announced; effectively at least 3·PTO)");
 Console.WriteLine($"Stateless-reset secret: {secretPath} ({(secretCreated ? "newly created" : "loaded — survives restarts")})");
 if (requireRetry)
     Console.WriteLine("Address validation: Retry active (every new connection first receives a Retry)");
 Console.WriteLine("Waiting for HTTP/3 clients … (Ctrl+C to stop)\n");
 
-using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { ReceiveTimeout = 1000 };
-socket.Bind(new IPEndPoint(System.Net.IPAddress.Any, port));
+using var socket = Bind(port);
+Console.WriteLine($"Listening on {socket.LocalEndPoint} "
+                  + (socket.AddressFamily == AddressFamily.InterNetworkV6 ? "(dual-stack)" : "(IPv4 only)"));
 
 // Connections are demultiplexed primarily via the connection ID (not via the address), so that a
 // connection migration (RFC 9000 §9) — a client changing its address — hits the same connection.
@@ -139,7 +174,9 @@ byte[] buffer = new byte[2048];
 
 while (true)
 {
-    EndPoint from = new IPEndPoint(System.Net.IPAddress.Any, 0);
+    EndPoint from = new IPEndPoint(socket.AddressFamily == AddressFamily.InterNetworkV6
+                                       ? System.Net.IPAddress.IPv6Any
+                                       : System.Net.IPAddress.Any, 0);
     int n;
     try
     {
@@ -258,6 +295,16 @@ while (true)
 
     conn.Connection.ProcessDatagram(datagram);
 
+    // Report what the peer chose, once per connection — for a foreign client this is the only place
+    // the negotiated group/suite becomes visible from our side.
+    if (conn.Connection.HandshakeComplete && !conn.HandshakeAnnounced)
+    {
+        conn.HandshakeAnnounced = true;
+        Console.WriteLine($"  ✓ Handshake complete: {conn.Connection.Quic.NegotiatedGroup} / "
+                          + $"{conn.Connection.Quic.NegotiatedCipherSuite} / {certificate.SignatureScheme}"
+                          + (conn.Connection.ResumptionAccepted ? " (resumed)" : ""));
+    }
+
     // Graceful-shutdown demo (RFC 9114 §5.2): first announce GOAWAY (and flush), then in the NEXT
     // exchange — provided nothing is outstanding — close decently with H3_NO_ERROR.
     if (goAwayDemo && !conn.Connection.IsClosing && !conn.Connection.IsDraining)
@@ -328,6 +375,30 @@ while (true)
         Console.WriteLine($"Peer {conn.Endpoint} closed the connection (error code {conn.Connection.PeerCloseFrame?.ErrorCode}){reason}.");
         conn.Connection.Dispose();
         connections.Remove(conn);
+    }
+}
+
+// Opens the listening socket, dual-stack if the machine allows it. This matters for browsers: they
+// resolve "localhost" to ::1 first and — unlike curl — do not fall back to 127.0.0.1 for QUIC, so an
+// IPv4-only socket makes https://localhost:<port>/ silently unreachable (Chrome reports
+// ERR_QUIC_PROTOCOL_ERROR while not a single datagram ever arrives here).
+static Socket Bind(int port)
+{
+    Socket? dualStack = null;
+    try
+    {
+        dualStack = new Socket(AddressFamily.InterNetworkV6, SocketType.Dgram, ProtocolType.Udp)
+                    { ReceiveTimeout = 1000, DualMode = true };
+        dualStack.Bind(new IPEndPoint(System.Net.IPAddress.IPv6Any, port));
+        return dualStack;
+    }
+    catch (SocketException)
+    {
+        // IPv6 switched off: serve IPv4 only rather than refuse to start.
+        dualStack?.Dispose();
+        var ipv4 = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { ReceiveTimeout = 1000 };
+        ipv4.Bind(new IPEndPoint(System.Net.IPAddress.Any, port));
+        return ipv4;
     }
 }
 
@@ -437,7 +508,8 @@ static string? SelectWebTransportProtocol(Http3Request request, IReadOnlyList<st
     return offered.FirstOrDefault(p => p is "echo-v2" or "echo-v1");
 }
 
-static Http3Response Handle(Http3Request request)
+// Not static: /browser embeds this server's certificate hash, so the handler needs the certificate.
+Http3Response Handle(Http3Request request)
 {
     Console.WriteLine($"  → {request.Method} {request.Path}  (:authority={request.Authority}"
                       + (request.Body.Length > 0 ? $", body {request.Body.Length} bytes" : "") + ")");
@@ -455,6 +527,21 @@ static Http3Response Handle(Http3Request request)
             Body = bigBody,
         };
     }
+
+    // GET /browser: the browser self-test page (see BrowserTestPage) — a real browser runs the
+    // battery against us and posts its verdict to /report.
+    if (request.Path == "/browser")
+        return new Http3Response
+        {
+            Status = 200,
+            Headers = [new HeaderField("content-type", "text/html; charset=utf-8"), new HeaderField("server", "http3-from-scratch")],
+            Body = Encoding.UTF8.GetBytes(BrowserTestPage.Render(certificate.CertificateHashSha256)),
+        };
+
+    // POST /report: that verdict. Printing it here is the whole point — the server log becomes the
+    // record of what the browser saw, so a headless run needs neither DOM scraping nor DevTools.
+    if (request.Method == "POST" && request.Path == "/report")
+        return PrintBrowserReport(request.Body);
 
     // GET /hints: 103 Early Hints (interim response, RFC 9110 §15.2.2) before the final response and
     // a trailer section with a checksum after it (RFC 9114 §4.1: HEADERS(1xx) → HEADERS → DATA → HEADERS).
@@ -503,11 +590,40 @@ static Http3Response Handle(Http3Request request)
     };
 }
 
+// Prints the browser self-test report. Malformed input answers 400 instead of throwing: this runs on
+// the pump thread, where an escaping exception would take the whole server down.
+static Http3Response PrintBrowserReport(byte[] json)
+{
+    try
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        Console.WriteLine($"  == Browser self-test: {document.RootElement.GetProperty("userAgent").GetString()}");
+        int passed = 0, total = 0;
+        foreach (JsonElement result in document.RootElement.GetProperty("results").EnumerateArray())
+        {
+            bool ok = result.GetProperty("ok").GetBoolean();
+            total++;
+            if (ok)
+                passed++;
+            Console.WriteLine($"     {(ok ? "PASS" : "FAIL")}  {result.GetProperty("name").GetString()}"
+                              + $"  ({result.GetProperty("detail").GetString()})");
+        }
+        Console.WriteLine($"  == {passed}/{total} checks passed");
+        return new Http3Response { Status = 204 };
+    }
+    catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException)
+    {
+        Console.WriteLine($"  == Browser self-test report unreadable: {e.Message}");
+        return new Http3Response { Status = 400 };
+    }
+}
+
 // A server connection together with its current peer address (which may change on migration).
 sealed class ServerConn(Http3ServerConnection connection, EndPoint endpoint)
 {
     public Http3ServerConnection Connection { get; } = connection;
     public EndPoint Endpoint { get; set; } = endpoint;
     public bool PathAnnounced { get; set; }
+    public bool HandshakeAnnounced { get; set; } // negotiated group/suite already reported
     public bool GoAwayAnnounced { get; set; } // GOAWAY already sent (graceful-shutdown demo)
 }

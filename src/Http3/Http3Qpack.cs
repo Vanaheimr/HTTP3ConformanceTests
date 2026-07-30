@@ -483,8 +483,12 @@ internal sealed class Http3Qpack
                 }
                 PeerH3Datagram = value == 1;
             }
-            else if (id == WebTransport.WebTransportConstants.SettingMaxSessions)
-                PeerWtMaxSessions = value; // draft-webtrans-http3 §9.2
+            // Either codepoint counts (draft-webtrans-http3 §9.2 and the draft-07 value browsers still
+            // send). A peer that sends both sends the same number twice, so last-wins is harmless;
+            // one that sends only the old one is understood all the same.
+            else if (id == WebTransport.WebTransportConstants.SettingMaxSessions ||
+                     id == WebTransport.WebTransportConstants.SettingMaxSessionsDraft07)
+                PeerWtMaxSessions = value;
             else if (id == WebTransport.WebTransportConstants.SettingInitialMaxStreamsUni)
                 PeerWtInitialMaxStreamsUni = value;
             else if (id == WebTransport.WebTransportConstants.SettingInitialMaxStreamsBidi)

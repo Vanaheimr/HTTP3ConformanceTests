@@ -43,6 +43,7 @@ time** in [INTEROP.md](INTEROP.md) (`dotnet run --project samples/H3Get -- --int
 | 8+ | **Transport-error matrix complete**: connection-level FLOW_CONTROL_ERROR, TRANSPORT_PARAMETER_ERROR (§7.3 authentication + §7.4/§18.2 value ranges), §10.2.3 close delivery, parser fuzzer | ✅ done |
 | 9 | **Performance**: zero-alloc hot paths (`ByteQueue`, 300 KB download 51→7 MiB), UDP batching (GSO via `UdpBatchSender`), window auto-tuning (`ReceiveWindowTuner`, BDP) | ✅ done |
 | interop | **Client interop against 8 foreign QUIC stacks**: quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — each 2xx/3xx with full cert validation | ✅ done |
+| browser | **Browser interop (server side)**: Chrome 150 / Edge 150 headless, 8/8 checks incl. WebTransport and the PQ hybrid — `tools/browser-interop.ps1` | ✅ done |
 
 ### X25519 & HelloRetryRequest (interop)
 
@@ -98,6 +99,12 @@ time** in [INTEROP.md](INTEROP.md) (`dotnet run --project samples/H3Get -- --int
   **WSL** (**OpenSSL-3.5-QUIC** + nghttp3, across the WSL2 NAT boundary): handshake, `GET /` (200),
   `POST /echo` (byte-exact echo), `GET /big` (300 000 B), `GET /hints` (103 Early Hints + final
   200 + trailers), clean closes. Example: `curl --http3-only -k https://127.0.0.1:4433/`
+- **Browser interop:** `GET /browser` serves a page whose JS runs the whole battery and posts its
+  verdict to `/report`, which the server prints — so the server log is the record and a headless run
+  needs no DOM scraping. Chrome 150 and Edge 150 both report 8/8, including WebTransport (session via
+  `serverCertificateHashes`, datagram + bidi + uni echo) and, with `--mlkem`, the PQ hybrid
+  `X25519MLKEM768`. One command: `pwsh tools/browser-interop.ps1 -Browser chrome`.
+  Details and the two required browser flags: **[INTEROP.md](INTEROP.md)**
 
 ### Certificate validation (client)
 
