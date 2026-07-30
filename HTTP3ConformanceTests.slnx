@@ -9,11 +9,4 @@
     <Project Path="samples/H3Get/H3Get.csproj" />
     <Project Path="samples/H3Server/H3Server.csproj" />
   </Folder>
-  <Folder Name="/src/">
-    <Project Path="src/Http3.Qpack/Http3.Qpack.csproj" />
-    <Project Path="src/Http3/Http3.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/Http3.Tests/Http3.Tests.csproj" />
-  </Folder>
 </Solution>

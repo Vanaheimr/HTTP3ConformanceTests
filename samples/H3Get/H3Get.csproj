@@ -2,7 +2,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\Hermod\Hermod\Hermod.csproj" />
-    <ProjectReference Include="..\..\src\Http3\Http3.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

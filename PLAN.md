@@ -53,28 +53,24 @@ not a complete TLS stack.
 
 ## Project structure
 
+The stack was written here and then moved into Hermod — QUIC on 2026-07-28, HTTP/3 on 2026-07-30 —
+so `src/` and `tests/` are gone from this repository. What lives where now:
+
 ```
 HTTP3ConformanceTests.slnx
-src/
-  Quic.Core/             # Shared primitives – used by all layers
-    VarInt.cs            # QUIC variable-length integers (RFC 9000 §16)
-    Buffers/             # BufferReader/BufferWriter over Span<byte>
-  Quic.Tls/              # QUIC-TLS handshake binding (RFC 8446 + 9001) – TLS 1.3 in the QUIC
-                         # profile, no record layer; references only Quic.Core (no back-reference to Quic)
-    Messages/            # ClientHello, ServerHello (+HRR), EE, Certificate(Verify), Finished, NST
-    Crypto/              # KeySchedule, TlsHkdf, Transcript, IKeyExchange (ECDHE/X25519/X448/hybrid PQ), Ed25519/Ed448
-    Handshake/           # TlsClientHandshake / TlsServerHandshake behind ITlsHandshake, certificate validation
-  Quic/                  # QUIC transport (RFC 9000/9001/9002); references Quic.Tls
+libs/Hermod/             # submodule
+  Hermod/QUIC/           # QUIC transport (RFC 9000/9001/9002) — see its README
+    Buffers/             # VarInt, BufferReader/Writer, ByteQueue, GSO batching
     Packets/             # Long/short header, PN codec, Retry, VN, stateless reset, connection ID
     Crypto/              # Initial secrets, packet/header protection (incl. ChaCha20 HP), key update
     Frames/              # All frame types + FrameParser
     Connection/          # QuicEndpoint (shared logic) + QuicClient-/QuicServerConnection, CID manager, idle
     Streams/             # QuicStream, send/receive buffer, StreamId (incl. reset/abort-read)
-    Recovery/            # RTT, loss detection, PTO, NewReno, pacer (RFC 9002)
-  Http3.Qpack/           # QPACK (RFC 9204): static table, Huffman (RFC 7541 App. B, generated),
-                         # static + dynamic encoder/decoder
-  Http3/                 # HTTP/3 (RFC 9114) + extensions + public API
-    Http3ClientConnection.cs / Http3ServerConnection.cs
+    Recovery/            # RTT, loss detection, PTO, NewReno, pacer (RFC 9002), path MTU discovery
+    TLS/                 # TLS 1.3 handshake engine: Messages/, Crypto/, Handshake/
+    Qlog/ Diagnostics/   # qlog traces; EventSource + metrics
+  Hermod/HTTP3/          # HTTP/3 (RFC 9114) + extensions + public API — see its README
+    Http3ClientConnection.cs / Http3ServerConnection.cs   # the deterministic, socket-free core
     Http3Client.cs / Http3Server.cs   # async API: Task facades with socket + background pump
     UdpBatchSender.cs    # UDP batching: GSO (Linux) + single-send fallback
     Http3Frame.cs / Http3Constants.cs / Http3Message.cs   # frames, error codes, request/response
@@ -82,18 +78,24 @@ src/
     Http3MessageValidator.cs  # malformed detection (§4.1.2/§4.2/§4.3)
     Http3Priority.cs     # RFC 9218 (priority header/PRIORITY_UPDATE)
     Http3Tunnel.cs       # Extended-CONNECT tunnel (RFC 8441/9220)
+    QPack/               # QPACK (RFC 9204): static table, Huffman, static + dynamic encoder/decoder
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
-tests/
-  Http3.Tests/           # 496 NUnit tests, incl. RFC test vectors, "evil" raw-QUIC peers and
+  HermodTests/QUIC/      # mirrors Hermod/QUIC/
+  HermodTests/HTTP3/     # 247 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
+                         # WebTransport/ Robustness/ — RFC vectors, "evil" raw-QUIC peers,
                          # a seeded lossy link (drop/reorder/duplicate)
+  HermodTests/Helpers/   # Expect/Hex/FakeTimeProvider/LossyNetwork, shared by both areas
+tools/
+  browser-interop.ps1    # headless Chrome/Edge against H3Server, exit code as the verdict
 samples/
   H3Get/                 # HTTP/3 client CLI (GET/POST, cancel, GOAWAY, 0-RTT, … — see README)
   H3Server/              # Demo server over UDP (CID demux, Retry, stateless reset, GOAWAY, …)
 
 Namespaces: org.GraphDefined.Vanaheimr.Hermod.Quic (+ .Tls/.Core/…) for the QUIC transport —
-NEXT TO, not below HTTP/3; org.GraphDefined.Vanaheimr.Hermod.HTTP3 (+ .Qpack/.Tests) for the
-HTTP/3 layer. Project/assembly names stay short. Usings in #region Usings blocks.
+NEXT TO, not below HTTP/3; org.GraphDefined.Vanaheimr.Hermod.HTTP3 (+ .Qpack/.WebTransport) for the
+HTTP/3 layer; the tests under org.GraphDefined.Vanaheimr.Hermod.Tests.QUIC / .Tests.HTTP3.
+Usings in #region Usings blocks.
 ```
 
 ---

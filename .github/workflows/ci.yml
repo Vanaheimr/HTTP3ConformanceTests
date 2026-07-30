@@ -33,8 +33,11 @@ jobs:
       - name: Build
         run: dotnet build HTTP3ConformanceTests.slnx --configuration Release
 
-      # 224 tests, none of which touch the network: the whole HTTP/3 stack is
-      # exercised in-process against our own QUIC server, so this is a real
-      # gate rather than a connectivity check.
-      - name: Test
-        run: dotnet test tests/Http3.Tests/Http3.Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal"
+      # The stack itself now lives in the submodule and Hermod's own CI runs its
+      # whole suite. What this gate adds is the pinned submodule commit: the
+      # samples must still compile against it, and its 247 HTTP/3 tests must still
+      # pass. None of them touch the network — the stack is exercised in-process
+      # against our own QUIC server — so this is a real gate, not a connectivity
+      # check.
+      - name: Test (HTTP/3)
+        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal"

@@ -545,17 +545,22 @@ reconstruction), `ChaCha20` (raw block for the HP mask), `RetryIntegrity`.
 
 ## Structure
 
+**The library itself is no longer in this repository.** QUIC moved into Hermod on 2026-07-28 and
+HTTP/3 followed on 2026-07-30; what remains here are the samples, the interop evidence and the plan.
+
 ```
-libs/Hermod/       QUIC lives in Hermod as of 2026-07-28 — Hermod/QUIC/ holds the transport
-                   (buffers, crypto, packets, frames, streams, connection, recovery, qlog) and
-                   TLS/ the TLS 1.3 handshake engine; its 299 tests are in HermodTests/QUIC/.
-                   Namespaces are unchanged (org.GraphDefined.Vanaheimr.Hermod.Quic.*).
-src/Http3.Qpack/   QPACK (static table, Huffman, encoder/decoder)
-src/Http3/         HTTP/3 (frames, client/server connection, malformed validation, priorities,
-                   Extended-CONNECT tunnel) + WebSocket/ (RFC 6455) + WebTransport/ (draft-13)
-                   + async API (Http3Client/Http3Server: Task facades with socket + background pump)
-tests/Http3.Tests/ NUnit tests (224 HTTP/3; the 299 QUIC ones moved to HermodTests/QUIC/), incl. RFC test vectors, "evil" raw-QUIC peers and a
-                   seeded lossy link (drop/reorder/duplicate)
+libs/Hermod/       The whole stack, as a submodule:
+                     Hermod/QUIC/       transport (buffers, crypto, packets, frames, streams,
+                                        connection, recovery, qlog) + TLS/ the TLS 1.3 handshake
+                                        engine — see its README
+                     Hermod/HTTP3/      HTTP/3 + QPack/ + WebSocket/ (RFC 6455) + WebTransport/
+                                        (draft-13) + the async facades Http3Client/Http3Server —
+                                        see its README
+                     HermodTests/QUIC/  and HermodTests/HTTP3/ (247 tests, incl. RFC vectors,
+                                        "evil" raw-QUIC peers and a seeded lossy link)
+                   Namespaces are unchanged: org.GraphDefined.Vanaheimr.Hermod.Quic.* and
+                   org.GraphDefined.Vanaheimr.Hermod.HTTP3.*
+tools/             browser-interop.ps1 — headless Chrome/Edge against H3Server, exit code as verdict
 samples/H3Get/     HTTP/3 client: GET/POST against cloudflare-quic.com or our own server
                    (incl. --interop [matrix against 8 foreign stacks], --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
                    --rotate-cid, --qpack-dynamic, --mlkem, --x448, --chacha20, --loss, --hold, -k)
@@ -565,17 +570,20 @@ samples/H3Server/  HTTP/3 server: self-signed cert, handler over UDP (routes: /,
 ```
 
 Namespaces: QUIC lives under `org.GraphDefined.Vanaheimr.Hermod.Quic` (+ `.Tls`, `.Core`, …) — as a
-standalone transport **next to** HTTP/3, not below it; HTTP/3 under `org.GraphDefined.Vanaheimr.Hermod.HTTP3`
-(+ `.Qpack`, `.Tests`). The project/assembly names stay short (Quic, Quic.Tls, …). All using blocks
-sit in `#region Usings … #endregion` (Hermod style).
+standalone transport **next to** HTTP/3, not below it; HTTP/3 under
+`org.GraphDefined.Vanaheimr.Hermod.HTTP3` (+ `.Qpack`, `.WebTransport`); the tests under
+`org.GraphDefined.Vanaheimr.Hermod.Tests.QUIC` / `.Tests.HTTP3`. All using blocks sit in
+`#region Usings … #endregion` (Hermod style).
 
 ## Build & test
+
+This repository builds the samples; the stack and its tests build and run in the submodule.
 
 ```bash
 dotnet build
 ```
 ```bash
-dotnet test
+dotnet test libs/Hermod/HermodTests/HermodTests.csproj --filter "TestCategory!=LiveDNS"
 ```
 
 Prerequisite: .NET 10 SDK.
