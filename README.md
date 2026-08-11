@@ -1,4 +1,4 @@
-# HTTP/3 Conformance Tests
+# HTTP/3 Conformance & Interoperability Test Suite
 
 [![CI](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/ci.yml/badge.svg)](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/ci.yml)
 [![Nightly](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/nightly.yml/badge.svg)](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/nightly.yml)
