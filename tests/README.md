@@ -9,13 +9,23 @@ client nobody here wrote.
 ```bash
 pwsh tests/run-tests.ps1
 ```
+```bash
+sh tests/run-tests.sh
+```
 
 The runner builds the demo host and the harnesses, starts the host on `:4433`, drives one process
-per harness and prints a pass/fail summary. Flags:
+per harness and prints a pass/fail summary. Flags: `-NoBuild`/`--no-build` (assume a current Release
+build), `-Filter`/`--filter <substr>`, `-Port`/`--port <n>`.
 
-- `-NoBuild` — skip the build step (assumes a current Release build).
-- `-Filter <substr>` — only run harnesses whose name matches.
-- `-Port <n>` — use a different UDP port.
+Two scripts, one job — the same arrangement the HTTP/2 repository uses for `autobahn` and `h2spec`.
+The development machine is Windows; the Debian container CI's second leg runs in has no `pwsh`. Each
+is exercised by the leg it belongs to, so neither can rot unnoticed, but they *are* two
+implementations of one thing: a change to either belongs in both.
+
+On Debian, `h3semantics` reports **SKIP** — `System.Net.Quic` finds no libmsquic in the bare
+container. `h3attack` needs no QUIC client at all and runs in full there: 13/13, including version
+negotiation, the amplification limit and stateless-reset sizing, on the platform this runs on in
+production.
 
 Current status: **38/38 checks pass**, and `ci.yml` runs this on every push. It started at 37/38:
 see [What this found](#what-this-found).

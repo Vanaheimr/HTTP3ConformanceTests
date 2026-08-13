@@ -620,7 +620,8 @@ tests/             Harnesses that drive H3Server as a separate process over real
                      h3bench/           throughput/latency/concurrency baseline (no pass/fail)
                      h3interop/         the matrix against 8 public HTTP/3 servers — the one harness
                                         pointing outwards; live network, so nightly-only
-                   run-tests.ps1 — builds, starts the demo host, runs the gated harnesses, one verdict
+                   run-tests.ps1 / run-tests.sh — builds, starts the demo host, runs the gated
+                                        harnesses, one verdict; one script per platform
 tools/             browser-interop.ps1 — headless Chrome/Edge against H3Server, exit code as verdict
 samples/H3Get/     HTTP/3 client: GET/POST against cloudflare-quic.com or our own server
                    (--post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
@@ -648,6 +649,12 @@ The gate — the demo host, both harnesses, one verdict. This is what `ci.yml` r
 
 ```bash
 pwsh tests/run-tests.ps1
+```
+
+Or, where there is no PowerShell — the Debian container CI's second leg runs in, for instance:
+
+```bash
+sh tests/run-tests.sh
 ```
 
 The stack's own suite lives in the submodule and is the other half of the gate:

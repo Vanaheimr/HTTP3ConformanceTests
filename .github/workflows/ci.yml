@@ -88,13 +88,22 @@ jobs:
       # create state or refuse it, and the server staying alive under datagrams no cooperating peer
       # would send.
       #
-      # Windows only. The Debian leg runs in a bare container where System.Net.Quic finds no
-      # libmsquic, and h3semantics reports SKIP there rather than a green 0/0 — worth having as a
-      # signal, not worth a job that reports nothing. The transport-level scenarios in h3attack need
-      # no QUIC client at all and would run, but splitting the pair across legs buys little.
-      - name: Harnesses (out of process)
+      # One runner per platform, and each is exercised only here: the container has no pwsh, and the
+      # Windows machine these were written on has no reason to run the shell one. Two scripts doing
+      # one job is a drift risk, and pinning each to the leg that needs it is what keeps the risk
+      # visible rather than theoretical.
+      #
+      # The Debian leg is not the poor relation it looks like. h3semantics needs libmsquic, which the
+      # bare container has not got, so it reports SKIP — but h3attack sends hand-built datagrams and
+      # needs no QUIC client at all: 13/13 there, including version negotiation, the amplification
+      # limit and stateless-reset sizing, on the platform this runs on in production.
+      - name: Harnesses (out of process, Windows)
         if: runner.os == 'Windows'
         run: pwsh tests/run-tests.ps1 -NoBuild
+
+      - name: Harnesses (out of process, Debian)
+        if: runner.os == 'Linux'
+        run: sh tests/run-tests.sh --no-build
 
       # The console log answers "did it pass" and almost nothing else: which test failed takes
       # grepping the step log, and a skip reason never reaches the console at normal verbosity

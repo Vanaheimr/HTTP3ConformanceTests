@@ -1,17 +1,19 @@
 name: Nightly
 
-# ci.yml gates every push with the 247 in-process HTTP/3 tests. Those never
-# touch the network, which is what makes them a gate — and also what they
-# cannot tell us: whether the stack still talks to implementations that were
-# not written here.
+# The counterpart to ci.yml, which gates every push against the submodule revision the gitlink
+# pins. This workflow runs the lane that cannot gate a merge — the one that reaches eight public
+# HTTP/3 servers on the open internet — plus the question the gate structurally cannot ask: does
+# this repository still agree with Hermod's *current* master, rather than with the revision it
+# pins?
 #
-# This workflow answers that, and only that. It reaches eight public HTTP/3
-# servers of eight different QUIC stacks, so it is allowed to be flaky in a way
-# a gate must not be.
+# That second question is not hypothetical here. This repository began the day pinned 75 commits
+# behind Hermod, against a revision where HTTPMethod had since become a type; H3Server no longer
+# compiled against master and nothing reported it. Our gate was green because it tests the pin,
+# and Hermod's gate was green because a push there does not touch this repository at all.
 #
-# Two things worth knowing about scheduled workflows: they only ever run on the
-# default branch, and GitHub disables them after 60 days without any repository
-# activity. If this stops reporting, that is the first thing to check.
+# Two things worth knowing about scheduled workflows: they only ever run on the default branch,
+# and GitHub disables them after 60 days without any repository activity. If this stops
+# reporting, that is the first thing to check.
 on:
   schedule:
     # 02:43 UTC — after Hermod's nightly, and off the hour, where GitHub's
@@ -24,9 +26,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  interop:
-    runs-on: windows-latest
+
+  # ---------------------------------------------------------------------------
+  # Everything against the pinned submodules, on both platforms.
+  # ---------------------------------------------------------------------------
+  full-suite:
+    # The same two legs as the gate — see ci.yml for why Debian is a container.
+    # Repeating the gated set here is not redundancy: running it a second time,
+    # hours later, on a differently loaded runner, is what makes a test that
+    # only fails sometimes eventually fail where someone can see it.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            leg: windows-latest
+          - os: ubuntu-latest
+            container: debian:13
+            leg: debian-13-container
+    name: full-suite (${{ matrix.leg }})
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     steps:
+      # git BEFORE the checkout: without it actions/checkout falls back to a REST
+      # tarball, and a tarball has no submodules — see ci.yml.
+      - name: Install prerequisites (Debian container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+
       - uses: actions/checkout@v7
         with:
           submodules: recursive
@@ -36,53 +63,129 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Build
-        run: dotnet build tests/h3interop/h3interop.csproj --configuration Release
+        run: dotnet build HTTP3ConformanceTests.slnx --configuration Release
 
-      # The client interop matrix — see INTEROP.md. Fresh connection per target,
-      # FULL certificate chain and hostname validation, no -k.
+      # Fatal: the same set the gate runs.
+      - name: Test (HTTP/3, in process)
+        timeout-minutes: 30
+        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
+
+      # Fatal: the harnesses, against a real server over real UDP. One runner per
+      # platform — the container has no pwsh.
+      - name: Harnesses (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 20
+        run: pwsh tests/run-tests.ps1 -NoBuild
+
+      - name: Harnesses (Debian)
+        if: runner.os == 'Linux'
+        timeout-minutes: 20
+        run: sh tests/run-tests.sh --no-build
+
+      # Informational, and it has to be. These reach eight public servers, and a
+      # hosted runner is not a normal client: Akamai and Outlook run bot
+      # protection that treats datacentre ranges differently from a residential
+      # line. A failure here can mean "the runner could not ask", which says
+      # nothing about our client — so it must not be able to turn the night red.
+      # Read the numbers for a trend; a sudden 0/8 IS worth looking at.
       #
-      # Note what this does NOT gate on: h3interop exits non-zero only when ALL
-      # eight stacks are unreachable, so a night where six of eight broke still
-      # ends green. That threshold is deliberately not tightened yet — nobody
-      # has measured how many of these eight answer a datacentre IP at all.
-      # Akamai and Outlook run bot protection that treats hosted runners
-      # differently from a residential line, and picking a threshold before
-      # seeing the baseline would just produce a red that gets clicked away.
-      # Read the summary below for a few nights, then set one.
-      - name: Client interop matrix
+      # Windows only: one matrix leg is enough to answer "can our client still
+      # talk to these eight", and running it twice would double the load on
+      # somebody else's servers for no extra information.
+      - name: Client interop matrix (informational)
+        if: runner.os == 'Windows'
+        continue-on-error: true
         timeout-minutes: 15
         shell: bash
         run: |
           mkdir -p artifacts
           dotnet run --project tests/h3interop --configuration Release --no-build 2>&1 | tee artifacts/interop.txt
           {
-            echo '## Client interop matrix'
+            echo '## Client interop matrix (informational)'
+            echo
+            echo 'Network-dependent: a failure here can reflect runner egress or bot protection.'
             echo
             echo '```'
             cat artifacts/interop.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
-      # The step summary above is the same text, but it is only comfortable to read while the
-      # run is the newest one; older summaries need a signed-in browser session, and nothing
-      # compares two nights without opening both.
+      # One artifact per leg. The interop output exists nowhere else once the
+      # console log ages out, and the step summary is only comfortable to read
+      # while the run is the newest one — but a baseline is not a thing one
+      # reads, it is a thing one accumulates. `gh run download` over a few
+      # nights produces the number the threshold note above is waiting for.
       #
-      # That comparison is the open item. The threshold note above says this workflow cannot
-      # gate on a failure count until someone knows how many of the eight answer a hosted
-      # runner on a normal night — and a baseline is not a thing one reads, it is a thing one
-      # accumulates. `gh run download` over a few nights of these files produces it.
-      #
-      # !cancelled() rather than success(): a night where the step timed out or half the
-      # targets refused is precisely the night whose output is worth keeping.
-      - name: Upload interop output
+      # !cancelled() rather than success(): a red night is when this matters most.
+      - name: Upload results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: interop-matrix
-          path: artifacts/interop.txt
+          name: nightly-${{ matrix.leg }}
+          path: |
+            artifacts/*.trx
+            artifacts/interop.txt
 
-      # Deliberately absent: the server side. INTEROP.md probes our own server
-      # with an HTTP/3-capable curl, but the curl preinstalled on windows-latest
-      # is a Schannel build WITHOUT HTTP/3 — it would report a failure that says
-      # nothing about our server. Adding this back means installing a real
-      # HTTP/3 curl in the job first.
+  # ---------------------------------------------------------------------------
+  # The referee job: the same suite against Hermod's current master.
+  # ---------------------------------------------------------------------------
+  against-hermod-master:
+    # The job above tests the revision the gitlink pins, which is the right
+    # question for "would a fresh clone build". It is the wrong question for what
+    # this repository is now that the stack has moved out of it: an independent
+    # suite that can be pointed at any Hermod revision. Nothing else asks it —
+    # a push to Hermod does not touch this repository, and a bump only happens
+    # when a human decides to make one.
+    #
+    # So: check the submodules out at master and run against them. Red here means
+    # Hermod changed in a way this repository disagrees with. That is a finding,
+    # not a broken build, which is why it is a separate job and why the network
+    # lane is left out of it. One question at a time.
+    #
+    # Windows, unlike the DNS and NTS equivalents: h3semantics drives our server
+    # with msquic, and the container has no libmsquic. The most interesting half
+    # of the referee's evidence only exists on this leg.
+    name: against-hermod-master
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Move the submodules to master
+        shell: bash
+        run: |
+          git config --global --add safe.directory '*'
+          git submodule foreach 'git fetch origin master && git checkout FETCH_HEAD'
+          {
+            echo '### Submodule revisions under test'
+            echo
+            echo '```'
+            git submodule status
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # The build is half the answer on its own. What started this workflow was a
+      # compile error against a moved Hermod, not a failing test.
+      - name: Build
+        run: dotnet build HTTP3ConformanceTests.slnx --configuration Release
+
+      - name: Test (HTTP/3, in process)
+        timeout-minutes: 30
+        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal" --logger "trx;LogFileName=against-hermod-master.trx" --results-directory artifacts
+
+      - name: Harnesses
+        timeout-minutes: 20
+        run: pwsh tests/run-tests.ps1 -NoBuild
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-against-hermod-master
+          path: artifacts/*.trx
