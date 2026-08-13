@@ -40,9 +40,9 @@ That is the gap this directory fills, and why both findings below came from it r
 
 **Why msquic.** `h3semantics` deliberately has no `ProjectReference` to Hermod. Its client is
 Microsoft's QUIC stack, reached through .NET's own `HttpClient`, so every check it passes is two
-independent implementations agreeing on RFC 9114 — and it is a ninth foreign stack on the server
-side, next to `curl --http3`, Chrome and Edge. On a machine without QUIC support it reports SKIP
-(exit code 2) rather than a green 0/0.
+independent implementations agreeing on RFC 9114 — and it puts a fourth foreign client on our
+server, next to the two `curl` builds and Chromium. On a machine without QUIC support it reports
+SKIP (exit code 2) rather than a green 0/0.
 
 **Why raw UDP.** `h3attack` has no `ProjectReference` either, though its HTTP/2 counterpart does.
 Borrowing our own packet builders to attack our own server would test the server against the code

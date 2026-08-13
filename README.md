@@ -3,16 +3,55 @@
 [![CI](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/ci.yml/badge.svg)](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/ci.yml)
 [![Nightly](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/nightly.yml/badge.svg)](https://github.com/Vanaheimr/HTTP3ConformanceTests/actions/workflows/nightly.yml)
 
-An HTTP/3 stack (QUIC + TLS 1.3 + HTTP/3) in pure C# on .NET 10, sitting directly on UDP sockets —
-**without large dependencies**, just the .NET Base Class Library.
+The **conformance and interoperability test drivers** for the from-scratch HTTP/3 stack that lives
+in the Vanaheimr **Hermod** library — QUIC + TLS 1.3 + HTTP/3 in pure C# on .NET 10, straight on UDP
+sockets, no large dependencies beyond the BCL. Hermod is pulled in here as a git submodule under
+`libs/`; this repository is what drives it, and what has to answer the only question that matters
+about a hand-written protocol stack: **does it actually interoperate with implementations nobody
+here wrote?**
 
-The implementation plan with all phases, milestones and the crypto roadmap lives in
-[PLAN.md](PLAN.md); the interop evidence (8 foreign QUIC stacks) and how to **repeat it at any
-time** in [INTEROP.md](INTEROP.md) (`dotnet run --project tests/h3interop`).
+Everything below is repeatable from a clean checkout with the command next to it.
 
-## Status
+| Driver | What it establishes | Result |
+|---|---|---|
+| `pwsh tests/run-tests.ps1` | the gate: two harnesses against the live demo host over real UDP | **37/38 checks** |
+| ├ [`tests/h3semantics`](tests/h3semantics) | RFC 9114 semantics, driven by **msquic** through .NET's `HttpClient` — a foreign stack on the client side | 24/25 checks |
+| └ [`tests/h3attack`](tests/h3attack) | hand-built hostile datagrams: noise, undersized Initials, version negotiation, stateless reset, amplification, a 128-source flood | 13/13 checks |
+| `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
+| `pwsh tools/browser-interop.ps1 -Browser chrome` | **Chrome 150 / Edge 150** headless, incl. WebTransport and the post-quantum hybrid | **8/8** checks |
+| `curl --http3-only -k https://127.0.0.1:4433/` | **ngtcp2/LibreSSL** and **OpenSSL-QUIC** against our server — GET, POST, 300 KB, 103 + trailers | see [INTEROP.md](INTEROP.md) |
+| `dotnet test libs/Hermod/HermodTests` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **247 tests** |
+| `dotnet run --project tests/h3bench` | throughput, latency percentiles, concurrency scaling | numbers, no verdict |
 
-| Phase | Content | Status |
+On the other side of those rows sits code nobody here wrote: eight public QUIC stacks, two
+independent `curl` builds, Chromium's QUICHE in two browsers, and msquic driving our own server.
+That is the point of the table. The 247 in-process tests are the more thorough half of the coverage
+and they gate every push — but they cannot disagree with us, because both ends of every one of them
+are our own code, sharing one reading of the RFCs and one set of bugs.
+
+### What the drivers have found
+
+Two things, both from the out-of-process harnesses, and neither reachable from in-process tests:
+
+- **A connection stalls after exactly 100 requests.** `MAX_STREAMS` is parsed and logged but never
+  sent, so `initial_max_streams_bidi` is the lifetime budget of every connection (RFC 9000 §4.6).
+  A browser tab reaches that on one page. Pinned by `h3semantics`; it is the 1 in 37/38.
+- **Large uploads are slow and eventually fatal.** 300 000 bytes down takes ~11 ms; the same
+  300 000 bytes up takes ~130 ms, degrading to ~830 ms until the connection is lost to the idle
+  timeout mid-upload. Measured by `h3bench`.
+
+Details in [tests/README.md](tests/README.md). The interop evidence and how to repeat it is in
+[INTEROP.md](INTEROP.md); the implementation history — phases, milestones, crypto roadmap — is in
+[PLAN.md](PLAN.md), and the stack's own reference lives next to the code in
+`libs/Hermod/Hermod/QUIC/` and `libs/Hermod/Hermod/HTTP3/`.
+
+## RFC coverage
+
+What the stack implements, and therefore what there is to conform to. The stack itself now lives in
+Hermod — this table is the map from RFC to evidence, not a build log; the chronology is in
+[PLAN.md](PLAN.md).
+
+| Ref | What is covered | State |
 |-------|---------|--------|
 | 0 | Setup, VarInt, buffer reader/writer, test scaffolding | ✅ done |
 | 1 | Initial crypto (HKDF, packet/header protection, Retry) — RFC 9001 App. A byte-exact | ✅ done |
@@ -44,8 +83,14 @@ time** in [INTEROP.md](INTEROP.md) (`dotnet run --project tests/h3interop`).
 | 9 | **Performance**: zero-alloc hot paths (`ByteQueue`, 300 KB download 51→7 MiB), UDP batching (GSO via `UdpBatchSender`), window auto-tuning (`ReceiveWindowTuner`, BDP) | ✅ done |
 | interop | **Client interop against 8 foreign QUIC stacks**: quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — each 2xx/3xx with full cert validation | ✅ done |
 | browser | **Browser interop (server side)**: Chrome 150 / Edge 150 headless, 8/8 checks incl. WebTransport and the PQ hybrid — `tools/browser-interop.ps1` | ✅ done |
-| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` against .NET's HttpClient over **msquic** — a ninth foreign stack — and `h3attack` with hand-built hostile datagrams; `pwsh tests/run-tests.ps1` gives one verdict | 🔶 37/38 |
+| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `pwsh tests/run-tests.ps1` gives one verdict | 🔶 37/38 |
 | bench | **`h3bench`**: throughput, latency percentiles and concurrency scaling against the demo host — the first reproducible performance numbers this repository has | ✅ done |
+
+### Per-area detail
+
+The sections below record what each area implements and which live check exercised it — the
+"**Live:**" lines are the reproducible part. They describe code that now lives in Hermod; for the
+API and the internals, read the READMEs next to it.
 
 ### X25519 & HelloRetryRequest (interop)
 
