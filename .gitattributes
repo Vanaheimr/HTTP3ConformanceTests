@@ -1,0 +1,9 @@
+# Keep shell scripts LF-only so they stay runnable after a clone on
+# Linux/macOS/WSL, regardless of the committer's platform or core.autocrlf.
+#
+# Not theoretical here: tests/run-tests.sh is what CI's Debian leg runs, and a
+# `\r` at the end of its shebang or of any `then`/`fi` line makes sh fail in
+# ways that read as a broken script rather than a line-ending problem. The
+# working copies of redo.sh and the .ps1 files are already CRLF on this machine,
+# which is exactly how it would get in.
+*.sh text eol=lf
