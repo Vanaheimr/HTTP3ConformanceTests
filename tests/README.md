@@ -17,8 +17,8 @@ per harness and prints a pass/fail summary. Flags:
 - `-Filter <substr>` — only run harnesses whose name matches.
 - `-Port <n>` — use a different UDP port.
 
-Current status: **37/38 checks pass**. The one failure is real and is described under
-[Known failures](#known-failures) — it is a gap in the stack, not a flaky harness.
+Current status: **38/38 checks pass**, and `ci.yml` runs this on every push. It started at 37/38:
+see [What this found](#what-this-found).
 
 The in-process unit and integration tests — RFC 9000/9001/9002/9114/9204 vectors, the TLS 1.3 key
 schedule, QPACK, the frame state machine, "evil" raw-QUIC peers, a seeded lossy link — live with the
@@ -52,22 +52,24 @@ Both gated harnesses end every scenario by checking that the server *still serve
 A hardening check that only proves "no reply came back" would pass just as happily against a server
 that had crashed.
 
-## Known failures
+## What this found
 
-**`h3semantics`: 120 requests on one connection — stalls after exactly 100.**
+**`h3semantics`: a connection stalled after exactly 100 requests.** ✅ Fixed.
 
 Each HTTP/3 request takes a fresh bidirectional QUIC stream, and stream IDs are never reused. The
 transport parameter `initial_max_streams_bidi` grants the first 100; after that the peer needs more
-credit via `MAX_STREAMS` as earlier streams complete (RFC 9000 §4.6, §19.11). Hermod *parses*
-`MAX_STREAMS` and logs it to qlog, but `new MaxStreamsFrame(...)` appears nowhere outside the
-parser — it is never sent. So request 101 on any connection waits for credit that never arrives and
-dies at the idle timeout, and the connection is capped at 100 requests for its whole life. A browser
-tab reaches that on one page.
+credit via `MAX_STREAMS` as earlier streams complete (RFC 9000 §4.6, §19.11). Hermod *parsed*
+`MAX_STREAMS` and logged it to qlog, but `new MaxStreamsFrame(...)` appeared nowhere outside the
+parser — it was never sent. So request 101 on any connection waited for credit that never arrived
+and died at the idle timeout: the transport parameter was not an opening grant but the lifetime
+budget of the connection. A browser tab reaches that on one page.
 
-It went unnoticed because nothing had ever run 100 requests over a single HTTP/3 connection: the
-in-process suite works in tens, and `curl`, Chrome and Edge each open a connection per run.
+It went unnoticed because nothing had ever run 100 requests over a single HTTP/3 connection — the
+in-process suite works in tens, and `curl`, Chrome and Edge each open a connection per run. Fixed in
+[Hermod#20](https://github.com/Vanaheimr/Hermod/pull/20) with six tests of its own; the check here
+stays as the regression guard, because it is the one that noticed.
 
-**`h3bench` (not gated): large uploads are slow and eventually fatal.**
+**`h3bench` (not gated): large uploads are slow and eventually fatal.** ⬜ Open.
 
 300 000 bytes down takes ~11 ms; the same 300 000 bytes up takes ~130 ms on a good run and ~830 ms
 on a bad one, after which the connection is lost to the idle timeout mid-upload. Receiving large
@@ -83,7 +85,7 @@ dotnet run --project samples/H3Server -- 4433
 dotnet run --project tests/h3bench --configuration Release
 ```
 
-Everything else in this repository has a number behind it — 247 unit tests, 37/38 harness checks,
+Everything else in this repository has a number behind it — 247 unit tests, 38/38 harness checks,
 8 foreign stacks, Chrome and Edge 8/8. Performance had none, which made "readable rather than fast"
 an assumption rather than a finding. Loopback measures our packet handling, framing and crypto, not
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is

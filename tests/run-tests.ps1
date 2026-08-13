@@ -52,9 +52,13 @@ if (-not $NoBuild) {
     Write-Host '=== Building ===' -ForegroundColor Cyan
     # The demo host first: without it there is nothing to drive.
     foreach ($project in @('samples/H3Server/H3Server.csproj') + ($harnesses | ForEach-Object { $_.Project })) {
-        dotnet build (Join-Path $repoRoot $project) --configuration Release --nologo --verbosity quiet
+        # Captured, not streamed: building the demo host drags in the whole Hermod submodule, whose
+        # ~360 pre-existing warnings would bury the harness output that follows. On a failure the
+        # log is printed in full, which is the only time anyone wants to read it.
+        $buildLog = dotnet build (Join-Path $repoRoot $project) --configuration Release --nologo --verbosity quiet 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Build failed: $project" -ForegroundColor Red
+            $buildLog | ForEach-Object { Write-Host $_ }
             exit 1
         }
     }

@@ -14,13 +14,13 @@ Everything below is repeatable from a clean checkout with the command next to it
 
 | Driver | What it establishes | Result |
 |---|---|---|
-| `pwsh tests/run-tests.ps1` | the gate: two harnesses against the live demo host over real UDP | **37/38 checks** |
-| ├ [`tests/h3semantics`](tests/h3semantics) | RFC 9114 semantics, driven by **msquic** through .NET's `HttpClient` — a foreign stack on the client side | 24/25 checks |
+| `pwsh tests/run-tests.ps1` | the gate: two harnesses against the live demo host over real UDP | **38/38 checks** |
+| ├ [`tests/h3semantics`](tests/h3semantics) | RFC 9114 semantics, driven by **msquic** through .NET's `HttpClient` — a foreign stack on the client side | 25/25 checks |
 | └ [`tests/h3attack`](tests/h3attack) | hand-built hostile datagrams: noise, undersized Initials, version negotiation, stateless reset, amplification, a 128-source flood | 13/13 checks |
 | `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
 | `pwsh tools/browser-interop.ps1 -Browser chrome` | **Chrome 150 / Edge 150** headless, incl. WebTransport and the post-quantum hybrid | **8/8** checks |
 | `curl --http3-only -k https://127.0.0.1:4433/` | **ngtcp2/LibreSSL** and **OpenSSL-QUIC** against our server — GET, POST, 300 KB, 103 + trailers | see [INTEROP.md](INTEROP.md) |
-| `dotnet test libs/Hermod/HermodTests` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **247 tests** |
+| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **247 tests** (389 more for QUIC) |
 | `dotnet run --project tests/h3bench` | throughput, latency percentiles, concurrency scaling | numbers, no verdict |
 
 On the other side of those rows sits code nobody here wrote: eight public QUIC stacks, two
@@ -31,14 +31,19 @@ are our own code, sharing one reading of the RFCs and one set of bugs.
 
 ### What the drivers have found
 
-Two things, both from the out-of-process harnesses, and neither reachable from in-process tests:
+Two things, both from the out-of-process harnesses, and neither reachable from in-process tests —
+those work in single digits of streams, and both ends of every one of them are ours:
 
-- **A connection stalls after exactly 100 requests.** `MAX_STREAMS` is parsed and logged but never
-  sent, so `initial_max_streams_bidi` is the lifetime budget of every connection (RFC 9000 §4.6).
-  A browser tab reaches that on one page. Pinned by `h3semantics`; it is the 1 in 37/38.
-- **Large uploads are slow and eventually fatal.** 300 000 bytes down takes ~11 ms; the same
-  300 000 bytes up takes ~130 ms, degrading to ~830 ms until the connection is lost to the idle
-  timeout mid-upload. Measured by `h3bench`.
+- **A connection stalled after exactly 100 requests.** ✅ **fixed** — `MAX_STREAMS` was parsed and
+  logged but never sent, so `initial_max_streams_bidi` was the lifetime budget of every connection
+  rather than an opening grant (RFC 9000 §4.6). A browser tab reaches that on a single page. Found
+  by driving a running server with msquic until it stalled; fixed in
+  [Hermod#20](https://github.com/Vanaheimr/Hermod/pull/20), and the `h3semantics` check that found
+  it stays in place as the regression guard.
+- **Large uploads are slow and eventually fatal.** ⬜ **open** — 300 000 bytes down takes ~11 ms;
+  the same 300 000 bytes up takes ~130 ms, degrading to ~830 ms until the connection is lost to the
+  idle timeout mid-upload. Receiving large request bodies stalls somewhere that sending them does
+  not. Measured by `h3bench`; not a pass/fail item, which is why nothing had caught it.
 
 Details in [tests/README.md](tests/README.md). The interop evidence and how to repeat it is in
 [INTEROP.md](INTEROP.md); the implementation history — phases, milestones, crypto roadmap — is in
@@ -83,7 +88,7 @@ Hermod — this table is the map from RFC to evidence, not a build log; the chro
 | 9 | **Performance**: zero-alloc hot paths (`ByteQueue`, 300 KB download 51→7 MiB), UDP batching (GSO via `UdpBatchSender`), window auto-tuning (`ReceiveWindowTuner`, BDP) | ✅ done |
 | interop | **Client interop against 8 foreign QUIC stacks**: quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — each 2xx/3xx with full cert validation | ✅ done |
 | browser | **Browser interop (server side)**: Chrome 150 / Edge 150 headless, 8/8 checks incl. WebTransport and the PQ hybrid — `tools/browser-interop.ps1` | ✅ done |
-| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `pwsh tests/run-tests.ps1` gives one verdict | 🔶 37/38 |
+| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `pwsh tests/run-tests.ps1` gives one verdict, and CI runs it | ✅ 38/38 |
 | bench | **`h3bench`**: throughput, latency percentiles and concurrency scaling against the demo host — the first reproducible performance numbers this repository has | ✅ done |
 
 ### Per-area detail
@@ -633,16 +638,27 @@ standalone transport **next to** HTTP/3, not below it; HTTP/3 under
 
 ## Build & test
 
-This repository builds the samples; the stack and its tests build and run in the submodule.
+Prerequisite: .NET 10 SDK. Everything builds from the repository root:
 
 ```bash
-dotnet build
+dotnet build HTTP3ConformanceTests.slnx --configuration Release
 ```
+
+The gate — the demo host, both harnesses, one verdict. This is what `ci.yml` runs:
+
+```bash
+pwsh tests/run-tests.ps1
+```
+
+The stack's own suite lives in the submodule and is the other half of the gate:
+
 ```bash
 dotnet test libs/Hermod/HermodTests/HermodTests.csproj --filter "TestCategory!=LiveDNS"
 ```
 
-Prerequisite: .NET 10 SDK.
+`h3interop`, `h3bench` and the browser battery are deliberately outside the gate — one needs the
+open internet, one has no verdict to give, and one needs a browser installed. Their commands are in
+the table at the top.
 
 
 ## License

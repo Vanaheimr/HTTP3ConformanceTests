@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **630 tests green** (383 QUIC + 247 HTTP/3, both in HermodTests since the move), milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **636 tests green** (389 QUIC + 247 HTTP/3, both in HermodTests since the move) plus **38/38** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
