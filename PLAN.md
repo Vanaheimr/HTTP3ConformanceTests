@@ -518,7 +518,7 @@ Deliberately left open: server push (MAY), classic CONNECT proxying.
   RSA-PSS) — outlook.office.com is the only one exercising the complete P-256 + AES-256 + RSA path
   live. (Note: `www.microsoft.com` offers no HTTP/3 at all — cross-checked with
   `curl --http3-only`.) **Repeatable at any time** via
-  `dotnet run --project samples/H3Get -- --interop`; maintained in
+  `dotnet run --project tests/h3interop`; maintained in
   [INTEROP.md](INTEROP.md) (which also holds the server-side `curl` evidence).
 - ✅ **Milestone M3 reached (via our own client):** server side built — `TlsServerHandshake`
   (ServerHello/EE/Certificate/CertificateVerify signature/Finished, client-Finished verification),

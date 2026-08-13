@@ -12,6 +12,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/h3attack/h3attack.csproj" />
     <Project Path="tests/h3bench/h3bench.csproj" />
+    <Project Path="tests/h3interop/h3interop.csproj" />
     <Project Path="tests/h3semantics/h3semantics.csproj" />
   </Folder>
 </Solution>

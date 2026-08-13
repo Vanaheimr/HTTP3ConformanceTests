@@ -8,7 +8,7 @@ An HTTP/3 stack (QUIC + TLS 1.3 + HTTP/3) in pure C# on .NET 10, sitting directl
 
 The implementation plan with all phases, milestones and the crypto roadmap lives in
 [PLAN.md](PLAN.md); the interop evidence (8 foreign QUIC stacks) and how to **repeat it at any
-time** in [INTEROP.md](INTEROP.md) (`dotnet run --project samples/H3Get -- --interop`).
+time** in [INTEROP.md](INTEROP.md) (`dotnet run --project tests/h3interop`).
 
 ## Status
 
@@ -60,7 +60,7 @@ time** in [INTEROP.md](INTEROP.md) (`dotnet run --project samples/H3Get -- --int
   (LiteSpeed), **msquic** (Microsoft, `outlook.office.com` — P-256 + AES-256 + RSA), quic-go (Caddy)
   and Akamai (AES-256). Covers both KEX groups (X25519 + P-256), both suites (AES-128/256-GCM) and
   both cert types (ECDSA + RSA-PSS) live. Full table + one-command repeat: **[INTEROP.md](INTEROP.md)**
-  (`dotnet run --project samples/H3Get -- --interop`).
+  (`dotnet run --project tests/h3interop`).
 - **X448** (RFC 7748, Curve448, named group 0x001e): key-exchange primitive from BouncyCastle
   (`X448KeyExchange`, encapsulated like X25519), 56-byte key/secret. RFC 7748 §5.2 byte-exact; the named
   groups are threaded through the whole API (`keyExchangeGroups`/`preferredGroups`). Live over UDP:
@@ -568,10 +568,12 @@ tests/             Harnesses that drive H3Server as a separate process over real
                      h3attack/          hand-built hostile datagrams: noise, undersized Initials,
                                         version negotiation, stateless reset, amplification, flood
                      h3bench/           throughput/latency/concurrency baseline (no pass/fail)
+                     h3interop/         the matrix against 8 public HTTP/3 servers — the one harness
+                                        pointing outwards; live network, so nightly-only
                    run-tests.ps1 — builds, starts the demo host, runs the gated harnesses, one verdict
 tools/             browser-interop.ps1 — headless Chrome/Edge against H3Server, exit code as verdict
 samples/H3Get/     HTTP/3 client: GET/POST against cloudflare-quic.com or our own server
-                   (incl. --interop [matrix against 8 foreign stacks], --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
+                   (--post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
                    --rotate-cid, --qpack-dynamic, --mlkem, --x448, --chacha20, --loss, --hold, -k)
 samples/H3Server/  HTTP/3 server: self-signed cert, handler over UDP (routes: /, /big, POST /echo,
                    /hints with 103 + trailers; CONNECT websocket/datagram-echo, WebTransport /wt;

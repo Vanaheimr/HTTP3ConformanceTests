@@ -9,7 +9,7 @@ in **both** directions (our client against foreign servers, foreign clients agai
 certificate chain + hostname validation, no `-k`):
 
 ```bash
-dotnet run --project samples/H3Get -- --interop
+dotnet run --project tests/h3interop
 ```
 
 **Server side** — start our own server and probe it with an HTTP/3-capable `curl`:
@@ -111,5 +111,4 @@ that path only accepts an ECDSA P-256 certificate valid for at most **14 days** 
 
 - **Firefox** — not installed on the development machine, so untested. It needs the certificate in its
   own NSS store (or `security.enterprise_roots.enabled`), because it ignores the Chromium flags.
-- Further targets as needed; the `--interop` mode is easy to extend in
-  `samples/H3Get/Program.cs` (the `targets` list).
+- Further targets as needed: the `targets` list at the top of `tests/h3interop/Program.cs`.
