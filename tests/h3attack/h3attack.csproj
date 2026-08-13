@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- No ProjectReference on purpose, although its HTTP/2 counterpart has one. Everything this
+       harness sends is hand-built bytes on a UDP socket, and everything it sends them to is a
+       separate process. Borrowing our own packet builders would mean testing the server against
+       the very code that produced its input - the mistake this harness exists to avoid. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="System.Buffers.Binary" />
+  </ItemGroup>
+
+</Project>

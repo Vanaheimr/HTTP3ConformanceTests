@@ -9,4 +9,9 @@
     <Project Path="samples/H3Get/H3Get.csproj" />
     <Project Path="samples/H3Server/H3Server.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/h3attack/h3attack.csproj" />
+    <Project Path="tests/h3bench/h3bench.csproj" />
+    <Project Path="tests/h3semantics/h3semantics.csproj" />
+  </Folder>
 </Solution>

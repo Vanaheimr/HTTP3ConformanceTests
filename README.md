@@ -44,6 +44,8 @@ time** in [INTEROP.md](INTEROP.md) (`dotnet run --project samples/H3Get -- --int
 | 9 | **Performance**: zero-alloc hot paths (`ByteQueue`, 300 KB download 51→7 MiB), UDP batching (GSO via `UdpBatchSender`), window auto-tuning (`ReceiveWindowTuner`, BDP) | ✅ done |
 | interop | **Client interop against 8 foreign QUIC stacks**: quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — each 2xx/3xx with full cert validation | ✅ done |
 | browser | **Browser interop (server side)**: Chrome 150 / Edge 150 headless, 8/8 checks incl. WebTransport and the PQ hybrid — `tools/browser-interop.ps1` | ✅ done |
+| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` against .NET's HttpClient over **msquic** — a ninth foreign stack — and `h3attack` with hand-built hostile datagrams; `pwsh tests/run-tests.ps1` gives one verdict | 🔶 37/38 |
+| bench | **`h3bench`**: throughput, latency percentiles and concurrency scaling against the demo host — the first reproducible performance numbers this repository has | ✅ done |
 
 ### X25519 & HelloRetryRequest (interop)
 
@@ -560,6 +562,13 @@ libs/Hermod/       The whole stack, as a submodule:
                                         "evil" raw-QUIC peers and a seeded lossy link)
                    Namespaces are unchanged: org.GraphDefined.Vanaheimr.Hermod.Quic.* and
                    org.GraphDefined.Vanaheimr.Hermod.HTTP3.*
+tests/             Harnesses that drive H3Server as a separate process over real UDP — see its README
+                     h3semantics/       RFC 9114 semantics, driven by .NET's HttpClient over msquic
+                                        (a foreign stack: no ProjectReference to Hermod)
+                     h3attack/          hand-built hostile datagrams: noise, undersized Initials,
+                                        version negotiation, stateless reset, amplification, flood
+                     h3bench/           throughput/latency/concurrency baseline (no pass/fail)
+                   run-tests.ps1 — builds, starts the demo host, runs the gated harnesses, one verdict
 tools/             browser-interop.ps1 — headless Chrome/Edge against H3Server, exit code as verdict
 samples/H3Get/     HTTP/3 client: GET/POST against cloudflare-quic.com or our own server
                    (incl. --interop [matrix against 8 foreign stacks], --post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,

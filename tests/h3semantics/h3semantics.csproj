@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Deliberately NO ProjectReference to Hermod. The point of this harness is that the client
+       side is foreign code: .NET's own HttpClient, which speaks HTTP/3 through msquic. A harness
+       that used our stack on both ends could only confirm that we agree with ourselves. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
