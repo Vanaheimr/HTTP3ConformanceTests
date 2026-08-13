@@ -82,6 +82,20 @@ jobs:
       - name: Test (HTTP/3)
         run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
 
+      # The out-of-process half of the gate: two harnesses driving a real H3Server over real UDP,
+      # one of them with a client nobody here wrote (msquic, via .NET's HttpClient). They cover what
+      # the in-process suite structurally cannot — the socket, the demux, the listener's decision to
+      # create state or refuse it, and the server staying alive under datagrams no cooperating peer
+      # would send.
+      #
+      # Windows only. The Debian leg runs in a bare container where System.Net.Quic finds no
+      # libmsquic, and h3semantics reports SKIP there rather than a green 0/0 — worth having as a
+      # signal, not worth a job that reports nothing. The transport-level scenarios in h3attack need
+      # no QUIC client at all and would run, but splitting the pair across legs buys little.
+      - name: Harnesses (out of process)
+        if: runner.os == 'Windows'
+        run: pwsh tests/run-tests.ps1 -NoBuild
+
       # The console log answers "did it pass" and almost nothing else: which test failed takes
       # grepping the step log, and a skip reason never reaches the console at normal verbosity
       # at all. TRX keeps outcome, duration, error message, stack trace and the Assert.Ignore
