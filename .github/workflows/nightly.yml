@@ -27,11 +27,11 @@ jobs:
   interop:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -53,14 +53,33 @@ jobs:
         timeout-minutes: 15
         shell: bash
         run: |
-          dotnet run --project samples/H3Get --configuration Release --no-build -- --interop 2>&1 | tee interop.txt
+          mkdir -p artifacts
+          dotnet run --project samples/H3Get --configuration Release --no-build -- --interop 2>&1 | tee artifacts/interop.txt
           {
             echo '## Client interop matrix'
             echo
             echo '```'
-            cat interop.txt
+            cat artifacts/interop.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The step summary above is the same text, but it is only comfortable to read while the
+      # run is the newest one; older summaries need a signed-in browser session, and nothing
+      # compares two nights without opening both.
+      #
+      # That comparison is the open item. The threshold note above says this workflow cannot
+      # gate on a failure count until someone knows how many of the eight answer a hosted
+      # runner on a normal night — and a baseline is not a thing one reads, it is a thing one
+      # accumulates. `gh run download` over a few nights of these files produces it.
+      #
+      # !cancelled() rather than success(): a night where the step timed out or half the
+      # targets refused is precisely the night whose output is worth keeping.
+      - name: Upload interop output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: interop-matrix
+          path: artifacts/interop.txt
 
       # Deliberately absent: the server side. INTEROP.md probes our own server
       # with an HTTP/3-capable curl, but the curl preinstalled on windows-latest

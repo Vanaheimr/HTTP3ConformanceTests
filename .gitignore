@@ -4,6 +4,11 @@ obj/
 .vs/
 [Tt]est[Rr]esults/
 
+# Where the CI test step writes its .trx and the nightly its interop output —
+# a throwaway directory an upload-artifact step collects. Running the same
+# commands locally creates it here too, as both submodules already assume.
+artifacts/
+
 # Debug output and secrets the stack can write into the working tree.
 # All three are reachable outside bin/: --qlog=<dir>, SSLKEYLOGFILE and
 # --secret-file=<path> all take an arbitrary destination.

@@ -5,6 +5,11 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Manual runs from the Actions tab ("Run workflow"), same as nightly.yml.
+  # This gate builds against a submodule pin, so the useful manual case is not
+  # "run it again" but "run it unchanged after Hermod moved" — checking out a
+  # pin that has not been bumped yet is exactly what the button is for.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -22,11 +27,11 @@ jobs:
     steps:
       # The QUIC/TLS stack lives in the Hermod submodule, Styx below that —
       # without a recursive checkout nothing here compiles at all.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -40,4 +45,24 @@ jobs:
       # against our own QUIC server — so this is a real gate, not a connectivity
       # check.
       - name: Test (HTTP/3)
-        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal"
+        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal" --logger "trx;LogFileName=windows-latest.trx" --results-directory artifacts
+
+      # The console log answers "did it pass" and almost nothing else: which test failed takes
+      # grepping the step log, and a skip reason never reaches the console at normal verbosity
+      # at all. TRX keeps outcome, duration, error message, stack trace and the Assert.Ignore
+      # text per test, and `gh run download` fetches it without a signed-in browser session.
+      #
+      # It earns its place here for a reason the sibling gates do not have: this job tests code
+      # that lives in another repository, at a pin this one chooses. When Hermod's own gate is
+      # green and this one is red, the difference is the pin — and the file is named after the
+      # same leg Hermod and Styx use, so the two .trx files are directly comparable.
+      #
+      # !cancelled() rather than success(): a red run is when these files matter most, and a
+      # build that fails before the test step leaves no .trx, which upload-artifact reports as
+      # a warning rather than a second failure — the compile error is the finding there.
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-windows-latest
+          path: artifacts/*.trx
