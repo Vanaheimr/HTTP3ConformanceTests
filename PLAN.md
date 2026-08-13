@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **523 tests green** (299 QUIC in HermodTests, 224 HTTP/3 here), milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **630 tests green** (383 QUIC + 247 HTTP/3, both in HermodTests since the move), milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1200,8 +1200,10 @@ side of the wire:
 
 1. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
-2. **Migration back into Hermod** — deduplicating the byte-identical WebSocket copies under
-   `src/Http3/WebSocket/`. Housekeeping, no protocol gain.
+2. **WebSocket deduplication** — the migration into Hermod happened; the duplication came along with
+   it. `Hermod/HTTP2/WebSocket/` and `Hermod/HTTP3/WebSocket/` still hold the same six files, each
+   pair differing in exactly one line: the namespace. Housekeeping, no protocol gain — and, now that
+   both copies live in the same repository, work for Hermod rather than for this one.
 3. **Interop nightly threshold** — the interop matrix needs a known-good runner baseline before a
    failure count can gate the workflow.
 

@@ -1,6 +1,6 @@
 name: Nightly
 
-# ci.yml gates every push with the 224 in-process HTTP/3 tests. Those never
+# ci.yml gates every push with the 247 in-process HTTP/3 tests. Those never
 # touch the network, which is what makes them a gate — and also what they
 # cannot tell us: whether the stack still talks to implementations that were
 # not written here.
