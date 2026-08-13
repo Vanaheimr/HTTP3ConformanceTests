@@ -17,14 +17,49 @@ concurrency:
 
 jobs:
   build-and-test:
-    # windows-latest, not ubuntu: this is the platform the suite is verified on.
-    # Hermod pulls in System.Diagnostics.PerformanceCounter, System.IO.Ports and
-    # System.Drawing.Common, and certificate chain building differs between the
-    # Windows and OpenSSL backends - we hit that difference with Ed25519 already.
-    # Linux would be cheaper and is worth adding as a second matrix entry, but
-    # not before someone has actually seen it pass there.
-    runs-on: windows-latest
+    # Two legs, the same pair Hermod and Styx gate on:
+    #
+    #  * windows-latest, the platform this suite has been verified on longest.
+    #    Certificate chain building goes through Schannel and CryptoAPI here,
+    #    which behaves differently from OpenSSL — the Ed25519 chain difference
+    #    was found on this leg.
+    #  * Debian 13, because that is what this runs on in production. GitHub
+    #    offers no Debian image, so the leg runs in a bare debian:13 container
+    #    on an Ubuntu runner — the same container both sibling repositories use,
+    #    so all three gates test the same platform pair.
+    #
+    # The earlier note here said Linux was worth adding "but not before someone
+    # has actually seen it pass there". Someone has: Debian 13.6 builds the
+    # whole solution with 0 errors and runs 246 passed / 0 failed, with
+    # AChainTheePlatformCannotBuild skipped — which is that Schannel/OpenSSL
+    # difference showing up as a skip rather than a failure. 247 on Windows,
+    # 246 + 1 skip here; the .trx artifacts name both.
+    #
+    # fail-fast is off on purpose: "red on exactly one platform" is the most
+    # valuable signal this matrix produces, so one leg must not cancel the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            leg: windows-latest
+          - os: ubuntu-latest
+            container: debian:13
+            leg: debian-13-container
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     steps:
+      # git BEFORE checkout, and that ordering is the whole trick on this leg:
+      # without it actions/checkout falls back to downloading a source tarball
+      # over the REST API, and a tarball has no submodules — so the checkout
+      # would "succeed" and then nothing would compile. The rest are the .NET
+      # prerequisites the bare container lacks: curl for the install script, ICU
+      # and tzdata for globalization, OpenSSL for crypto, ca-certificates for
+      # NuGet over HTTPS. Package names verified on Debian 13 (trixie).
+      - name: Install prerequisites (Debian container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+
       # The QUIC/TLS stack lives in the Hermod submodule, Styx below that —
       # without a recursive checkout nothing here compiles at all.
       - uses: actions/checkout@v7
@@ -45,7 +80,7 @@ jobs:
       # against our own QUIC server — so this is a real gate, not a connectivity
       # check.
       - name: Test (HTTP/3)
-        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal" --logger "trx;LogFileName=windows-latest.trx" --results-directory artifacts
+        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
 
       # The console log answers "did it pass" and almost nothing else: which test failed takes
       # grepping the step log, and a skip reason never reaches the console at normal verbosity
@@ -54,8 +89,12 @@ jobs:
       #
       # It earns its place here for a reason the sibling gates do not have: this job tests code
       # that lives in another repository, at a pin this one chooses. When Hermod's own gate is
-      # green and this one is red, the difference is the pin — and the file is named after the
-      # same leg Hermod and Styx use, so the two .trx files are directly comparable.
+      # green and this one is red, the difference is the pin — and the files are named after the
+      # same two legs Hermod and Styx use, so all of them are directly comparable.
+      #
+      # It also carries the one thing the console hides on the Debian leg: a skip reason. The
+      # difference between "246 passed, 1 skipped because OpenSSL cannot build that chain" and
+      # "246 passed, 1 quietly missing" is only visible in the .trx.
       #
       # !cancelled() rather than success(): a red run is when these files matter most, and a
       # build that fails before the test step leaves no .trx, which upload-artifact reports as
@@ -64,5 +103,5 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: test-results-windows-latest
+          name: test-results-${{ matrix.leg }}
           path: artifacts/*.trx
