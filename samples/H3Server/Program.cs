@@ -23,6 +23,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using org.GraphDefined.Vanaheimr.Hermod.HTTP;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.Qpack;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP3.WebTransport;
@@ -540,7 +541,7 @@ Http3Response Handle(Http3Request request)
 
     // POST /report: that verdict. Printing it here is the whole point — the server log becomes the
     // record of what the browser saw, so a headless run needs neither DOM scraping nor DevTools.
-    if (request.Method == "POST" && request.Path == "/report")
+    if (request.Method == HTTPMethod.POST && request.Path == "/report")
         return PrintBrowserReport(request.Body);
 
     // GET /hints: 103 Early Hints (interim response, RFC 9110 §15.2.2) before the final response and
@@ -560,7 +561,7 @@ Http3Response Handle(Http3Request request)
     }
 
     // POST /echo: mirror the request body back byte for byte (RFC 9114 §4.1 — content in DATA frames).
-    if (request.Method == "POST" && request.Path == "/echo")
+    if (request.Method == HTTPMethod.POST && request.Path == "/echo")
         return new Http3Response
         {
             Status = 200,
