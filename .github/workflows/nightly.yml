@@ -66,7 +66,7 @@ jobs:
         run: dotnet build HTTP3ConformanceTests.slnx --configuration Release
 
       # Fatal: the same set the gate runs.
-      - name: Test (HTTP/3, in process)
+      - name: Test (HTTP/3 + QUIC, in process)
         timeout-minutes: 30
         run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3|FullyQualifiedName~Hermod.Tests.QUIC" --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
 
@@ -175,7 +175,7 @@ jobs:
       - name: Build
         run: dotnet build HTTP3ConformanceTests.slnx --configuration Release
 
-      - name: Test (HTTP/3, in process)
+      - name: Test (HTTP/3 + QUIC, in process)
         timeout-minutes: 30
         run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3|FullyQualifiedName~Hermod.Tests.QUIC" --logger "console;verbosity=normal" --logger "trx;LogFileName=against-hermod-master.trx" --results-directory artifacts
 

@@ -43,10 +43,12 @@ jobs:
     #
     # The earlier note here said Linux was worth adding "but not before someone
     # has actually seen it pass there". Someone has: Debian 13.6 builds the
-    # whole solution with 0 errors and runs 246 passed / 0 failed, with
-    # AChainTheePlatformCannotBuild skipped — which is that Schannel/OpenSSL
-    # difference showing up as a skip rather than a failure. 247 on Windows,
-    # 246 + 1 skip here; the .trx artifacts name both.
+    # whole solution with 0 errors, with AChainTheePlatformCannotBuild skipped
+    # — which is that Schannel/OpenSSL difference showing up as a skip rather
+    # than a failure. With QUIC added to the filter on 2026-09-22 that is 639
+    # passed on Windows against 638 here; the .trx artifacts name both. (The
+    # figures this note quoted before — 247 and 246 — were the HTTP/3-only
+    # filter.)
     #
     # fail-fast is off on purpose: "red on exactly one platform" is the most
     # valuable signal this matrix produces, so one leg must not cancel the other.
@@ -99,8 +101,15 @@ jobs:
       # pinned commit while saying nothing about the transport HTTP/3 is
       # carried by, which is the layer where a regression is both likelier
       # and harder to attribute. Hermod’s own CI does run them, but the whole
-      # point of a pin gate is to answer for *this* revision. 641 now.
-      - name: Test (HTTP/3 + QUIC, 641 tests from the pinned Hermod)
+      # point of a pin gate is to answer for *this* revision.
+      #
+      # The step name carries no total on purpose: there is no single right
+      # one. The first run with QUIC in the filter was 639 on Windows and 638
+      # on Debian, because AChainTheePlatformCannotBuild is skipped there (a
+      # Schannel/OpenSSL difference) and dotnet test leaves a skipped test out
+      # of the total rather than counting it. A number in the name would have
+      # been wrong on one leg from the first run onwards.
+      - name: Test (HTTP/3 + QUIC, from the pinned Hermod)
         run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3|FullyQualifiedName~Hermod.Tests.QUIC" --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
 
       # The out-of-process half of the gate: two harnesses driving a real H3Server over real UDP,
@@ -137,8 +146,9 @@ jobs:
       # same two legs Hermod and Styx use, so all of them are directly comparable.
       #
       # It also carries the one thing the console hides on the Debian leg: a skip reason. The
-      # difference between "246 passed, 1 skipped because OpenSSL cannot build that chain" and
-      # "246 passed, 1 quietly missing" is only visible in the .trx.
+      # difference between "638 passed, 1 skipped because OpenSSL cannot build that chain" and
+      # "638 passed, 1 quietly missing" is only visible in the .trx — dotnet test leaves a
+      # skipped test out of the total, so the console just shows one fewer than Windows.
       #
       # !cancelled() rather than success(): a red run is when these files matter most, and a
       # build that fails before the test step leaves no .trx, which upload-artifact reports as
