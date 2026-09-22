@@ -88,12 +88,20 @@ jobs:
 
       # The stack itself now lives in the submodule and Hermod's own CI runs its
       # whole suite. What this gate adds is the pinned submodule commit: the
-      # samples must still compile against it, and its 247 HTTP/3 tests must still
-      # pass. None of them touch the network — the stack is exercised in-process
+      # samples must still compile against it, and its tests must still pass.
+      # None of them touch the network — the stack is exercised in-process
       # against our own QUIC server — so this is a real gate, not a connectivity
       # check.
-      - name: Test (HTTP/3)
-        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3" --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
+      #
+      # QUIC is in the filter, and was not until 2026-09-22. The gate ran
+      # ~Hermod.Tests.HTTP3 alone — 247 tests — while the 394 under
+      # ~Hermod.Tests.QUIC were not in it at all. That gated HTTP/3 against a
+      # pinned commit while saying nothing about the transport HTTP/3 is
+      # carried by, which is the layer where a regression is both likelier
+      # and harder to attribute. Hermod’s own CI does run them, but the whole
+      # point of a pin gate is to answer for *this* revision. 641 now.
+      - name: Test (HTTP/3 + QUIC, 641 tests from the pinned Hermod)
+        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3|FullyQualifiedName~Hermod.Tests.QUIC" --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
 
       # The out-of-process half of the gate: two harnesses driving a real H3Server over real UDP,
       # one of them with a client nobody here wrote (msquic, via .NET's HttpClient). They cover what
