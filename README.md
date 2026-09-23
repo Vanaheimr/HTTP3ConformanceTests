@@ -14,7 +14,7 @@ Everything below is repeatable from a clean checkout with the command next to it
 
 | Driver | What it establishes | Result |
 |---|---|---|
-| `pwsh tests/run-tests.ps1` | the gate: two harnesses against the live demo host over real UDP | **38/38 checks** |
+| `tests/run-tests.sh` | the gate: two harnesses against the live demo host over real UDP | **38/38 checks** |
 | ├ [`tests/h3semantics`](tests/h3semantics) | RFC 9114 semantics, driven by **msquic** through .NET's `HttpClient` — a foreign stack on the client side | 25/25 checks |
 | └ [`tests/h3attack`](tests/h3attack) | hand-built hostile datagrams: noise, undersized Initials, version negotiation, stateless reset, amplification, a 128-source flood | 13/13 checks |
 | `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
@@ -88,7 +88,7 @@ Hermod — this table is the map from RFC to evidence, not a build log; the chro
 | 9 | **Performance**: zero-alloc hot paths (`ByteQueue`, 300 KB download 51→7 MiB), UDP batching (GSO via `UdpBatchSender`), window auto-tuning (`ReceiveWindowTuner`, BDP) | ✅ done |
 | interop | **Client interop against 8 foreign QUIC stacks**: quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — each 2xx/3xx with full cert validation | ✅ done |
 | browser | **Browser interop (server side)**: Chrome 150 / Edge 150 headless, 8/8 checks incl. WebTransport and the PQ hybrid — `tools/browser-interop.ps1` | ✅ done |
-| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `pwsh tests/run-tests.ps1` gives one verdict, and CI runs it | ✅ 38/38 |
+| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `tests/run-tests.sh` gives one verdict, and CI runs it | ✅ 38/38 |
 | bench | **`h3bench`**: throughput, latency percentiles and concurrency scaling against the demo host — the first reproducible performance numbers this repository has | ✅ done |
 
 ### Per-area detail
@@ -620,8 +620,8 @@ tests/             Harnesses that drive H3Server as a separate process over real
                      h3bench/           throughput/latency/concurrency baseline (no pass/fail)
                      h3interop/         the matrix against 8 public HTTP/3 servers — the one harness
                                         pointing outwards; live network, so nightly-only
-                   run-tests.ps1 / run-tests.sh — builds, starts the demo host, runs the gated
-                                        harnesses, one verdict; one script per platform
+                   run-tests.sh       builds, starts the demo host, runs the gated harnesses,
+                                        one verdict; one script, bash, every platform
 tools/             browser-interop.ps1 — headless Chrome/Edge against H3Server, exit code as verdict
 samples/H3Get/     HTTP/3 client: GET/POST against cloudflare-quic.com or our own server
                    (--post, --cancel, --goaway, --priorities, --websocket, --datagrams, --webtransport, --zerortt, --resume, --key-update, --migrate,
@@ -645,13 +645,15 @@ Prerequisite: .NET 10 SDK. Everything builds from the repository root:
 dotnet build HTTP3ConformanceTests.slnx --configuration Release
 ```
 
-The gate — the demo host, both harnesses, one verdict. This is what `ci.yml` runs:
+The gate — the demo host, both harnesses, one verdict. This is what `ci.yml` runs, on
+both legs:
 
 ```bash
-pwsh tests/run-tests.ps1
+tests/run-tests.sh
 ```
 
-Or, where there is no PowerShell — the Debian container CI's second leg runs in, for instance:
+On Windows this runs under the Git Bash that ships with Git for Windows. The same
+command, spelled for a shell that needs the interpreter named explicitly:
 
 ```bash
 sh tests/run-tests.sh

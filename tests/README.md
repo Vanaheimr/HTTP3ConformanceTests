@@ -7,11 +7,12 @@ client nobody here wrote.
 ## Running everything
 
 ```bash
-pwsh tests/run-tests.ps1
+tests/run-tests.sh
 ```
-```bash
-sh tests/run-tests.sh
-```
+
+One runner, in bash, on every platform — including Windows, under the Git Bash
+that ships with Git for Windows. The PowerShell twin was removed on 2026-09-23;
+the header of that script says why.
 
 The runner builds the demo host and the harnesses, starts the host on `:4433`, drives one process
 per harness and prints a pass/fail summary. Flags: `-NoBuild`/`--no-build` (assume a current Release

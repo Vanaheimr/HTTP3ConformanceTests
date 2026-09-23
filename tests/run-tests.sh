@@ -1,12 +1,22 @@
 #!/bin/sh
 #
 # Builds the harnesses, starts the demo host, drives every gated harness against it and prints one
-# verdict. The POSIX counterpart to run-tests.ps1.
+# verdict.
 #
-# Both exist for the same reason the sibling repositories keep autobahn.ps1 next to autobahn.sh: the
-# development machine is Windows, and the Debian container that CI's second leg runs in has no pwsh.
-# Each is exercised by the leg it belongs to, so neither can rot unnoticed - but they ARE two
-# implementations of one thing, so a change to either belongs in both.
+# THE runner - there is no second one. run-tests.ps1 stood next to this file until 2026-09-23 with
+# the argument that each was exercised by the leg it belonged to, so neither could rot unnoticed.
+# The sibling repositories had already paid for that argument: HTTP/2's PowerShell twin named its
+# harness-argument parameter $Args, a PowerShell automatic variable, so it was never bound and every
+# scenario ran in its default mode while Windows reported a confident 48/48. Pass/fail detection was
+# never wrong; what had RUN was.
+#
+# This pair was measured before the swap and agreed - 38/38, identical per-harness numbers. Where it
+# had already drifted was diagnosis: the PowerShell version redirected only the server's stdout, so
+# a host dying with a stack trace on stderr would have left an empty log behind on precisely the run
+# where the log is the only evidence. This file redirects both.
+#
+# Runs on Windows too, under the Git Bash that ships with Git for Windows; the harness executables
+# are looked up with and without the .exe suffix below.
 #
 # Usage:
 #   tests/run-tests.sh [-n|--no-build] [--filter <substr>] [--port <n>]

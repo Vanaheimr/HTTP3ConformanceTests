@@ -70,16 +70,12 @@ jobs:
         timeout-minutes: 30
         run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3|FullyQualifiedName~Hermod.Tests.QUIC" --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
 
-      # Fatal: the harnesses, against a real server over real UDP. One runner per
-      # platform — the container has no pwsh.
-      - name: Harnesses (Windows)
-        if: runner.os == 'Windows'
+      # Fatal: the harnesses, against a real server over real UDP. One runner, in bash,
+      # on both legs — see the note in ci.yml for why the PowerShell twin was removed
+      # rather than kept in step.
+      - name: Harnesses
         timeout-minutes: 20
-        run: pwsh tests/run-tests.ps1 -NoBuild
-
-      - name: Harnesses (Debian)
-        if: runner.os == 'Linux'
-        timeout-minutes: 20
+        shell: bash
         run: tests/run-tests.sh --no-build
 
       # Informational, and it has to be. These reach eight public servers, and a
@@ -181,7 +177,8 @@ jobs:
 
       - name: Harnesses
         timeout-minutes: 20
-        run: pwsh tests/run-tests.ps1 -NoBuild
+        shell: bash
+        run: tests/run-tests.sh --no-build
 
       - name: Upload results
         if: ${{ !cancelled() }}
