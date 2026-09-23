@@ -133,7 +133,7 @@ jobs:
 
       - name: Harnesses (out of process, Debian)
         if: runner.os == 'Linux'
-        run: sh tests/run-tests.sh --no-build
+        run: tests/run-tests.sh --no-build
 
       # The console log answers "did it pass" and almost nothing else: which test failed takes
       # grepping the step log, and a skip reason never reaches the console at normal verbosity

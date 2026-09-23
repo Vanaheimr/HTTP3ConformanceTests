@@ -80,7 +80,7 @@ jobs:
       - name: Harnesses (Debian)
         if: runner.os == 'Linux'
         timeout-minutes: 20
-        run: sh tests/run-tests.sh --no-build
+        run: tests/run-tests.sh --no-build
 
       # Informational, and it has to be. These reach eight public servers, and a
       # hosted runner is not a normal client: Akamai and Outlook run bot
