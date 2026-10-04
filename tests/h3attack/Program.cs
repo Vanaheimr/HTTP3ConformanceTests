@@ -36,7 +36,7 @@ using System.Security.Cryptography;
 // check that only proves "no reply" would pass just as happily against a server that had crashed.
 //
 // Needs the demo host running:  dotnet run --project samples/H3Server -- 4433
-// Or just let tests/run-tests.ps1 start it.
+// Or just let tests/run-tests.sh start it.
 
 string host = Environment.GetEnvironmentVariable("H3_HOST") ?? "localhost";
 int    port = int.TryParse(Environment.GetEnvironmentVariable("H3_PORT"), out int p) ? p : 4433;

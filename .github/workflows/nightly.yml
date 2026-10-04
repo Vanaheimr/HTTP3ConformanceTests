@@ -78,40 +78,43 @@ jobs:
         shell: bash
         run: tests/run-tests.sh --no-build
 
-      # Informational, and it has to be. These reach eight public servers, and a
-      # hosted runner is not a normal client: Akamai and Outlook run bot
-      # protection that treats datacentre ranges differently from a residential
-      # line. A failure here can mean "the runner could not ask", which says
-      # nothing about our client — so it must not be able to turn the night red.
-      # Read the numbers for a trend; a sudden 0/8 IS worth looking at.
+      # Gated since 2026-10-04, at the floor h3interop itself enforces: its exit code goes
+      # non-zero below 6/8. This step used to be informational because a hosted runner is not a
+      # normal client and nobody had measured how abnormal — the 54 artifacts accumulated since
+      # 2026-08-13 are that measurement: 53 nights of 8/8, one 7/8 from a single mvfst GOAWAY,
+      # never two hosts down at once, and the feared Akamai/Outlook bot protection never fired.
+      # Two unreachable hosts still pass — double the worst night ever measured, because a
+      # network gate that cries wolf gets clicked away. Three gone at once has never been
+      # weather: it means our client, the runner's egress as a whole, or a third of the public
+      # HTTP/3 world, and each of those deserves a red night.
       #
       # Windows only: one matrix leg is enough to answer "can our client still
       # talk to these eight", and running it twice would double the load on
       # somebody else's servers for no extra information.
-      - name: Client interop matrix (informational)
+      - name: Client interop matrix (floor 6/8)
         if: runner.os == 'Windows'
-        continue-on-error: true
         timeout-minutes: 15
         shell: bash
         run: |
           mkdir -p artifacts
-          dotnet run --project tests/h3interop --configuration Release --no-build 2>&1 | tee artifacts/interop.txt
+          status=0
+          dotnet run --project tests/h3interop --configuration Release --no-build 2>&1 | tee artifacts/interop.txt || status=$?
           {
-            echo '## Client interop matrix (informational)'
+            echo '## Client interop matrix (floor 6/8)'
             echo
-            echo 'Network-dependent: a failure here can reflect runner egress or bot protection.'
+            echo 'Network-dependent, so the floor is deliberately low: red takes three of eight gone at once.'
             echo
             echo '```'
             cat artifacts/interop.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          exit $status
 
       # One artifact per leg. The interop output exists nowhere else once the
       # console log ages out, and the step summary is only comfortable to read
       # while the run is the newest one — but a baseline is not a thing one
-      # reads, it is a thing one accumulates. `gh run download` over a few
-      # nights produces the number the threshold note above is waiting for.
+      # reads, it is a thing one accumulates. 54 of them bought the 6/8 floor
+      # above; they keep accumulating so the next tightening has its evidence too.
       #
       # !cancelled() rather than success(): a red night is when this matters most.
       - name: Upload results

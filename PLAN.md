@@ -82,7 +82,7 @@ libs/Hermod/             # submodule
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
   HermodTests/QUIC/      # mirrors Hermod/QUIC/
-  HermodTests/HTTP3/     # 249 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
+  HermodTests/HTTP3/     # 337 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
                          # WebTransport/ Robustness/ — RFC vectors, "evil" raw-QUIC peers,
                          # a seeded lossy link (drop/reorder/duplicate)
   HermodTests/Helpers/   # Expect/Hex/FakeTimeProvider/LossyNetwork, shared by both areas
@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **643 tests green** (394 QUIC + 249 HTTP/3, both in HermodTests since the move) plus **38/38** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **731 tests green** (394 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **38/38** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1196,6 +1196,13 @@ side of the wire:
 - `SETTINGS_WT_MAX_SESSIONS` moved codepoint between WebTransport drafts. We announce and accept both
   0x14e9cd29 (draft-13) and 0xc671706a (draft-07, what quiche and therefore every browser knows).
 
+**The interop nightly gates now** (2026-10-04): the open item that stood here said the matrix
+needed a known-good runner baseline before a failure count could gate the workflow. 54 nightly
+artifacts (2026-08-13 → 2026-10-04) became that baseline — 53 nights of 8/8, one 7/8 from a single
+mvfst GOAWAY on 2026-09-22, never two hosts down at once. `h3interop` now exits non-zero below
+6/8, double the worst dip ever observed, and `nightly.yml` lets that exit code turn the night red
+instead of swallowing it.
+
 **Open, roughly by value:**
 
 1. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
@@ -1204,8 +1211,6 @@ side of the wire:
    it. `Hermod/HTTP2/WebSocket/` and `Hermod/HTTP3/WebSocket/` still hold the same six files, each
    pair differing in exactly one line: the namespace. Housekeeping, no protocol gain — and, now that
    both copies live in the same repository, work for Hermod rather than for this one.
-3. **Interop nightly threshold** — the interop matrix needs a known-good runner baseline before a
-   failure count can gate the workflow.
 
 ## References
 

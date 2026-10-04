@@ -33,9 +33,10 @@ using org.GraphDefined.Vanaheimr.Hermod.Quic.Tls.Handshake;
 // with foreign code; here our client is the one under test and the far end belongs to Cloudflare,
 // Google, Meta and the rest.
 //
-// It reaches the open internet, so it is not part of tests/run-tests.ps1 — a gate that goes red
-// because Akamai's bot protection dislikes a hosted runner teaches nobody anything. The nightly
-// workflow runs it and records the output as an artifact instead. Details and history: INTEROP.md.
+// It reaches the open internet, so it is not part of tests/run-tests.sh — the push gate must not
+// depend on eight third parties being awake. The nightly workflow runs it, records the output as
+// an artifact, and fails the night below the floor this file enforces at the bottom. Details and
+// history: INTEROP.md.
 //
 //   dotnet run --project tests/h3interop --configuration Release
 
@@ -67,11 +68,14 @@ Console.WriteLine(new string('-', 100));
 Console.WriteLine($"\n{reachable}/{targets.Length} stacks reachable (2xx/3xx = the HTTP/3 stack runs end to end; "
                   + "3xx/4xx are regular responses such as redirects/bot protection).");
 
-// Non-zero only when every single target failed. That threshold is deliberately loose: a night
-// where six of eight answered says something about those two hosts, not about this stack, and a
-// gate nobody trusts gets clicked away. Tightening it needs a runner baseline first — see the note
-// in .github/workflows/nightly.yml.
-return reachable > 0 ? 0 : 1;
+// Non-zero below 6/8. The floor comes from a measured baseline, not taste: the 54 nightly
+// artifacts accumulated on hosted runners between 2026-08-13 and 2026-10-04 scored 8/8 on 53
+// nights and 7/8 once — a single mvfst GOAWAY-at-connect — and no host ever failed twice. So one
+// unreachable host is that host's evening, two at once has never been observed, and a regression
+// in OUR client does not take out one stack, it takes out eight. The gate tolerates double the
+// worst night ever measured, because a network gate nobody trusts gets clicked away; it goes red
+// once three of the eight are gone at once, which has never been weather.
+return reachable >= 6 ? 0 : 1;
 
 // A single interop attempt: fresh connection, GET /, full cert validation. Returns the crypto
 // profile and a result text; true as soon as an HTTP/3 status was received.

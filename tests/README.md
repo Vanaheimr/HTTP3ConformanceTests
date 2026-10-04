@@ -33,12 +33,12 @@ see [What this found](#what-this-found).
 
 The in-process unit and integration tests — RFC 9000/9001/9002/9114/9204 vectors, the TLS 1.3 key
 schedule, QPACK, the frame state machine, "evil" raw-QUIC peers, a seeded lossy link — live with the
-stack in Hermod (`HermodTests/HTTP3/`, 249 tests) and are what `ci.yml` gates on. They are far more
+stack in Hermod (`HermodTests/HTTP3/`, 337 tests) and are what `ci.yml` gates on. They are far more
 thorough than anything here. What they cannot be is *independent*: both ends of every one of them
 is our own code, sharing one reading of the RFCs and one set of bugs.
 
 That is the gap this directory fills, and why the findings below came from it rather than from the
-249.
+337.
 
 ## The harnesses
 
@@ -47,7 +47,7 @@ That is the gap this directory fills, and why the findings below came from it ra
 | `h3semantics` | demo-driven, gated | .NET `HttpClient` over **msquic** | RFC 9114 semantics: status/headers/trailers, 300 KB download byte-exact, request bodies from 16 B to 300 KB, `MAX_FIELD_SECTION_SIZE`, connection reuse, 16 concurrent streams, long-lived connections (25 checks) |
 | `h3attack` | demo-driven, gated | hand-built UDP datagrams | noise, undersized Initials (§14.1), version negotiation + GREASE (§6.1/§6.3), stateless reset sizing (§10.3.3), the 3× amplification limit (§8.1), a 128-source flood, a cancellation storm (13 checks) |
 | `h3bench` | benchmark, not gated | .NET `HttpClient` over **msquic** | throughput up and down, latency percentiles, concurrency scaling — no verdict, just numbers |
-| `h3interop` | live network, not gated | our own client, outbound | the client interop matrix against 8 public HTTP/3 servers — see [INTEROP.md](../INTEROP.md) |
+| `h3interop` | live network, gated nightly at 6/8 | our own client, outbound | the client interop matrix against 8 public HTTP/3 servers — see [INTEROP.md](../INTEROP.md) |
 
 **Why msquic.** `h3semantics` deliberately has no `ProjectReference` to Hermod. Its client is
 Microsoft's QUIC stack, reached through .NET's own `HttpClient`, so every check it passes is two
