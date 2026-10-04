@@ -20,12 +20,12 @@ Everything below is repeatable from a clean checkout with the command next to it
 | `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
 | `pwsh tools/browser-interop.ps1 -Browser chrome` | **Chrome 150 / Edge 150** headless, incl. WebTransport and the post-quantum hybrid | **8/8** checks |
 | `curl --http3-only -k https://127.0.0.1:4433/` | **ngtcp2/LibreSSL** and **OpenSSL-QUIC** against our server — GET, POST, 300 KB, 103 + trailers | see [INTEROP.md](INTEROP.md) |
-| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **249 tests** (394 more for QUIC) |
+| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **337 tests** (394 more for QUIC) |
 | `dotnet run --project tests/h3bench` | throughput, latency percentiles, concurrency scaling | numbers, no verdict |
 
 On the other side of those rows sits code nobody here wrote: eight public QUIC stacks, two
 independent `curl` builds, Chromium's QUICHE in two browsers, and msquic driving our own server.
-That is the point of the table. The 249 in-process tests are the more thorough half of the coverage
+That is the point of the table. The 337 in-process tests are the more thorough half of the coverage
 and they gate every push — but they cannot disagree with us, because both ends of every one of them
 are our own code, sharing one reading of the RFCs and one set of bugs.
 
@@ -616,7 +616,7 @@ libs/Hermod/       The whole stack, as a submodule:
                      Hermod/HTTP3/      HTTP/3 + QPack/ + WebSocket/ (RFC 6455) + WebTransport/
                                         (draft-13) + the async facades Http3Client/Http3Server —
                                         see its README
-                     HermodTests/QUIC/  and HermodTests/HTTP3/ (249 tests, incl. RFC vectors,
+                     HermodTests/QUIC/  and HermodTests/HTTP3/ (337 tests, incl. RFC vectors,
                                         "evil" raw-QUIC peers and a seeded lossy link)
                    Namespaces are unchanged: org.GraphDefined.Vanaheimr.Hermod.Quic.* and
                    org.GraphDefined.Vanaheimr.Hermod.HTTP3.*
