@@ -33,12 +33,12 @@ see [What this found](#what-this-found).
 
 The in-process unit and integration tests — RFC 9000/9001/9002/9114/9204 vectors, the TLS 1.3 key
 schedule, QPACK, the frame state machine, "evil" raw-QUIC peers, a seeded lossy link — live with the
-stack in Hermod (`HermodTests/HTTP3/`, 247 tests) and are what `ci.yml` gates on. They are far more
+stack in Hermod (`HermodTests/HTTP3/`, 249 tests) and are what `ci.yml` gates on. They are far more
 thorough than anything here. What they cannot be is *independent*: both ends of every one of them
 is our own code, sharing one reading of the RFCs and one set of bugs.
 
-That is the gap this directory fills, and why both findings below came from it rather than from the
-247.
+That is the gap this directory fills, and why the findings below came from it rather than from the
+249.
 
 ## The harnesses
 
@@ -80,12 +80,36 @@ in-process suite works in tens, and `curl`, Chrome and Edge each open a connecti
 [Hermod#20](https://github.com/Vanaheimr/Hermod/pull/20) with six tests of its own; the check here
 stays as the regression guard, because it is the one that noticed.
 
-**`h3bench` (not gated): large uploads are slow and eventually fatal.** ⬜ Open.
+**`h3bench` (not gated): large uploads were slow and eventually fatal.** ✅ Fixed.
 
-300 000 bytes down takes ~11 ms; the same 300 000 bytes up takes ~130 ms on a good run and ~830 ms
-on a bad one, after which the connection is lost to the idle timeout mid-upload. Receiving large
-request bodies stalls somewhere that sending them does not. Not a pass/fail item, which is precisely
-why nothing had caught it.
+300 000 bytes down took ~11 ms; the same 300 000 bytes up took ~130 ms on a good run and ~830 ms
+on a bad one, after which the connection was lost to the idle timeout mid-upload — one measured run
+died at 40 of 50. Receiving large request bodies stalled somewhere that sending them did not.
+
+The somewhere was the acknowledgment cadence. `DelayedAcknowledgments` defaulted to true, so the
+server held acknowledgments back per RFC 9000 §13.2.2 whether or not the peer had ever asked for
+that — and a slow-start sender lives from the acknowledgment of every small flight, so any flight
+whose tail sat out `max_ack_delay` stalled its congestion window. The held acks also fed the
+uploader's RTT estimator samples of 10–30 ms on a 0.5 ms path, from which msquic sized its
+flow-control grants: 6 KB slices every 2.3 ms. A second bug surfaced while measuring the first:
+the §13.2.1 out-of-order check compared arrivals against the largest ack-*eliciting* packet rather
+than the largest *received* one, so the ack-only tail of every request/response turn manufactured
+a phantom hole that forced an immediate ACK — quietly defeating both delayed acknowledgments and
+any cadence a peer requested.
+
+Fixed in Hermod 87a561d5, *"Acknowledge promptly by default, and delay only when the peer asks"*:
+the data sender is the one that knows what cadence its loss recovery can afford, which is the
+ack-frequency draft's control model, so a receiver only delays when ACK_FREQUENCY tells it to.
+Measured at the current pin: 47–66 ms per 300 000-byte round trip across three fresh runs,
+150/150 uploads, no degradation, no deaths. The two findings above went through two weeks of
+in-process tests without a ripple — both ends were ours, on moving fake clocks. The first foreign
+stack to drive this server put a number on each of them within an afternoon.
+
+**`h3bench` (not gated): throughput falls as concurrency rises.** ⬜ Open.
+
+~35 MiB/s with one `GET /big` in flight, ~10 MiB/s with 32 — on loopback, where more streams have
+no propagation delay or loss to hide behind. The acknowledgment fix did not change this in kind,
+so it stops being a footnote to the upload finding and becomes its own.
 
 ## Benchmarks (h3bench)
 
@@ -102,15 +126,19 @@ an assumption rather than a finding. Loopback measures our packet handling, fram
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is
 meaningful, comparing it to a datacentre benchmark is not.
 
-Baseline on a 16-core Windows 11 machine, .NET 10.0.400:
+Baseline on a 16-core Windows 11 machine, .NET 10.0.401, measured 2026-10-04 at Hermod pin
+22768a4a — after the acknowledgment-cadence fix; the pre-fix numbers live in the finding above.
+Median of three runs:
 
 | Measurement | Result |
 |---|---|
-| `GET /big` (300 000 B), sequential | ~25 MiB/s, ~11 ms/request |
-| `POST /echo` (300 000 B, echoed) | ~4 MiB/s, ~130 ms/round trip |
-| `GET /` latency, 90 requests | p50 0.35 ms · p90 0.46 ms · p99 6.97 ms |
-| `GET /` sustained | ~2 200 requests/s |
-| `GET /big`, 1 → 32 in flight | 62 → 22 MiB/s |
+| `GET /big` (300 000 B), sequential | ~30 MiB/s, ~9.5 ms/request |
+| `POST /echo` (300 000 B, echoed) | ~9 MiB/s, 47–66 ms/round trip |
+| `GET /` latency, 90 requests | p50 0.35 ms · p90 0.43 ms · p99 7.7 ms |
+| `GET /` sustained | ~2 250 requests/s |
+| `GET /big`, 1 → 32 in flight | ~35 → ~10 MiB/s |
 
-That last row is its own finding: throughput should not fall by two thirds as concurrency rises on
-loopback.
+That last row is the open finding above: throughput should not fall by ~70 % as concurrency rises
+on loopback. The rest of the table moved the way the fix predicts — the round trip that was ~130 ms
+and sometimes ~830 ms now sits under 70 ms every time — while latency and sustained request rate
+stayed where they were, which is what you want from a change that only touches when acks go out.

@@ -26,22 +26,23 @@ using System.Security.Cryptography;
 // h3bench: how fast the demo server (samples/H3Server) actually is, over loopback, driven by
 // .NET's HttpClient on msquic.
 //
-// This is NOT a pass/fail harness and tests/run-tests.ps1 does not gate on it. It exists because
+// This is NOT a pass/fail harness and tests/run-tests.sh does not gate on it. It exists because
 // the performance claims in the README — zero-alloc hot paths, UDP batching, window auto-tuning —
 // had no number anyone could reproduce, which makes "fast enough" an assumption rather than a
 // finding. Now there is a baseline, and any future optimisation has something to beat.
 //
 // It found two things on its first run, which is the argument for having it:
 //
-//   * The upload path is an order of magnitude slower than the download path for the same 300 000
-//     bytes — ~130 ms per round trip against ~11 ms — and it degrades from there. A later run
-//     measured 830 ms and then lost the connection to the idle timeout after 40 of 50 uploads.
-//     Receiving large request bodies stalls somewhere that sending them does not.
-//   * Throughput falls as concurrency rises: ~62 MiB/s with one request in flight, ~22 MiB/s with
-//     32. More streams should not cost that much on loopback.
+//   * The upload path was an order of magnitude slower than the download path for the same 300 000
+//     bytes — ~130 ms per round trip against ~11 ms, degrading to ~830 ms until the connection died
+//     at the idle timeout after 40 of 50 uploads. The server was delaying acknowledgments nobody
+//     had asked it to delay; fixed in Hermod 87a561d5, and the same round trip now measures
+//     47–66 ms with no deaths. The full story is in tests/README.md.
+//   * Throughput falls as concurrency rises: ~35 MiB/s with one request in flight, ~10 MiB/s with
+//     32. More streams should not cost that much on loopback. Still open.
 //
-// Neither is a pass/fail matter, which is exactly why they had gone unnoticed: nothing was
-// measuring. The numbers below are the baseline both should be judged against from now on.
+// Neither was a pass/fail matter, which is exactly why they had gone unnoticed: nothing was
+// measuring. The baseline in tests/README.md is what any future change is judged against.
 //
 // Read the numbers for what they are. Loopback has no propagation delay and effectively no loss,
 // so throughput here measures our packet handling, framing and crypto, not a network. And both
@@ -60,13 +61,14 @@ if (!System.Net.Quic.QuicConnection.IsSupported)
     return 2;
 }
 
-// One connection per phase, and no phase above 90 requests.
+// One connection per phase.
 //
-// Not a style choice: the server grants initial_max_streams_bidi = 100 and never sends MAX_STREAMS
-// to extend it (RFC 9000 §4.6), so a connection carries exactly 100 requests and then stalls until
-// it times out. h3semantics pins that as a failing check; here it would silently turn a throughput
-// figure into a measurement of the timeout. Once MAX_STREAMS is implemented, these phases can share
-// one connection again and the handshake drops out of the numbers.
+// The hard reason is gone: since Hermod#20 the server extends stream credit with MAX_STREAMS as
+// requests complete (RFC 9000 §4.6), so a connection no longer stalls at its opening grant of 100 —
+// h3semantics gates on exactly that. The split stays anyway: a phase starting on a fresh connection
+// starts from a known state — empty congestion window, no inherited ack or RTT history — and the
+// baseline in tests/README.md was measured this way, so merging the phases would cost every future
+// run its comparability for the price of a few spared handshakes.
 HttpClient client = NewClient();
 
 static HttpClient NewClient() =>
@@ -185,7 +187,7 @@ Console.WriteLine("\n=== Latency — GET / , 90 sequential requests on one conne
 Console.WriteLine("\n=== Concurrency — GET /big with N requests in flight ===");
 foreach (int concurrency in (int[]) [1, 2, 4, 8, 16, 32])
 {
-    NextPhase(); // 32 requests per level would cross the 100-stream ceiling by the fourth level
+    NextPhase(); // every level starts from the same state: fresh connection, empty congestion window
     const int perLevel = 32;
     var stopwatch = Stopwatch.StartNew();
     long total = 0;

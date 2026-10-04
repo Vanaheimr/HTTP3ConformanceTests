@@ -31,7 +31,7 @@ are our own code, sharing one reading of the RFCs and one set of bugs.
 
 ### What the drivers have found
 
-Two things, both from the out-of-process harnesses, and neither reachable from in-process tests —
+Three findings, all from the out-of-process harnesses, and none reachable from in-process tests —
 those work in single digits of streams, and both ends of every one of them are ours:
 
 - **A connection stalled after exactly 100 requests.** ✅ **fixed** — `MAX_STREAMS` was parsed and
@@ -40,10 +40,18 @@ those work in single digits of streams, and both ends of every one of them are o
   by driving a running server with msquic until it stalled; fixed in
   [Hermod#20](https://github.com/Vanaheimr/Hermod/pull/20), and the `h3semantics` check that found
   it stays in place as the regression guard.
-- **Large uploads are slow and eventually fatal.** ⬜ **open** — 300 000 bytes down takes ~11 ms;
-  the same 300 000 bytes up takes ~130 ms, degrading to ~830 ms until the connection is lost to the
-  idle timeout mid-upload. Receiving large request bodies stalls somewhere that sending them does
-  not. Measured by `h3bench`; not a pass/fail item, which is why nothing had caught it.
+- **Large uploads were slow and eventually fatal.** ✅ **fixed** — 300 000 bytes down took ~11 ms;
+  the same 300 000 bytes up took ~130 ms, degrading to ~830 ms until the connection was lost to the
+  idle timeout mid-upload. The server was delaying acknowledgments the peer had never asked it to
+  delay (RFC 9000 §13.2.2), and a slow-start uploader lives from the acknowledgment of every small
+  flight. Fixed in Hermod 87a561d5 — acks are prompt by default and delayed only on a peer's
+  ACK_FREQUENCY request. Measured at the current pin: 47–66 ms per round trip, and three fresh
+  50-upload runs complete 150/150 where one once died at 40. Found by `h3bench`, which is not a
+  pass/fail harness — which is why nothing had caught it earlier.
+- **Throughput falls as concurrency rises.** ⬜ **open** — `GET /big` over loopback delivers
+  ~35 MiB/s with one request in flight and ~10 MiB/s with 32; more streams should not cost
+  ~70 % of the throughput on a path with no propagation delay and no loss. Unchanged in kind by
+  the acknowledgment fix, so it is its own finding now rather than a footnote to the first.
 
 Details in [tests/README.md](tests/README.md). The interop evidence and how to repeat it is in
 [INTEROP.md](INTEROP.md); the implementation history — phases, milestones, crypto roadmap — is in
