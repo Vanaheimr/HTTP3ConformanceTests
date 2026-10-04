@@ -40,14 +40,17 @@ those work in single digits of streams, and both ends of every one of them are o
   by driving a running server with msquic until it stalled; fixed in
   [Hermod#20](https://github.com/Vanaheimr/Hermod/pull/20), and the `h3semantics` check that found
   it stays in place as the regression guard.
-- **Large uploads were slow and eventually fatal.** ✅ **fixed** — 300 000 bytes down took ~11 ms;
-  the same 300 000 bytes up took ~130 ms, degrading to ~830 ms until the connection was lost to the
-  idle timeout mid-upload. The server was delaying acknowledgments the peer had never asked it to
-  delay (RFC 9000 §13.2.2), and a slow-start uploader lives from the acknowledgment of every small
-  flight. Fixed in Hermod 87a561d5 — acks are prompt by default and delayed only on a peer's
-  ACK_FREQUENCY request. Measured at the current pin: 47–66 ms per round trip, and three fresh
-  50-upload runs complete 150/150 where one once died at 40. Found by `h3bench`, which is not a
-  pass/fail harness — which is why nothing had caught it earlier.
+- **Large uploads were slow and eventually fatal.** ⬜ **fixed, then regressed** — 300 000 bytes
+  up took ~130 ms against ~11 ms down, degrading to ~830 ms until the connection died at the idle
+  timeout mid-upload: the server was delaying acknowledgments the peer had never asked it to delay
+  (RFC 9000 §13.2.2). Hermod 87a561d5 made acks prompt by default, and at pin 22768a4a that held —
+  47–66 ms per round trip, 150/150 uploads across three runs. Re-measured at the next pin
+  d2d608d2, a *different* stall is back: when the first request of a fresh connection is a large
+  POST, four runs of nine lose the connection to thirty seconds of mutual silence, always on
+  iteration 0. GET-first connections are untouched — which is also why the gate stays green:
+  `h3semantics` never POSTs first. Reported with the nine-run table as
+  [Hermod#129](https://github.com/Vanaheimr/Hermod/issues/129); the regression guard joins
+  `h3semantics` with the fix, the way the MAX_STREAMS check arrived with Hermod#20.
 - **Throughput falls as concurrency rises.** ⬜ **open** — `GET /big` over loopback delivers
   ~35 MiB/s with one request in flight and ~10 MiB/s with 32; more streams should not cost
   ~70 % of the throughput on a path with no propagation delay and no loss. Unchanged in kind by

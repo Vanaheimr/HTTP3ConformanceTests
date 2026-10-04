@@ -100,10 +100,31 @@ any cadence a peer requested.
 Fixed in Hermod 87a561d5, *"Acknowledge promptly by default, and delay only when the peer asks"*:
 the data sender is the one that knows what cadence its loss recovery can afford, which is the
 ack-frequency draft's control model, so a receiver only delays when ACK_FREQUENCY tells it to.
-Measured at the current pin: 47–66 ms per 300 000-byte round trip across three fresh runs,
-150/150 uploads, no degradation, no deaths. The two findings above went through two weeks of
-in-process tests without a ripple — both ends were ours, on moving fake clocks. The first foreign
-stack to drive this server put a number on each of them within an afternoon.
+Measured at pin 22768a4a: 47–66 ms per 300 000-byte round trip across three fresh runs,
+150/150 uploads, no degradation, no deaths — and see the next finding for what the *following*
+pin did. The two findings above went through two weeks of in-process tests without a ripple —
+both ends were ours, on moving fake clocks. The first foreign stack to drive this server put a
+number on each of them within an afternoon.
+
+**`h3bench` (not gated): the first POST of a fresh connection dies — regressed at d2d608d2.** ⬜ Open.
+
+The fix above held at pin 22768a4a: 150/150 uploads, 47–66 ms. Re-measured the same day on the
+same machine at d2d608d2 — the pin advance of 948e52a — nine runs split five against four: five
+complete at 44–172 ms, four lose the connection on the very first upload, always iteration 0,
+never later. The server log holds the counterpart, `closed after idle timeout`: thirty seconds in
+which neither side sends a packet, on a connection whose handshake just completed. Downloads,
+latency and the concurrency ladder are unchanged between the two revisions in the same runs — the
+machine did not change, the upload path did. And 87a561d5 is in both revisions, so this is not
+the acknowledgment cadence back; it is a new stall somewhere in the 111 commits of
+22768a4a..d2d608d2.
+
+What the black box pins down: a fresh connection whose first request is a 300 KB POST dies about
+half the time; dozens of GET-first connections in the same runs never did. That asymmetry is also
+why `ci.yml` stayed green through it — h3semantics sends its 300 KB POST on a warmed-up
+connection, never first. Reported as [Hermod#129](https://github.com/Vanaheimr/Hermod/issues/129).
+The regression guard — first-request POST, fresh connection — joins h3semantics together with the
+fix, the way the MAX_STREAMS check arrived with Hermod#20: gating on it today would redden half
+of all pushes against the current pin.
 
 **`h3bench` (not gated): throughput falls as concurrency rises.** ⬜ Open.
 
@@ -138,7 +159,9 @@ Median of three runs:
 | `GET /` sustained | ~2 250 requests/s |
 | `GET /big`, 1 → 32 in flight | ~35 → ~10 MiB/s |
 
-That last row is the open finding above: throughput should not fall by ~70 % as concurrency rises
-on loopback. The rest of the table moved the way the fix predicts — the round trip that was ~130 ms
-and sometimes ~830 ms now sits under 70 ms every time — while latency and sustained request rate
-stayed where they were, which is what you want from a change that only touches when acks go out.
+That last row is one open finding above: throughput should not fall by ~70 % as concurrency rises
+on loopback. The upload row is the other, as of the same afternoon: these numbers are from pin
+22768a4a, where the round trip sat under 70 ms every time; at d2d608d2 the five surviving runs
+measure 44–172 ms and four of nine never get past the first upload. Downloads, latency and the
+ladder re-measure identically at both revisions — which is what makes the upload row the finding
+and not the machine.
