@@ -23,7 +23,7 @@ container. `h3attack` needs no QUIC client at all and runs in full there: 13/13,
 negotiation, the amplification limit and stateless-reset sizing, on the platform this runs on in
 production.
 
-Current status: **38/38 checks pass**, and `ci.yml` runs this on every push. It started at 37/38:
+Current status: **39/39 checks pass**, and `ci.yml` runs this on every push. It started at 37/38:
 see [What this found](#what-this-found).
 
 The in-process unit and integration tests — RFC 9000/9001/9002/9114/9204 vectors, the TLS 1.3 key
@@ -39,7 +39,7 @@ That is the gap this directory fills, and why the findings below came from it ra
 
 | Harness | Kind | Client side | Covers |
 |---|---|---|---|
-| `h3semantics` | demo-driven, gated | .NET `HttpClient` over **msquic** | RFC 9114 semantics: status/headers/trailers, 300 KB download byte-exact, request bodies from 16 B to 300 KB, `MAX_FIELD_SECTION_SIZE`, connection reuse, 16 concurrent streams, long-lived connections (25 checks) |
+| `h3semantics` | demo-driven, gated | .NET `HttpClient` over **msquic** | RFC 9114 semantics: status/headers/trailers, 300 KB download byte-exact, request bodies from 16 B to 300 KB, `MAX_FIELD_SECTION_SIZE`, connection reuse, 16 concurrent streams, long-lived connections, large uploads on fresh connections (26 checks) |
 | `h3attack` | demo-driven, gated | hand-built UDP datagrams | noise, undersized Initials (§14.1), version negotiation + GREASE (§6.1/§6.3), stateless reset sizing (§10.3.3), the 3× amplification limit (§8.1), a 128-source flood, a cancellation storm (13 checks) |
 | `h3bench` | benchmark, not gated | .NET `HttpClient` over **msquic** | throughput up and down, latency percentiles, concurrency scaling — no verdict, just numbers |
 | `h3interop` | live network, gated nightly at 6/8 | our own client, outbound | the client interop matrix against 8 public HTTP/3 servers — see [INTEROP.md](../INTEROP.md) |
@@ -95,37 +95,49 @@ any cadence a peer requested.
 Fixed in Hermod 87a561d5, *"Acknowledge promptly by default, and delay only when the peer asks"*:
 the data sender is the one that knows what cadence its loss recovery can afford, which is the
 ack-frequency draft's control model, so a receiver only delays when ACK_FREQUENCY tells it to.
-Measured at pin 22768a4a: 47–66 ms per 300 000-byte round trip across three fresh runs,
-150/150 uploads, no degradation, no deaths — and see the next finding for what the *following*
-pin did. The two findings above went through two weeks of in-process tests without a ripple —
-both ends were ours, on moving fake clocks. The first foreign stack to drive this server put a
-number on each of them within an afternoon.
+Measured at pin 22768a4a: 47–66 ms per 300 000-byte round trip across three fresh runs, 150/150
+uploads, no degradation. That last part was luck, as the next finding shows. The two findings
+above went through two weeks of in-process tests without a ripple: both ends were ours, on moving
+fake clocks. The first foreign stack to drive this server put a number on each of them within an
+afternoon.
 
-**`h3bench` (not gated): the first POST of a fresh connection dies — regressed at d2d608d2.** ⬜ Open.
+**`h3bench`, then `h3semantics`: the first large upload of a fresh connection dies.** ✅ Fixed.
 
-The fix above held at pin 22768a4a: 150/150 uploads, 47–66 ms. Re-measured the same day on the
-same machine at d2d608d2 — the pin advance of 948e52a — nine runs split five against four: five
-complete at 44–172 ms, four lose the connection on the very first upload, always iteration 0,
-never later. The server log holds the counterpart, `closed after idle timeout`: thirty seconds in
-which neither side sends a packet, on a connection whose handshake just completed. Downloads,
-latency and the concurrency ladder are unchanged between the two revisions in the same runs — the
-machine did not change, the upload path did. And 87a561d5 is in both revisions, so this is not
-the acknowledgment cadence back; it is a new stall somewhere in the 111 commits of
-22768a4a..d2d608d2.
+About one fresh connection in five whose first request was a 300 KB POST never got an answer. The
+upload completed, the server acknowledged every byte, and then both sides were silent until the
+idle timeout ended the connection. GET-first connections never did this, and neither did uploads
+of 140 KB or less.
 
-What the black box pins down: a fresh connection whose first request is a 300 KB POST dies about
-half the time; dozens of GET-first connections in the same runs never did. That asymmetry is also
-why `ci.yml` stayed green through it — h3semantics sends its 300 KB POST on a warmed-up
-connection, never first. Reported as [Hermod#129](https://github.com/Vanaheimr/Hermod/issues/129).
-The regression guard — first-request POST, fresh connection — joins h3semantics together with the
-fix, the way the MAX_STREAMS check arrived with Hermod#20: gating on it today would redden half
-of all pushes against the current pin.
+The cause sat in QUIC's stream reassembly. `StreamReceiveBuffer` keyed fragments by their start
+offset and let a later arrival replace an earlier one on the same key, whatever its length. A
+fresh connection's first large upload bursts through slow start and loses datagrams even on
+loopback, and msquic retransmits lost bytes in frames cut differently from the originals; RFC 9000
+§13.3 allows exactly that. When a shorter frame landed on an offset a longer one already held, the
+longer one's tail was gone. Both copies had been acknowledged, so the client never sent those bytes
+again. The stream waited at the hole for good: the qlog showed every byte received, while the
+stream's read position stood 80–120 KB short of its FIN and the HTTP/3 layer never saw the request
+end. Reported as [Hermod#129](https://github.com/Vanaheimr/Hermod/issues/129) and fixed in
+[Hermod#159](https://github.com/Vanaheimr/Hermod/pull/159): of two fragments at one offset the
+longer is kept, since the bytes at an offset never change (§2.2). With a fresh connection per
+trial, the stall rate went from about 1 in 5 (4/24 on Hermod master) to 0/78.
+
+The first write-up of this finding was wrong, and it is worth saying how. It called the stall a
+regression between pins 22768a4a and d2d608d2, because h3bench had been clean at the one and
+failed at the other. But h3bench puts exactly one upload-first connection into each run, so the
+clean pin rested on three trials, and at this rate three come out clean 42 % of the time. A
+reproducer with twenty fresh connections per revision stalled 4/20 at 22768a4a. The defect is as
+old as Hermod's QUIC stack, and the 111-commit bisect it seemed to call for would have chased
+noise.
+
+The gate missed it for three weeks because `h3semantics` sent its 300 KB POST on a warm
+connection. It now also opens sixteen fresh connections, each uploading 300 000 bytes as its
+first request. That catches a return of the defect in about 97 runs out of 100, and it fails 12/16
+against Hermod master without #159.
 
 **`h3bench` (not gated): throughput falls as concurrency rises.** ⬜ Open.
 
 ~35 MiB/s with one `GET /big` in flight, ~10 MiB/s with 32 — on loopback, where more streams have
-no propagation delay or loss to hide behind. The acknowledgment fix did not change this in kind,
-so it stops being a footnote to the upload finding and becomes its own.
+no propagation delay or loss to hide behind. Neither upload fix changed it in kind.
 
 ## Benchmarks (h3bench)
 
@@ -136,7 +148,7 @@ dotnet run --project samples/H3Server -- 4433
 dotnet run --project tests/h3bench --configuration Release
 ```
 
-Everything else in this repository has a number behind it — 247 unit tests, 38/38 harness checks,
+Everything else in this repository has a number behind it — 733 in-process tests, 39/39 harness checks,
 8 foreign stacks, Chrome and Edge 8/8. Performance had none, which made "readable rather than fast"
 an assumption rather than a finding. Loopback measures our packet handling, framing and crypto, not
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is
@@ -154,9 +166,7 @@ Median of three runs:
 | `GET /` sustained | ~2 250 requests/s |
 | `GET /big`, 1 → 32 in flight | ~35 → ~10 MiB/s |
 
-That last row is one open finding above: throughput should not fall by ~70 % as concurrency rises
-on loopback. The upload row is the other, as of the same afternoon: these numbers are from pin
-22768a4a, where the round trip sat under 70 ms every time; at d2d608d2 the five surviving runs
-measure 44–172 ms and four of nine never get past the first upload. Downloads, latency and the
-ladder re-measure identically at both revisions — which is what makes the upload row the finding
-and not the machine.
+That last row is the open finding above: throughput should not fall by ~70 % as concurrency rises
+on loopback. The upload row stands as measured. Re-measured with the reassembly fix of
+Hermod#159 on master: 52–60 ms per round trip, 150/150. The 22768a4a runs had simply not drawn a
+stalling first connection.

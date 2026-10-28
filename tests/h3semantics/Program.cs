@@ -133,8 +133,8 @@ Check("content-type octet-stream", big.Content.Headers.ContentType?.MediaType ==
       big.Content.Headers.ContentType?.ToString() ?? "(none)");
 
 Console.WriteLine("\n=== POST /echo — request bodies as DATA frames (RFC 9114 §4.1) ===");
-// The sizes straddle the interesting boundaries: below one packet, above the MTU, above the initial
-// 64 KiB stream window (so the server must extend credit mid-upload), and well beyond it.
+// The sizes straddle the interesting boundaries: below one packet, above the MTU, and above the
+// server's initial 256 KiB stream window, so it must extend credit mid-upload.
 foreach (int size in (int[]) [16, 1_400, 65_536, 300_000])
 {
     byte[] payload = new byte[size];
@@ -233,6 +233,54 @@ using (var freshClient = new HttpClient(freshHandler, disposeHandler: false) { T
 }
 Check("120 requests on one connection", served == 120,
       wall is null ? $"{served}/120" : $"stalled after {served} — {wall}");
+
+Console.WriteLine("\n=== Large uploads on fresh connections — 16 x 300 000 bytes, each the first request ===");
+// The 300 KB echo above rides a connection that is already warm. A fresh connection's first large
+// upload is different: it bursts through slow start, loses datagrams even on loopback, and msquic
+// retransmits the lost bytes in frames cut differently from the originals. A shorter frame at an
+// offset the receiver already held used to replace the longer one there, dropping its tail - bytes
+// that had been acknowledged and so were never sent again. The request then sat complete on the
+// wire and unread on the server until the idle timeout (Hermod#129, fixed in Hermod#159).
+//
+// About one fresh connection in five hit it, so one trial proves little: sixteen catch a return of
+// it in roughly 97 runs out of 100. A healthy upload takes ~50 ms; 5 s is a stall, not a slow run.
+int freshOk = 0;
+string? freshFailure = null;
+for (int i = 0; i < 16; i++)
+{
+    using var uploadHandler = new SocketsHttpHandler {
+        SslOptions = new System.Net.Security.SslClientAuthenticationOptions {
+            RemoteCertificateValidationCallback = (_, _, _, _) => true
+        }
+    };
+    using var uploadClient = new HttpClient(uploadHandler) { Timeout = TimeSpan.FromSeconds(5) };
+    byte[] upload = new byte[300_000];
+    RandomNumberGenerator.Fill(upload);
+    try
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, root + "/echo") {
+            Version       = HttpVersion.Version30,
+            VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+            Content       = new ByteArrayContent(upload)
+        };
+        HttpResponseMessage response = await uploadClient.SendAsync(request);
+        byte[] echoed = await response.Content.ReadAsByteArrayAsync();
+        if (response.StatusCode == HttpStatusCode.OK && echoed.AsSpan().SequenceEqual(upload))
+            freshOk++;
+        else
+            freshFailure ??= $"connection {i}: {(int) response.StatusCode}, {echoed.Length} bytes back";
+    }
+    catch (TaskCanceledException)
+    {
+        freshFailure ??= $"connection {i}: no response within 5 s";
+    }
+    catch (Exception e)
+    {
+        freshFailure ??= $"connection {i}: {(e.InnerException ?? e).Message}";
+    }
+}
+Check("16 fresh connections, each a 300 000-byte POST first, all echoed", freshOk == 16,
+      freshFailure is null ? "16/16" : $"{freshOk}/16 — first failure on {freshFailure}");
 
 Console.WriteLine("\n=== Concurrency — 16 requests in flight at once ===");
 // Each becomes its own bidirectional QUIC stream. This is where a server that serialises requests,

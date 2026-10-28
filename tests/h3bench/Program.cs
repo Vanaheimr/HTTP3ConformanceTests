@@ -35,9 +35,10 @@ using System.Security.Cryptography;
 //
 //   * The upload path was an order of magnitude slower than the download path for the same 300 000
 //     bytes — ~130 ms per round trip against ~11 ms, degrading to ~830 ms until the connection died
-//     at the idle timeout after 40 of 50 uploads. The server was delaying acknowledgments nobody
-//     had asked it to delay; fixed in Hermod 87a561d5, and the same round trip now measures
-//     47–66 ms with no deaths. The full story is in tests/README.md.
+//     at the idle timeout after 40 of 50 uploads. Two defects: acknowledgments delayed unasked
+//     (fixed in Hermod 87a561d5), and stream reassembly dropping the tail of a frame when a
+//     shorter retransmission landed on its offset (Hermod#129, fixed in Hermod#159). The round
+//     trip now measures 52–60 ms with no deaths. The full story is in tests/README.md.
 //   * Throughput falls as concurrency rises: ~35 MiB/s with one request in flight, ~10 MiB/s with
 //     32. More streams should not cost that much on loopback. Still open.
 //

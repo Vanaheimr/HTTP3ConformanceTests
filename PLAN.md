@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **731 tests green** (394 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **38/38** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **733 tests green** (396 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **39/39** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1212,14 +1212,16 @@ the namespace line, with the transport-specific parts named explicitly. The risk
 for — the copies drifting apart unnoticed — is gated, and it had already happened twice before
 that test existed. Merging them is housekeeping with no protocol gain, and Hermod's call.
 
+**The first large upload of a fresh connection no longer dies** (Hermod#159): QUIC's stream
+reassembly let a shorter retransmitted frame replace a longer one at the same offset and drop its
+acknowledged tail. That is Hermod#129, first misread as a regression between two pins. The guard
+is `h3semantics`' sixteen fresh connections, each uploading first; see tests/README.md.
+
 **Open, roughly by value:**
 
-1. **The first POST of a fresh connection dies** — [Hermod#129](https://github.com/Vanaheimr/Hermod/issues/129),
-   a regression in 22768a4a..d2d608d2 found by `h3bench`; see tests/README.md. The fix belongs in
-   Hermod, the regression guard in `h3semantics`.
-2. **Throughput falls as concurrency rises** — ~35 MiB/s with one request in flight, ~10 MiB/s with
+1. **Throughput falls as concurrency rises** — ~35 MiB/s with one request in flight, ~10 MiB/s with
    32, over loopback. Not investigated yet.
-3. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+2. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References

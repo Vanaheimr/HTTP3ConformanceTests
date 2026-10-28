@@ -14,8 +14,8 @@ Everything below is repeatable from a clean checkout with the command next to it
 
 | Driver | What it establishes | Result |
 |---|---|---|
-| `tests/run-tests.sh` | the gate: two harnesses against the live demo host over real UDP | **38/38 checks** |
-| ├ [`tests/h3semantics`](tests/h3semantics) | RFC 9114 semantics, driven by **msquic** through .NET's `HttpClient` — a foreign stack on the client side | 25/25 checks |
+| `tests/run-tests.sh` | the gate: two harnesses against the live demo host over real UDP | **39/39 checks** |
+| ├ [`tests/h3semantics`](tests/h3semantics) | RFC 9114 semantics, driven by **msquic** through .NET's `HttpClient` — a foreign stack on the client side | 26/26 checks |
 | └ [`tests/h3attack`](tests/h3attack) | hand-built hostile datagrams: noise, undersized Initials, version negotiation, stateless reset, amplification, a 128-source flood | 13/13 checks |
 | `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
 | `pwsh tools/browser-interop.ps1 -Browser chrome` | **Chrome 150 / Edge 150** headless, incl. WebTransport and the post-quantum hybrid | **8/8** checks |
@@ -40,21 +40,22 @@ those work in single digits of streams, and both ends of every one of them are o
   by driving a running server with msquic until it stalled; fixed in
   [Hermod#20](https://github.com/Vanaheimr/Hermod/pull/20), and the `h3semantics` check that found
   it stays in place as the regression guard.
-- **Large uploads were slow and eventually fatal.** ⬜ **fixed, then regressed** — 300 000 bytes
-  up took ~130 ms against ~11 ms down, degrading to ~830 ms until the connection died at the idle
-  timeout mid-upload: the server was delaying acknowledgments the peer had never asked it to delay
-  (RFC 9000 §13.2.2). Hermod 87a561d5 made acks prompt by default, and at pin 22768a4a that held —
-  47–66 ms per round trip, 150/150 uploads across three runs. Re-measured at the next pin
-  d2d608d2, a *different* stall is back: when the first request of a fresh connection is a large
-  POST, four runs of nine lose the connection to thirty seconds of mutual silence, always on
-  iteration 0. GET-first connections are untouched — which is also why the gate stays green:
-  `h3semantics` never POSTs first. Reported with the nine-run table as
-  [Hermod#129](https://github.com/Vanaheimr/Hermod/issues/129); the regression guard joins
-  `h3semantics` with the fix, the way the MAX_STREAMS check arrived with Hermod#20.
+- **Large uploads were slow, and sometimes fatal.** ✅ **fixed** — two separate defects behind one
+  symptom. First, 300 000 bytes up took ~130 ms against ~11 ms down, degrading to ~830 ms: the
+  server delayed acknowledgments the peer had never asked it to delay (RFC 9000 §13.2.2); Hermod
+  87a561d5 made them prompt. Second, about one fresh connection in five lost its first large upload
+  to the idle timeout. When msquic retransmitted lost bytes in shorter frames, a shorter frame
+  replaced the longer one held at the same offset and dropped its acknowledged tail, so the
+  request sat complete on the wire and unread on the server. That is
+  [Hermod#129](https://github.com/Vanaheimr/Hermod/issues/129), fixed in
+  [Hermod#159](https://github.com/Vanaheimr/Hermod/pull/159). Its first write-up blamed a
+  regression in 22768a4a..d2d608d2. It was not one: the defect is as old as Hermod's QUIC, and the
+  "clean" earlier pin rested on three lucky trials. `h3semantics` now opens sixteen fresh
+  connections, each uploading first.
 - **Throughput falls as concurrency rises.** ⬜ **open** — `GET /big` over loopback delivers
   ~35 MiB/s with one request in flight and ~10 MiB/s with 32; more streams should not cost
-  ~70 % of the throughput on a path with no propagation delay and no loss. Unchanged in kind by
-  the acknowledgment fix, so it is its own finding now rather than a footnote to the first.
+  ~70 % of the throughput on a path with no propagation delay and no loss. Neither upload fix
+  changed it.
 
 Details in [tests/README.md](tests/README.md). The interop evidence and how to repeat it is in
 [INTEROP.md](INTEROP.md); the implementation history — phases, milestones, crypto roadmap — is in
@@ -99,7 +100,7 @@ Hermod — this table is the map from RFC to evidence, not a build log; the chro
 | 9 | **Performance**: zero-alloc hot paths (`ByteQueue`, 300 KB download 51→7 MiB), UDP batching (GSO via `UdpBatchSender`), window auto-tuning (`ReceiveWindowTuner`, BDP) | ✅ done |
 | interop | **Client interop against 8 foreign QUIC stacks**: quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — each 2xx/3xx with full cert validation | ✅ done |
 | browser | **Browser interop (server side)**: Chrome 150 / Edge 150 headless, 8/8 checks incl. WebTransport and the PQ hybrid — `tools/browser-interop.ps1` | ✅ done |
-| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `tests/run-tests.sh` gives one verdict, and CI runs it | ✅ 38/38 |
+| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `tests/run-tests.sh` gives one verdict, and CI runs it | ✅ 39/39 |
 | bench | **`h3bench`**: throughput, latency percentiles and concurrency scaling against the demo host — the first reproducible performance numbers this repository has | ✅ done |
 
 ### Per-area detail
