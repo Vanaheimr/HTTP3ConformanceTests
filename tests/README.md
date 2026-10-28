@@ -15,13 +15,8 @@ that ships with Git for Windows. The PowerShell twin was removed on 2026-09-23;
 the header of that script says why.
 
 The runner builds the demo host and the harnesses, starts the host on `:4433`, drives one process
-per harness and prints a pass/fail summary. Flags: `-NoBuild`/`--no-build` (assume a current Release
-build), `-Filter`/`--filter <substr>`, `-Port`/`--port <n>`.
-
-Two scripts, one job — the same arrangement the HTTP/2 repository uses for `autobahn` and `h2spec`.
-The development machine is Windows; the Debian container CI's second leg runs in has no `pwsh`. Each
-is exercised by the leg it belongs to, so neither can rot unnoticed, but they *are* two
-implementations of one thing: a change to either belongs in both.
+per harness and prints a pass/fail summary. Flags: `-n`/`--no-build` (assume a current Release
+build), `--filter <substr>`, `--port <n>`.
 
 On Debian, `h3semantics` reports **SKIP** — `System.Net.Quic` finds no libmsquic in the bare
 container. `h3attack` needs no QUIC client at all and runs in full there: 13/13, including version

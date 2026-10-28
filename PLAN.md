@@ -1201,16 +1201,26 @@ needed a known-good runner baseline before a failure count could gate the workfl
 artifacts (2026-08-13 → 2026-10-04) became that baseline — 53 nights of 8/8, one 7/8 from a single
 mvfst GOAWAY on 2026-09-22, never two hosts down at once. `h3interop` now exits non-zero below
 6/8, double the worst dip ever observed, and `nightly.yml` lets that exit code turn the night red
-instead of swallowing it.
+instead of swallowing it. By 2026-10-27 the baseline stood at 77 nights, the 23 since the gate
+all 8/8, and not one false alarm.
+
+**The WebSocket copies are guarded now** (pin d2d608d2): the open item that stood here wanted the
+six files under `Hermod/HTTP3/WebSocket/` merged with their originals under
+`Hermod/HTTP2/WebSocket/`. They are still copies, but `WebSocketCopyTests`
+(HermodTests/HTTP3/Tunnels) now holds every one of them byte-identical to its original except for
+the namespace line, with the transport-specific parts named explicitly. The risk the item stood
+for — the copies drifting apart unnoticed — is gated, and it had already happened twice before
+that test existed. Merging them is housekeeping with no protocol gain, and Hermod's call.
 
 **Open, roughly by value:**
 
-1. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+1. **The first POST of a fresh connection dies** — [Hermod#129](https://github.com/Vanaheimr/Hermod/issues/129),
+   a regression in 22768a4a..d2d608d2 found by `h3bench`; see tests/README.md. The fix belongs in
+   Hermod, the regression guard in `h3semantics`.
+2. **Throughput falls as concurrency rises** — ~35 MiB/s with one request in flight, ~10 MiB/s with
+   32, over loopback. Not investigated yet.
+3. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
-2. **WebSocket deduplication** — the migration into Hermod happened; the duplication came along with
-   it. `Hermod/HTTP2/WebSocket/` and `Hermod/HTTP3/WebSocket/` still hold the same six files, each
-   pair differing in exactly one line: the namespace. Housekeeping, no protocol gain — and, now that
-   both copies live in the same repository, work for Hermod rather than for this one.
 
 ## References
 
