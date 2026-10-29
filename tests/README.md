@@ -169,8 +169,24 @@ against ~4.8 MB, and a sender of small requests keeps the window it had after th
 
 Throughput did not move, and neither did the queue under full load. At 32 in flight the window
 *is* used, so it may grow, and on loopback, with no loss, nothing ends slow start: the server's RTT
-still sits near 60 ms. Ending slow start on rising delay (HyStart++, RFC 9406) is the lever for
-that. The gap to Kestrel remains.
+still sits near 60 ms.
+
+Ending slow start on rising delay (HyStart++, RFC 9406) looked like the lever for that, and was
+tried in [Hermod#171](https://github.com/Vanaheimr/Hermod/pull/171). It is not merged. At 32 in
+flight, with the demo host built both ways and runs interleaved:
+
+| | throughput | server sRTT p50 | window p50 | sender at its window |
+|---|---|---|---|---|
+| plain slow start | ~18 MiB/s | 118–133 ms | ~4.4 MB | 16–17 % of the time |
+| HyStart++ | ~13 MiB/s | 55–101 ms | ~1.2 MB | 53–74 % of the time |
+
+The machine was busy that day, so the absolute numbers are high. The comparison holds.
+
+On a simulated bottleneck with a clean RTT, HyStart++ halves the queue at unchanged throughput.
+Loopback is different: most of the RTT under load is the two endpoints' CPU, not a queue the
+window builds. Rising delay then says nothing about the window, and the window HyStart++ leaves
+is too small for the RTT it sits behind. The gap to Kestrel is the same CPU from the other side,
+which makes it the lever for both.
 
 **`h3semantics`: the demo host's timers ran only on silence.** ✅ Fixed.
 

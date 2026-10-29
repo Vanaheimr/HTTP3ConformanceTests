@@ -1235,22 +1235,29 @@ and a busy one never did. Now they run every 5 ms, and the server probes after 6
 `h3semantics` cuts a path mid-response through a relay to check both cases (26 → 29 checks); see
 tests/README.md.
 
+**HyStart++ was tried and is not merged** ([Hermod#171](https://github.com/Vanaheimr/Hermod/pull/171),
+draft). On a simulated bottleneck it halves the queue at unchanged throughput. On loopback it halves
+the server's RTT at 32 in flight, but costs ~25 % throughput at 16–32 in flight: the sender sat
+at its window 53–74 % of the time, against 16–17 % without. Most of the RTT under load there is
+the endpoints' CPU, not a queue the window builds. HyStart++ reads that rise as congestion, and
+the window it leaves is too small for the RTT it sits behind. CUBIC would not help in this
+regime: after a loss-free exit it grows like Reno for the seconds these connections live
+(RFC 9438 §4.10). The lever is the CPU, which is item 1 now.
+
 **Open, roughly by value:**
 
-1. **Slow start does not end on loopback** — under full load the window is used, so §7.8 lets it
-   grow, and with no loss nothing stops slow start. At 32 in flight the server's RTT sits near
-   60 ms on a 0.5 ms path, all of it queue. HyStart++ (RFC 9406) leaves slow start when the RTT
-   rises. RFC 9002 leaves the exit to the implementation, so this is latency, not conformance.
+1. **CPU per packet: the gap to Kestrel, and the RTT under load** — Kestrel moves four to five
+   times the throughput on the same path, to the same client. On loopback the same CPU cost is
+   most of the server's ~60 ms RTT at 32 in flight. That is why delay-based slow start costs
+   throughput here (see HyStart++ above). No single defect is known. Candidates are the
+   per-packet stream selection and the demo host's one-datagram-at-a-time send loop.
 2. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
    code, not measured. It runs timers only when its 20 ms tick passes without a datagram, and
    otherwise touches only connections that just received one. So a connection whose path went
    dark gets no probe while others keep the server busy. This is the demo host's former defect
    with a shorter tick. No harness runs against `Http3Server`, so the guard would belong in
    HermodTests.
-3. **The gap to Kestrel** — four to five times the throughput on the same path, same client. No
-   single defect is known; candidates are the per-packet stream selection and the demo host's
-   one-datagram-at-a-time send loop.
-4. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+3. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References
