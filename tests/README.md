@@ -16,12 +16,13 @@ the header of that script says why.
 
 The runner builds the demo host and the harnesses, starts the host on `:4433`, drives one process
 per harness and prints a pass/fail summary. Flags: `-n`/`--no-build` (assume a current Release
-build), `--filter <substr>`, `--port <n>`.
+build), `--filter <substr>`, `--port <n>`, and `--require-all`, which counts a SKIP as a failure.
 
-On Debian, `h3semantics` reports **SKIP** — `System.Net.Quic` finds no libmsquic in the bare
-container. `h3attack` needs no QUIC client at all and runs in full there: 13/13, including version
-negotiation, the amplification limit and stateless-reset sizing, on the platform this runs on in
-production.
+Both harnesses run on both CI legs. On Linux `h3semantics` needs libmsquic, which Debian does not
+ship; the Debian 13 container installs it from packages.microsoft.com. Until 2026-10-29 it did
+not, so `h3semantics` reported SKIP there, and every msquic check, the upload guard for Hermod#129
+included, ran on Windows alone. A SKIP counts as a pass, so that leg stayed green the whole time.
+CI therefore runs with `--require-all`: a container in which libmsquic stops loading now fails.
 
 Current status: **39/39 checks pass**, and `ci.yml` runs this on every push. It started at 37/38:
 see [What this found](#what-this-found).
@@ -48,7 +49,8 @@ That is the gap this directory fills, and why the findings below came from it ra
 Microsoft's QUIC stack, reached through .NET's own `HttpClient`, so every check it passes is two
 independent implementations agreeing on RFC 9114 — and it puts a fourth foreign client on our
 server, next to the two `curl` builds and Chromium. On a machine without QUIC support it reports
-SKIP (exit code 2) rather than a green 0/0.
+SKIP (exit code 2) rather than a green 0/0, and under `--require-all`, as CI runs it, that SKIP
+fails the run.
 
 **Why raw UDP.** `h3attack` has no `ProjectReference` either, though its HTTP/2 counterpart does.
 Borrowing our own packet builders to attack our own server would test the server against the code

@@ -19,22 +19,28 @@
 # are looked up with and without the .exe suffix below.
 #
 # Usage:
-#   tests/run-tests.sh [-n|--no-build] [--filter <substr>] [--port <n>]
+#   tests/run-tests.sh [-n|--no-build] [--filter <substr>] [--port <n>] [--require-all]
 #
-# Exit codes: 0 all harnesses passed (or skipped), 1 at least one failed.
+# --require-all counts a SKIP as a failure. A harness skips when its client cannot run on this
+# machine (h3semantics without libmsquic); interactively that is information, in CI it is a hole
+# that stays green for ever. CI passes this flag on every leg.
+#
+# Exit codes: 0 all harnesses passed (or skipped, without --require-all), 1 at least one failed.
 
 set -u
 
 NO_BUILD=0
 FILTER=""
 PORT=4433
+REQUIRE_ALL=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -n|--no-build) NO_BUILD=1; shift ;;
         --filter)      FILTER="${2:-}"; shift 2 ;;
         --port)        PORT="${2:-4433}"; shift 2 ;;
-        -h|--help)     sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --require-all) REQUIRE_ALL=1; shift ;;
+        -h|--help)     sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)             echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -126,7 +132,10 @@ for harness in $HARNESSES; do
 
     # Exit code 2 means the harness could not run at all - on Debian h3semantics finds no libmsquic
     # and says so. That is a SKIP, not a pass: reporting it as green 0/0 would hide a whole harness.
-    if [ "$CODE" -eq 2 ]; then
+    if [ "$CODE" -eq 2 ] && [ "$REQUIRE_ALL" -eq 1 ]; then
+        LABEL="SKIP, required"
+        FAILED="$FAILED $harness"
+    elif [ "$CODE" -eq 2 ]; then
         LABEL="SKIP"
     elif [ "$CODE" -eq 0 ]; then
         LABEL="PASS"

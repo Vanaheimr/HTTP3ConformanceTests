@@ -71,9 +71,22 @@ jobs:
       # prerequisites the bare container lacks: curl for the install script, ICU
       # and tzdata for globalization, OpenSSL for crypto, ca-certificates for
       # NuGet over HTTPS. Package names verified on Debian 13 (trixie).
+      #
+      # libmsquic is the client side of h3semantics: System.Net.Quic loads it at
+      # run time and reports no QUIC support without it. Until 2026-10-29 this
+      # leg went without, so h3semantics skipped here and every msquic check -
+      # the MAX_STREAMS check, the Hermod#129 upload guard - ran on Windows
+      # alone. Debian is not in the distribution's own archive; Microsoft
+      # publishes it for trixie at packages.microsoft.com, and the repository
+      # comes from Microsoft's own configuration package.
       - name: Install prerequisites (Debian container)
         if: runner.os == 'Linux'
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+          curl -fsSL -o /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb
+          dpkg -i /tmp/packages-microsoft-prod.deb
+          apt-get update && apt-get install -y --no-install-recommends libmsquic
+          dpkg-query -W libmsquic
 
       # The QUIC/TLS stack lives in the Hermod submodule, Styx below that —
       # without a recursive checkout nothing here compiles at all.
@@ -134,13 +147,13 @@ jobs:
       # exactly the run where the log is the only evidence. That is the same shape of
       # defect: invisible until the day it matters.
       #
-      # The Debian leg is not the poor relation it looks like. h3semantics needs libmsquic, which the
-      # bare container has not got, so it reports SKIP — but h3attack sends hand-built datagrams and
-      # needs no QUIC client at all: 13/13 there, including version negotiation, the amplification
-      # limit and stateless-reset sizing, on the platform this runs on in production.
+      # Both harnesses run on both legs. h3semantics needs libmsquic, installed above for the
+      # container. --require-all turns a SKIP into a failure: the container ran without it for
+      # two months, and the leg stayed green because a SKIP passes. Had the install above broken
+      # quietly, the same would have happened again, and nothing would have shown it.
       - name: Harnesses (out of process)
         shell: bash
-        run: tests/run-tests.sh --no-build
+        run: tests/run-tests.sh --no-build --require-all
 
       # The console log answers "did it pass" and almost nothing else: which test failed takes
       # grepping the step log, and a skip reason never reaches the console at normal verbosity

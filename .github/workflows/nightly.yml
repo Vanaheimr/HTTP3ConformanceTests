@@ -49,10 +49,16 @@ jobs:
     container: ${{ matrix.container }}
     steps:
       # git BEFORE the checkout: without it actions/checkout falls back to a REST
-      # tarball, and a tarball has no submodules — see ci.yml.
+      # tarball, and a tarball has no submodules — see ci.yml. libmsquic for
+      # h3semantics, from Microsoft's repository; see ci.yml for that too.
       - name: Install prerequisites (Debian container)
         if: runner.os == 'Linux'
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+          curl -fsSL -o /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb
+          dpkg -i /tmp/packages-microsoft-prod.deb
+          apt-get update && apt-get install -y --no-install-recommends libmsquic
+          dpkg-query -W libmsquic
 
       - uses: actions/checkout@v7
         with:
@@ -72,11 +78,11 @@ jobs:
 
       # Fatal: the harnesses, against a real server over real UDP. One runner, in bash,
       # on both legs — see the note in ci.yml for why the PowerShell twin was removed
-      # rather than kept in step.
+      # rather than kept in step, and for --require-all.
       - name: Harnesses
         timeout-minutes: 20
         shell: bash
-        run: tests/run-tests.sh --no-build
+        run: tests/run-tests.sh --no-build --require-all
 
       # Gated since 2026-10-04, at the floor h3interop itself enforces: its exit code goes
       # non-zero below 6/8. This step used to be informational because a hosted runner is not a
@@ -142,12 +148,32 @@ jobs:
     # not a broken build, which is why it is a separate job and why the network
     # lane is left out of it. One question at a time.
     #
-    # Windows, unlike the DNS and NTS equivalents: h3semantics drives our server
-    # with msquic, and the container has no libmsquic. The most interesting half
-    # of the referee's evidence only exists on this leg.
-    name: against-hermod-master
-    runs-on: windows-latest
+    # Both legs, like the job above. Until 2026-10-29 this was Windows alone,
+    # because h3semantics drives our server with msquic and the container had no
+    # libmsquic; it has now, so the referee gives its whole verdict on the
+    # production platform too.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            leg: windows-latest
+          - os: ubuntu-latest
+            container: debian:13
+            leg: debian-13-container
+    name: against-hermod-master (${{ matrix.leg }})
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     steps:
+      - name: Install prerequisites (Debian container)
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+          curl -fsSL -o /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb
+          dpkg -i /tmp/packages-microsoft-prod.deb
+          apt-get update && apt-get install -y --no-install-recommends libmsquic
+          dpkg-query -W libmsquic
+
       - uses: actions/checkout@v7
         with:
           submodules: recursive
@@ -176,16 +202,16 @@ jobs:
 
       - name: Test (HTTP/3 + QUIC, in process)
         timeout-minutes: 30
-        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3|FullyQualifiedName~Hermod.Tests.QUIC" --logger "console;verbosity=normal" --logger "trx;LogFileName=against-hermod-master.trx" --results-directory artifacts
+        run: dotnet test libs/Hermod/HermodTests/HermodTests.csproj --configuration Release --no-build --filter "FullyQualifiedName~Hermod.Tests.HTTP3|FullyQualifiedName~Hermod.Tests.QUIC" --logger "console;verbosity=normal" --logger "trx;LogFileName=against-hermod-master-${{ matrix.leg }}.trx" --results-directory artifacts
 
       - name: Harnesses
         timeout-minutes: 20
         shell: bash
-        run: tests/run-tests.sh --no-build
+        run: tests/run-tests.sh --no-build --require-all
 
       - name: Upload results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: nightly-against-hermod-master
+          name: nightly-against-hermod-master-${{ matrix.leg }}
           path: artifacts/*.trx
