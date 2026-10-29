@@ -20,7 +20,7 @@ Everything below is repeatable from a clean checkout with the command next to it
 | `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
 | `pwsh tools/browser-interop.ps1 -Browser chrome` | **Chrome 150 / Edge 150** headless, incl. WebTransport and the post-quantum hybrid | **8/8** checks |
 | `curl --http3-only -k https://127.0.0.1:4433/` | **ngtcp2/LibreSSL** and **OpenSSL-QUIC** against our server — GET, POST, 300 KB, 103 + trailers | see [INTEROP.md](INTEROP.md) |
-| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **337 tests** (396 more for QUIC) |
+| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **337 tests** (398 more for QUIC) |
 | `dotnet run --project tests/h3bench` | throughput, latency percentiles, concurrency scaling | numbers, no verdict |
 
 On the other side of those rows sits code nobody here wrote: eight public QUIC stacks, two
@@ -52,10 +52,13 @@ those work in single digits of streams, and both ends of every one of them are o
   regression in 22768a4a..d2d608d2. It was not one: the defect is as old as Hermod's QUIC, and the
   "clean" earlier pin rested on three lucky trials. `h3semantics` now opens sixteen fresh
   connections, each uploading first.
-- **Throughput falls as concurrency rises.** ⬜ **open** — `GET /big` over loopback delivers
-  ~35 MiB/s with one request in flight and ~10 MiB/s with 32; more streams should not cost
-  ~70 % of the throughput on a path with no propagation delay and no loss. Neither upload fix
-  changed it.
+- **Throughput fell as concurrency rose.** 🔶 **mostly fixed** — `GET /big` over loopback went
+  from ~35 MiB/s with one request in flight to ~10 MiB/s with 32. Every ACK cost the server work
+  in proportion to all packets in flight, not to what the ACK acknowledged, so with thousands in
+  flight the single-threaded server fell behind its own ACKs, and the client's flow-control credit
+  waited in the same queue. Fixed in [Hermod#165](https://github.com/Vanaheimr/Hermod/pull/165):
+  now ~45 → ~28 MiB/s. What remains is a gap rather than a defect: Kestrel, serving the same body
+  to the same msquic client, reaches 140–190 MiB/s at 32 in flight.
 
 Details in [tests/README.md](tests/README.md). The interop evidence and how to repeat it is in
 [INTEROP.md](INTEROP.md); the implementation history — phases, milestones, crypto roadmap — is in

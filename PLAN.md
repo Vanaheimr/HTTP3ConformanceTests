@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **733 tests green** (396 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **39/39** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **735 tests green** (398 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **39/39** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1217,11 +1217,21 @@ reassembly let a shorter retransmitted frame replace a longer one at the same of
 acknowledged tail. That is Hermod#129, first misread as a regression between two pins. The guard
 is `h3semantics`' sixteen fresh connections, each uploading first; see tests/README.md.
 
+**Throughput no longer collapses under concurrency** (Hermod#165): every ACK cost work in
+proportion to all packets in flight, and the single-threaded server fell behind its own ACKs. The
+ladder now runs ~45 → ~28 MiB/s from 1 to 32 in flight, against ~35 → ~10 before; see
+tests/README.md for how the first explanations were ruled out.
+
 **Open, roughly by value:**
 
-1. **Throughput falls as concurrency rises** — ~35 MiB/s with one request in flight, ~10 MiB/s with
-   32, over loopback. Not investigated yet.
-2. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+1. **Slow start grows the window when it is not used** — RFC 9002 §7.8 says the congestion window
+   SHOULD NOT increase while the sender is application-limited. Hermod adds every acknowledged
+   byte regardless, so the window reached ~4.7 MB on a path that needs tens of KB, and under full
+   load the server's RTT rose to 110 ms on loopback.
+2. **The gap to Kestrel** — four to five times the throughput on the same path, same client. No
+   single defect is known; candidates are the per-packet stream selection and the demo host's
+   one-datagram-at-a-time send loop.
+3. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References

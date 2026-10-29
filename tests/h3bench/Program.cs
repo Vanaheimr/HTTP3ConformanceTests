@@ -39,8 +39,9 @@ using System.Security.Cryptography;
 //     (fixed in Hermod 87a561d5), and stream reassembly dropping the tail of a frame when a
 //     shorter retransmission landed on its offset (Hermod#129, fixed in Hermod#159). The round
 //     trip now measures 52–60 ms with no deaths. The full story is in tests/README.md.
-//   * Throughput falls as concurrency rises: ~35 MiB/s with one request in flight, ~10 MiB/s with
-//     32. More streams should not cost that much on loopback. Still open.
+//   * Throughput fell as concurrency rose: ~35 MiB/s with one request in flight, ~10 MiB/s with
+//     32. Every ACK cost the server work in proportion to all packets in flight; fixed in
+//     Hermod#165, now ~45 -> ~28 MiB/s. The rest is a gap to Kestrel, not a known defect.
 //
 // Neither was a pass/fail matter, which is exactly why they had gone unnoticed: nothing was
 // measuring. The baseline in tests/README.md is what any future change is judged against.

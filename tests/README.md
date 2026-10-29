@@ -136,10 +136,32 @@ connection. It now also opens sixteen fresh connections, each uploading 300 000 
 first request. That catches a return of the defect in about 97 runs out of 100, and it fails 12/16
 against Hermod master without #159.
 
-**`h3bench` (not gated): throughput falls as concurrency rises.** ⬜ Open.
+**`h3bench` (not gated): throughput fell as concurrency rose.** 🔶 Mostly fixed.
 
-~35 MiB/s with one `GET /big` in flight, ~10 MiB/s with 32 — on loopback, where more streams have
-no propagation delay or loss to hide behind. Neither upload fix changed it in kind.
+~35 MiB/s with one `GET /big` in flight, ~10 MiB/s with 32, on loopback, where more streams have no
+propagation delay or loss to hide behind. The first two explanations were wrong, and the
+measurements that ruled them out are the useful part:
+
+- *The client.* Kestrel, Microsoft's server on msquic, served the same 300 000 bytes to the same
+  HttpClient at 140–190 MiB/s with 32 in flight. The client was not the limit.
+- *Congestion control reacting to loss.* The server's own packet counters showed no loss at all.
+- *Bufferbloat.* The congestion window had grown to ~4.7 MB, and the server's smoothed RTT sat at
+  110 ms on a 0.5 ms path. Capping the window at 256 KiB brought the RTT down to 14 ms but left the
+  throughput nearly where it was. Real, but a side effect.
+
+Timing the demo host's loop settled it. At 32 in flight it was ~90 % busy, and processing one
+incoming datagram cost 7.7 times as much as at one in flight. A CPU sample put ~40 % of the server
+thread into acknowledgment processing. Each ACK walked every packet number of its ranges and
+copied the whole sent-packet map for loss detection, roughly 2 200 steps per ACK with 2 000
+packets in flight against ~120 with one request. The server fell behind its own ACKs, its RTT
+estimate rose to its own queueing delay, and the client's flow-control credit arrived late in the
+same queue. Fixed in [Hermod#165](https://github.com/Vanaheimr/Hermod/pull/165): an ACK now walks
+what it acknowledges and loss detection stops at the largest acknowledged packet. Throughput at 32
+in flight doubled, and the ladder now falls ~38 % instead of ~70 %.
+
+What it leaves is a gap to Kestrel of four to five times, and slow start growing the window by
+every acknowledged byte even when the window is not used. RFC 9002 §7.8 says it SHOULD NOT; that
+is where the 4.7 MB came from.
 
 ## Benchmarks (h3bench)
 
@@ -150,25 +172,23 @@ dotnet run --project samples/H3Server -- 4433
 dotnet run --project tests/h3bench --configuration Release
 ```
 
-Everything else in this repository has a number behind it — 733 in-process tests, 39/39 harness checks,
+Everything else in this repository has a number behind it — 735 in-process tests, 39/39 harness checks,
 8 foreign stacks, Chrome and Edge 8/8. Performance had none, which made "readable rather than fast"
 an assumption rather than a finding. Loopback measures our packet handling, framing and crypto, not
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is
 meaningful, comparing it to a datacentre benchmark is not.
 
-Baseline on a 16-core Windows 11 machine, .NET 10.0.401, measured 2026-10-04 at Hermod pin
-22768a4a — after the acknowledgment-cadence fix; the pre-fix numbers live in the finding above.
-Median of three runs:
+Baseline on a 16-core Windows 11 machine, .NET 10.0.403, measured 2026-10-29 at Hermod pin
+cc9bdd2a, which carries the reassembly fix (Hermod#159) and the ACK-cost fix (Hermod#165). Median
+of five runs; a sixth, taken while the machine was visibly busy (p50 latency 2 ms), is left out:
 
-| Measurement | Result |
-|---|---|
-| `GET /big` (300 000 B), sequential | ~30 MiB/s, ~9.5 ms/request |
-| `POST /echo` (300 000 B, echoed) | ~9 MiB/s, 47–66 ms/round trip |
-| `GET /` latency, 90 requests | p50 0.35 ms · p90 0.43 ms · p99 7.7 ms |
-| `GET /` sustained | ~2 250 requests/s |
-| `GET /big`, 1 → 32 in flight | ~35 → ~10 MiB/s |
+| Measurement | Result | 2026-10-04, pin 22768a4a |
+|---|---|---|
+| `GET /big` (300 000 B), sequential | ~37 MiB/s, ~7.7 ms/request | ~30 MiB/s, ~9.5 ms |
+| `POST /echo` (300 000 B, echoed) | ~9 MiB/s, 53–68 ms/round trip, one run 102 ms | 47–66 ms |
+| `GET /` latency, 90 requests | p50 0.31 ms · p90 0.38 ms · p99 7.8 ms | p50 0.35 · p90 0.43 · p99 7.7 |
+| `GET /` sustained | ~2 475 requests/s | ~2 250 |
+| `GET /big`, 1 → 32 in flight | ~45 → ~28 MiB/s | ~35 → ~10 |
 
-That last row is the open finding above: throughput should not fall by ~70 % as concurrency rises
-on loopback. The upload row stands as measured. Re-measured with the reassembly fix of
-Hermod#159 on master: 52–60 ms per round trip, 150/150. The 22768a4a runs had simply not drawn a
-stalling first connection.
+The last row is the finding above, now mostly fixed. The older column's upload range was luck as
+much as measurement: those runs did not happen to draw a connection that hit Hermod#129.
