@@ -159,9 +159,18 @@ same queue. Fixed in [Hermod#165](https://github.com/Vanaheimr/Hermod/pull/165):
 what it acknowledges and loss detection stops at the largest acknowledged packet. Throughput at 32
 in flight doubled, and the ladder now falls ~38 % instead of ~70 %.
 
-What it leaves is a gap to Kestrel of four to five times, and slow start growing the window by
-every acknowledged byte even when the window is not used. RFC 9002 §7.8 says it SHOULD NOT; that
-is where the 4.7 MB came from.
+What it left was a gap to Kestrel of four to five times, and slow start growing the window by
+every acknowledged byte even when the window was not used. RFC 9002 §7.8 says it SHOULD NOT; that
+is where the 4.7 MB came from. Fixed in [Hermod#166](https://github.com/Vanaheimr/Hermod/pull/166):
+an acknowledgment no longer grows the window when the last send pass left both window and pacing
+budget for another packet. Pacing alone does not count as unused, §7.8 says, so a paced bulk
+transfer still grows it. With one request in flight the server's window now averages ~1.1 MB
+against ~4.8 MB, and a sender of small requests keeps the window it had after the handshake.
+
+Throughput did not move, and neither did the queue under full load. At 32 in flight the window
+*is* used, so it may grow, and on loopback, with no loss, nothing ends slow start: the server's RTT
+still sits near 60 ms. Ending slow start on rising delay (HyStart++, RFC 9406) is the lever for
+that. The gap to Kestrel remains.
 
 ## Benchmarks (h3bench)
 
@@ -172,7 +181,7 @@ dotnet run --project samples/H3Server -- 4433
 dotnet run --project tests/h3bench --configuration Release
 ```
 
-Everything else in this repository has a number behind it — 735 in-process tests, 39/39 harness checks,
+Everything else in this repository has a number behind it — 738 in-process tests, 39/39 harness checks,
 8 foreign stacks, Chrome and Edge 8/8. Performance had none, which made "readable rather than fast"
 an assumption rather than a finding. Loopback measures our packet handling, framing and crypto, not
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is
@@ -192,3 +201,7 @@ of five runs; a sixth, taken while the machine was visibly busy (p50 latency 2 m
 
 The last row is the finding above, now mostly fixed. The older column's upload range was luck as
 much as measurement: those runs did not happen to draw a connection that hit Hermod#129.
+
+Not re-measured at pin 14c9701c (Hermod#166). The machine was busy with other work that day, and
+both pins measured about half these figures. An interleaved A/B of the two pins, four ladders
+each, showed no difference between them.

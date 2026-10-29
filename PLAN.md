@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **735 tests green** (398 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **39/39** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **738 tests green** (401 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **39/39** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1222,12 +1222,19 @@ proportion to all packets in flight, and the single-threaded server fell behind 
 ladder now runs ~45 → ~28 MiB/s from 1 to 32 in flight, against ~35 → ~10 before; see
 tests/README.md for how the first explanations were ruled out.
 
+**An unused congestion window no longer grows** (Hermod#166): RFC 9002 §7.8 says the window SHOULD
+NOT increase while the sender is application-limited, and Hermod added every acknowledged byte
+regardless. The send path now decides: window and pacing budget both left over means unused,
+because pacing alone must not count. With one request in flight the window averages ~1.1 MB
+against ~4.8 MB. Throughput is unchanged; the guard is HermodTests' `ApplicationLimitedTests`,
+since a client cannot see the server's window.
+
 **Open, roughly by value:**
 
-1. **Slow start grows the window when it is not used** — RFC 9002 §7.8 says the congestion window
-   SHOULD NOT increase while the sender is application-limited. Hermod adds every acknowledged
-   byte regardless, so the window reached ~4.7 MB on a path that needs tens of KB, and under full
-   load the server's RTT rose to 110 ms on loopback.
+1. **Slow start does not end on loopback** — under full load the window is used, so §7.8 lets it
+   grow, and with no loss nothing stops slow start. At 32 in flight the server's RTT sits near
+   60 ms on a 0.5 ms path, all of it queue. HyStart++ (RFC 9406) leaves slow start when the RTT
+   rises. RFC 9002 leaves the exit to the implementation, so this is latency, not conformance.
 2. **The gap to Kestrel** — four to five times the throughput on the same path, same client. No
    single defect is known; candidates are the per-packet stream selection and the demo host's
    one-datagram-at-a-time send loop.
