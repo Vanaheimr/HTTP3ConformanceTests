@@ -172,8 +172,8 @@ Throughput did not move, and neither did the queue under full load. At 32 in fli
 still sits near 60 ms.
 
 Ending slow start on rising delay (HyStart++, RFC 9406) looked like the lever for that, and was
-tried in [Hermod#171](https://github.com/Vanaheimr/Hermod/pull/171). It is not merged. At 32 in
-flight, with the demo host built both ways and runs interleaved:
+tried in [Hermod#171](https://github.com/Vanaheimr/Hermod/pull/171). At first it cost loopback a
+quarter. At 32 in flight, with the demo host built both ways and runs interleaved:
 
 | | throughput | server sRTT p50 | window p50 | sender at its window |
 |---|---|---|---|---|
@@ -183,10 +183,31 @@ flight, with the demo host built both ways and runs interleaved:
 The machine was busy that day, so the absolute numbers are high. The comparison holds.
 
 On a simulated bottleneck with a clean RTT, HyStart++ halves the queue at unchanged throughput.
-Loopback is different: most of the RTT under load is the two endpoints' CPU, not a queue the
-window builds. Rising delay then says nothing about the window, and the window HyStart++ leaves
-is too small for the RTT it sits behind. The gap to Kestrel is the same CPU from the other side,
-which makes it the lever for both.
+Loopback was different: most of the RTT under load was the two endpoints' CPU, not a queue the
+window builds. Rising delay then said nothing about the window, and the window HyStart++ left
+was too small for the RTT it sat behind. The gap to Kestrel was the same CPU from the other side,
+which made it the lever for both, and the profile below took a third of it off.
+
+Measured again after that, the trade had turned, and #171 is merged (Hermod 4ac13e3b). Same
+setup, four runs each:
+
+| | throughput | server sRTT p50 | sRTT p90 | window p50 |
+|---|---|---|---|---|
+| plain slow start | ~18 MiB/s | ~70 ms | ~195 ms | ~5.7 MB |
+| HyStart++ | ~26 MiB/s | ~47 ms | ~90 ms | ~1.4 MB |
+
+Over 1, 4, 16 and 32 in flight it is level with one request and ahead from four on: 27 against
+21, 36 against 25, and 31 against 27 MiB/s, medians of five runs. This probe measures without
+a warm-up on a shared machine, so its figures sit below h3bench's.
+
+On fresh connections that upload first, it reads the busy client's acknowledgment delay as
+rising delay, because RFC 9406 uses the raw RTT sample. 122 of 300 entered conservative slow
+start, almost all while the sender was application-limited. Every one of them resumed slow start
+at the next fast sample.
+
+Measuring it also turned up an older stall: about 1 in 1 000 fresh connections gets no answer to
+its first 300 KB upload within 5 s, with HyStart++ and without (1/1000 each). The sixteen fresh
+uploads in `h3semantics` meet it in about one run in 60. It is not investigated yet; see PLAN.md.
 
 **Profiling the demo host: where the server's CPU went.** 🔶 A third less.
 
@@ -265,7 +286,7 @@ dotnet run --project samples/H3Server -- 4433
 dotnet run --project tests/h3bench --configuration Release
 ```
 
-Everything else in this repository has a number behind it — 750 in-process tests, 42/42 harness checks,
+Everything else in this repository has a number behind it — 756 in-process tests, 42/42 harness checks,
 8 foreign stacks, Chrome and Edge 8/8. Performance had none, which made "readable rather than fast"
 an assumption rather than a finding. Loopback measures our packet handling, framing and crypto, not
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is
@@ -274,7 +295,8 @@ meaningful, comparing it to a datacentre benchmark is not.
 Baseline on a 16-core Windows 11 machine, .NET 10.0.403, measured 2026-10-29 at Hermod pin
 fc17a49f, which adds the profiling fixes (Hermod#174–#177) and the demo host's batched sends.
 Median of five runs. Two runs were disturbed in one phase each and are kept in: one in the
-download, one in the latency phase (p50 33 ms).
+download, one in the latency phase (p50 33 ms). HyStart++ (Hermod#171) came after this baseline;
+its effect is the A/B above.
 
 | Measurement | Result | earlier on 2026-10-29, pin cc9bdd2a | 2026-10-04, pin 22768a4a |
 |---|---|---|---|

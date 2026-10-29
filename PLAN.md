@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **750 tests green** (410 QUIC + 340 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **756 tests green** (416 QUIC + 340 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1235,15 +1235,6 @@ and a busy one never did. Now they run every 5 ms, and the server probes after 6
 `h3semantics` cuts a path mid-response through a relay to check both cases (26 → 29 checks); see
 tests/README.md.
 
-**HyStart++ was tried and is not merged** ([Hermod#171](https://github.com/Vanaheimr/Hermod/pull/171),
-draft). On a simulated bottleneck it halves the queue at unchanged throughput. On loopback it halves
-the server's RTT at 32 in flight, but costs ~25 % throughput at 16–32 in flight: the sender sat
-at its window 53–74 % of the time, against 16–17 % without. Most of the RTT under load there is
-the endpoints' CPU, not a queue the window builds. HyStart++ reads that rise as congestion, and
-the window it leaves is too small for the RTT it sits behind. CUBIC would not help in this
-regime: after a loss-free exit it grows like Reno for the seconds these connections live
-(RFC 9438 §4.10). The lever is the CPU, which is item 1 now.
-
 **A third off the server's CPU per byte** (Hermod#174–#176): a profile of the demo host under load
 put 34 % of its thread in `SendTo`, ~10 % in building ACK frames from every packet number held,
 and ~6 % in importing the header-protection key per packet. Fixed respectively by UDP segmentation
@@ -1256,6 +1247,16 @@ batch into an oversized datagram.
 send buffer, 512 KB for a 300 KB response, for the life of the connection. The demo host grew from
 11 MB to 323 MB over 400 responses on one connection.
 
+**The initial slow start ends on rising delay** (HyStart++, RFC 9406,
+[Hermod#171](https://github.com/Vanaheimr/Hermod/pull/171)). On a simulated bottleneck it halves
+the queue at unchanged throughput. On loopback it first cost ~25 % at 16–32 in flight, so it was
+held back. Most of the RTT under load there was the endpoints' CPU, not a queue, and the window
+it left was too small for the RTT it sat behind. CUBIC would not have helped: after a loss-free
+exit it grows like Reno for the seconds these connections live (RFC 9438 §4.10). After #174–#176
+the trade turned. At 32 in flight it now moves ~26 MiB/s against ~18 without, at a server sRTT
+p90 of ~90 ms against ~195; with one request in flight the two are level. Merged at Hermod
+4ac13e3b (410 → 416 QUIC tests).
+
 **Open, roughly by value:**
 
 1. **CPU per packet: the gap to Kestrel, and the RTT under load** — after #174–#176 Kestrel still
@@ -1265,15 +1266,20 @@ send buffer, 512 KB for a 300 KB response, for the life of the connection. The d
    per packet and a copy per STREAM frame kept for retransmission. Pooling them reaches into the
    send path and the hosts' API. Next, the connection keeps every stream it ever had, and each
    send pass walks all of them.
-2. **Hermod's HTTP/3 client keeps every response it received** — ~1.1 MB per 300 KB response on one
+2. **A rare stall on a fresh connection's first upload** — about 1 in 1 000 fresh connections gets
+   no answer to its first 300 KB POST within 5 s. Measured while testing HyStart++, 1/1000 with it
+   and 1/1000 without, so it is older than #171. The gate's sixteen fresh uploads meet it in about
+   one run in 60. Not investigated yet. At that rate a reproducer needs thousands of connections
+   and a qlog of the one that stalls.
+3. **Hermod's HTTP/3 client keeps every response it received** — ~1.1 MB per 300 KB response on one
    live connection, measured in-process: the receive side of what #177 fixed for the server.
-3. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
+4. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
    code, not measured. It runs timers only when its 20 ms tick passes without a datagram, and
    otherwise touches only connections that just received one. So a connection whose path went
    dark gets no probe while others keep the server busy. This is the demo host's former defect
    with a shorter tick. No harness runs against `Http3Server`, so the guard would belong in
    HermodTests.
-4. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+5. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References
