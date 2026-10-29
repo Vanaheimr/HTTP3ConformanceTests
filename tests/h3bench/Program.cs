@@ -41,7 +41,8 @@ using System.Security.Cryptography;
 //     trip now measures 52–60 ms with no deaths. The full story is in tests/README.md.
 //   * Throughput fell as concurrency rose: ~35 MiB/s with one request in flight, ~10 MiB/s with
 //     32. Every ACK cost the server work in proportion to all packets in flight; fixed in
-//     Hermod#165, now ~45 -> ~28 MiB/s. The rest is a gap to Kestrel, not a known defect.
+//     Hermod#165, for ~45 -> ~28 MiB/s. A profile then took a third off the server's CPU per
+//     byte (Hermod#174-#176): ~63 -> ~54 MiB/s. The rest is a gap to Kestrel, not a known defect.
 //
 // Neither was a pass/fail matter, which is exactly why they had gone unnoticed: nothing was
 // measuring. The baseline in tests/README.md is what any future change is judged against.

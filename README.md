@@ -20,19 +20,19 @@ Everything below is repeatable from a clean checkout with the command next to it
 | `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
 | `pwsh tools/browser-interop.ps1 -Browser chrome` | **Chrome 150 / Edge 150** headless, incl. WebTransport and the post-quantum hybrid | **8/8** checks |
 | `curl --http3-only -k https://127.0.0.1:4433/` | **ngtcp2/LibreSSL** and **OpenSSL-QUIC** against our server — GET, POST, 300 KB, 103 + trailers | see [INTEROP.md](INTEROP.md) |
-| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **337 tests** (401 more for QUIC) |
+| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **340 tests** (410 more for QUIC) |
 | `dotnet run --project tests/h3bench` | throughput, latency percentiles, concurrency scaling | numbers, no verdict |
 
 On the other side of those rows sits code nobody here wrote: eight public QUIC stacks, two
 independent `curl` builds, Chromium's QUICHE in two browsers, and msquic driving our own server.
-That is the point of the table. The 337 in-process tests are the more thorough half of the coverage
+That is the point of the table. The 340 in-process tests are the more thorough half of the coverage
 and they gate every push — but they cannot disagree with us, because both ends of every one of them
 are our own code, sharing one reading of the RFCs and one set of bugs.
 
 ### What the drivers have found
 
-Four findings, all from the out-of-process harnesses, and none reachable from in-process tests —
-those work in single digits of streams, and both ends of every one of them are ours:
+Five findings, all from driving the demo host from outside. None showed in the in-process tests,
+which work in single digits of streams and have our own code at both ends:
 
 - **A connection stalled after exactly 100 requests.** ✅ **fixed** — `MAX_STREAMS` was parsed and
   logged but never sent, so `initial_max_streams_bidi` was the lifetime budget of every connection
@@ -56,9 +56,17 @@ those work in single digits of streams, and both ends of every one of them are o
   from ~35 MiB/s with one request in flight to ~10 MiB/s with 32. Every ACK cost the server work
   in proportion to all packets in flight, not to what the ACK acknowledged, so with thousands in
   flight the single-threaded server fell behind its own ACKs, and the client's flow-control credit
-  waited in the same queue. Fixed in [Hermod#165](https://github.com/Vanaheimr/Hermod/pull/165):
-  now ~45 → ~28 MiB/s. What remains is a gap rather than a defect: Kestrel, serving the same body
-  to the same msquic client, reaches 140–190 MiB/s at 32 in flight.
+  waited in the same queue. Fixed in [Hermod#165](https://github.com/Vanaheimr/Hermod/pull/165),
+  for ~45 → ~28 MiB/s. Profiling the server then took a third off its CPU per byte: batched sends
+  on Windows, ACK frames that cost their ranges rather than every packet held, and no key import
+  per packet ([Hermod#174](https://github.com/Vanaheimr/Hermod/pull/174)–[#176](https://github.com/Vanaheimr/Hermod/pull/176)).
+  The ladder now runs ~63 → ~54 MiB/s. What remains is a gap rather than a defect: Kestrel, serving
+  the same body to the same msquic client, reaches 140–190 MiB/s at 32 in flight.
+- **Memory grew with every response on a connection.** ✅ **fixed on the server** — 400 `GET /big`
+  on one connection took the demo host from 11 MB to 323 MB, and nothing came back. Every stream
+  kept its 512 KB send buffer, and the connection keeps its streams;
+  [Hermod#177](https://github.com/Vanaheimr/Hermod/pull/177) lets the buffer go once the FIN is
+  out. Hermod's HTTP/3 client still does the same on the receive side.
 - **The demo host's timers ran only on silence.** ✅ **fixed** — it ran its connections' timers
   (probe timeout, loss detection, idle timeout) only after a full second without a datagram from
   any client. When the path to one client went dark mid-response, a quiet server sent its first
@@ -629,7 +637,7 @@ libs/Hermod/       The whole stack, as a submodule:
                      Hermod/HTTP3/      HTTP/3 + QPack/ + WebSocket/ (RFC 6455) + WebTransport/
                                         (draft-13) + the async facades Http3Client/Http3Server —
                                         see its README
-                     HermodTests/QUIC/  and HermodTests/HTTP3/ (337 tests, incl. RFC vectors,
+                     HermodTests/QUIC/  and HermodTests/HTTP3/ (340 tests, incl. RFC vectors,
                                         "evil" raw-QUIC peers and a seeded lossy link)
                    Namespaces are unchanged: org.GraphDefined.Vanaheimr.Hermod.Quic.* and
                    org.GraphDefined.Vanaheimr.Hermod.HTTP3.*

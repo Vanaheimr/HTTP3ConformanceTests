@@ -82,7 +82,7 @@ libs/Hermod/             # submodule
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
   HermodTests/QUIC/      # mirrors Hermod/QUIC/
-  HermodTests/HTTP3/     # 337 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
+  HermodTests/HTTP3/     # 340 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
                          # WebTransport/ Robustness/ — RFC vectors, "evil" raw-QUIC peers,
                          # a seeded lossy link (drop/reorder/duplicate)
   HermodTests/Helpers/   # Expect/Hex/FakeTimeProvider/LossyNetwork, shared by both areas
@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **738 tests green** (401 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **750 tests green** (410 QUIC + 340 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1244,20 +1244,36 @@ the window it leaves is too small for the RTT it sits behind. CUBIC would not he
 regime: after a loss-free exit it grows like Reno for the seconds these connections live
 (RFC 9438 §4.10). The lever is the CPU, which is item 1 now.
 
+**A third off the server's CPU per byte** (Hermod#174–#176): a profile of the demo host under load
+put 34 % of its thread in `SendTo`, ~10 % in building ACK frames from every packet number held,
+and ~6 % in importing the header-protection key per packet. Fixed respectively by UDP segmentation
+on Windows too (the demo host sends through `UdpBatchSender` now), by ranges, and by keeping the
+key handle. At 32 in flight CPU per MiB fell 45.9 → 29.6 ms and throughput rose 28 → 42 MiB/s.
+#176 also locks the socket against a race in the existing Linux path, which merged one worker's
+batch into an oversized datagram.
+
+**Memory no longer grows with every response on a connection** (Hermod#177): every stream kept its
+send buffer, 512 KB for a 300 KB response, for the life of the connection. The demo host grew from
+11 MB to 323 MB over 400 responses on one connection.
+
 **Open, roughly by value:**
 
-1. **CPU per packet: the gap to Kestrel, and the RTT under load** — Kestrel moves four to five
-   times the throughput on the same path, to the same client. On loopback the same CPU cost is
-   most of the server's ~60 ms RTT at 32 in flight. That is why delay-based slow start costs
-   throughput here (see HyStart++ above). No single defect is known. Candidates are the
-   per-packet stream selection and the demo host's one-datagram-at-a-time send loop.
-2. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
+1. **CPU per packet: the gap to Kestrel, and the RTT under load** — after #174–#176 Kestrel still
+   moves about three times the throughput on the same path, to the same client, and on loopback
+   the same CPU cost is most of the server's RTT under load (see HyStart++ above). The largest
+   share left is the GC, 22 % of the thread: arrays that live exactly one round trip, a datagram
+   per packet and a copy per STREAM frame kept for retransmission. Pooling them reaches into the
+   send path and the hosts' API. Next, the connection keeps every stream it ever had, and each
+   send pass walks all of them.
+2. **Hermod's HTTP/3 client keeps every response it received** — ~1.1 MB per 300 KB response on one
+   live connection, measured in-process: the receive side of what #177 fixed for the server.
+3. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
    code, not measured. It runs timers only when its 20 ms tick passes without a datagram, and
    otherwise touches only connections that just received one. So a connection whose path went
    dark gets no probe while others keep the server busy. This is the demo host's former defect
    with a shorter tick. No harness runs against `Http3Server`, so the guard would belong in
    HermodTests.
-3. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+4. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References

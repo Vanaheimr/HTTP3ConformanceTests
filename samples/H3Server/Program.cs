@@ -162,6 +162,9 @@ if (requireRetry)
 Console.WriteLine("Waiting for HTTP/3 clients … (Ctrl+C to stop)\n");
 
 using var socket = Bind(port);
+// Equal-sized datagrams of a pass leave in one send: UDP segmentation, USO on Windows and GSO on
+// Linux. Sending them one by one cost a third of this thread at 32 responses in flight.
+var sender = new UdpBatchSender();
 Console.WriteLine($"Listening on {socket.LocalEndPoint} "
                   + (socket.AddressFamily == AddressFamily.InterNetworkV6 ? "(dual-stack)" : "(IPv4 only)"));
 
@@ -368,8 +371,7 @@ while (true)
         }
     }
 
-    foreach (byte[] dg in conn.Connection.GetDatagramsToSend())
-        socket.SendTo(dg, conn.Endpoint);
+    sender.Send(socket, conn.Connection.GetDatagramsToSend(), conn.Endpoint);
 
     if (conn.Connection.PathValidated && !conn.PathAnnounced)
     {
@@ -394,8 +396,7 @@ void RunTimers()
     {
         sc.Connection.CheckTimeouts();
         if (!sc.Connection.IsIdleTimedOut)
-            foreach (byte[] dg in sc.Connection.GetDatagramsToSend())
-                socket.SendTo(dg, sc.Endpoint);
+            sender.Send(socket, sc.Connection.GetDatagramsToSend(), sc.Endpoint);
     }
     connections.RemoveAll(sc =>
     {

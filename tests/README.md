@@ -29,12 +29,12 @@ see [What this found](#what-this-found).
 
 The in-process unit and integration tests — RFC 9000/9001/9002/9114/9204 vectors, the TLS 1.3 key
 schedule, QPACK, the frame state machine, "evil" raw-QUIC peers, a seeded lossy link — live with the
-stack in Hermod (`HermodTests/HTTP3/`, 337 tests) and are what `ci.yml` gates on. They are far more
+stack in Hermod (`HermodTests/HTTP3/`, 340 tests) and are what `ci.yml` gates on. They are far more
 thorough than anything here. What they cannot be is *independent*: both ends of every one of them
 is our own code, sharing one reading of the RFCs and one set of bugs.
 
 That is the gap this directory fills, and why the findings below came from it rather than from the
-337.
+340.
 
 ## The harnesses
 
@@ -188,6 +188,45 @@ window builds. Rising delay then says nothing about the window, and the window H
 is too small for the RTT it sits behind. The gap to Kestrel is the same CPU from the other side,
 which makes it the lever for both.
 
+**Profiling the demo host: where the server's CPU went.** 🔶 A third less.
+
+Under load the demo host's one thread was CPU-bound, at 50–75 ms of CPU per MiB served with 32
+responses in flight. The sampled profile (`dotnet-trace`, the load running for the whole trace):
+
+| share of the thread | what | fixed in |
+|---|---|---|
+| 34 % | `SendTo`, one system call per datagram | [Hermod#176](https://github.com/Vanaheimr/Hermod/pull/176): UDP segmentation on Windows too (USO); the demo host sends through it now |
+| 22 % | waiting for the GC | open |
+| 19 % | building and encrypting packets | |
+| ~10 % | building ACK frames by walking every packet number held | [Hermod#175](https://github.com/Vanaheimr/Hermod/pull/175): ranges; an ACK costs what it reports |
+| ~6 % | importing the header-protection key, once per packet each way | [Hermod#174](https://github.com/Vanaheimr/Hermod/pull/174) |
+
+Each fix was measured on its own, as server CPU per MiB in interleaved A/B runs, which suffer
+less from a shared machine than throughput does. Separately they saved ~21 %, ~14 % and ~11 %.
+Together, at 32 in flight, CPU per MiB fell from 45.9 to 29.6 ms (−36 %) and throughput rose
+from 28 to 42 MiB/s (+48 %), medians of four runs each.
+
+The USO change turned up a race in the Linux path that was already there. The segment size is a
+socket option, and `Http3Server`'s parallel workers share one socket. One worker could clear it
+under another's batch, which then left as one oversized datagram. Hermod#176 locks the socket
+for a pass. Its test fails without the lock 9 times in 10 on Windows and 6 times in 6 on Linux.
+
+The GC share was not addressed. An allocation trace puts it on arrays that live exactly one
+round trip: a datagram per packet, and a copy per STREAM frame kept for retransmission. They
+outlive the youngest generation, which is the worst case for a generational collector. Fixing
+that means pooling them across the send path and the hosts' API.
+
+**Measured from outside: memory grew with every response on a connection.** ✅ Fixed on the
+server.
+
+400 `GET /big` on one connection took the demo host from 11 MB to 323 MB, ~80 MB per hundred,
+and nothing came back after the client had gone. A stream's send buffer grew to 512 KB for a
+300 KB response and kept its array, and the connection keeps its streams.
+[Hermod#177](https://github.com/Vanaheimr/Hermod/pull/177) releases the array once the FIN is
+out, and takes it from a pool. Its test holds forty such responses on one live server connection:
+21 581 KiB retained before, ~400 KiB after. Hermod's HTTP/3 *client* holds ~1.1 MB per 300 KB
+response the same way. That is the same pattern on the receive side, and still open.
+
 **`h3semantics`: the demo host's timers ran only on silence.** ✅ Fixed.
 
 The demo host ran its connections' timers only when `ReceiveFrom` timed out after a full second
@@ -226,27 +265,28 @@ dotnet run --project samples/H3Server -- 4433
 dotnet run --project tests/h3bench --configuration Release
 ```
 
-Everything else in this repository has a number behind it — 738 in-process tests, 42/42 harness checks,
+Everything else in this repository has a number behind it — 750 in-process tests, 42/42 harness checks,
 8 foreign stacks, Chrome and Edge 8/8. Performance had none, which made "readable rather than fast"
 an assumption rather than a finding. Loopback measures our packet handling, framing and crypto, not
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is
 meaningful, comparing it to a datacentre benchmark is not.
 
 Baseline on a 16-core Windows 11 machine, .NET 10.0.403, measured 2026-10-29 at Hermod pin
-cc9bdd2a, which carries the reassembly fix (Hermod#159) and the ACK-cost fix (Hermod#165). Median
-of five runs; a sixth, taken while the machine was visibly busy (p50 latency 2 ms), is left out:
+fc17a49f, which adds the profiling fixes (Hermod#174–#177) and the demo host's batched sends.
+Median of five runs. Two runs were disturbed in one phase each and are kept in: one in the
+download, one in the latency phase (p50 33 ms).
 
-| Measurement | Result | 2026-10-04, pin 22768a4a |
-|---|---|---|
-| `GET /big` (300 000 B), sequential | ~37 MiB/s, ~7.7 ms/request | ~30 MiB/s, ~9.5 ms |
-| `POST /echo` (300 000 B, echoed) | ~9 MiB/s, 53–68 ms/round trip, one run 102 ms | 47–66 ms |
-| `GET /` latency, 90 requests | p50 0.31 ms · p90 0.38 ms · p99 7.8 ms | p50 0.35 · p90 0.43 · p99 7.7 |
-| `GET /` sustained | ~2 475 requests/s | ~2 250 |
-| `GET /big`, 1 → 32 in flight | ~45 → ~28 MiB/s | ~35 → ~10 |
+| Measurement | Result | earlier on 2026-10-29, pin cc9bdd2a | 2026-10-04, pin 22768a4a |
+|---|---|---|---|
+| `GET /big` (300 000 B), sequential | ~64 MiB/s, ~4.5 ms/request | ~37 MiB/s, ~7.7 ms | ~30 MiB/s, ~9.5 ms |
+| `POST /echo` (300 000 B, echoed) | 12–40 ms/round trip, median ~22 ms | 53–68 ms, one run 102 ms | 47–66 ms |
+| `GET /` latency, 90 requests | p50 0.37 ms · p90 0.47 ms · p99 8.5 ms | p50 0.31 · p90 0.38 · p99 7.8 | p50 0.35 · p90 0.43 · p99 7.7 |
+| `GET /` sustained | ~2 140 requests/s | ~2 475 | ~2 250 |
+| `GET /big`, 1 → 32 in flight | ~63 → ~54 MiB/s | ~45 → ~28 | ~35 → ~10 |
 
-The last row is the finding above, now mostly fixed. The older column's upload range was luck as
-much as measurement: those runs did not happen to draw a connection that hit Hermod#129.
-
-Not re-measured at pin 14c9701c (Hermod#166). The machine was busy with other work that day, and
-both pins measured about half these figures. An interleaved A/B of the two pins, four ladders
-each, showed no difference between them.
+Bulk transfer gained the most, which is what the profile was about. The small-request latency
+came out slightly worse than this morning. It is one request and one datagram each way, which
+neither batching nor ACK ranges touch, and the quietest runs of the same code half an hour earlier
+measured p50 0.32 ms and ~2 530 requests/s. So it reads as the machine, not the change, but it is
+recorded as measured. The oldest column's upload range was luck as much as measurement: those
+runs did not happen to draw a connection that hit Hermod#129.
