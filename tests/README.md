@@ -24,7 +24,7 @@ not, so `h3semantics` reported SKIP there, and every msquic check, the upload gu
 included, ran on Windows alone. A SKIP counts as a pass, so that leg stayed green the whole time.
 CI therefore runs with `--require-all`: a container in which libmsquic stops loading now fails.
 
-Current status: **39/39 checks pass**, and `ci.yml` runs this on every push. It started at 37/38:
+Current status: **42/42 checks pass**, and `ci.yml` runs this on every push. It started at 37/38:
 see [What this found](#what-this-found).
 
 The in-process unit and integration tests — RFC 9000/9001/9002/9114/9204 vectors, the TLS 1.3 key
@@ -40,7 +40,7 @@ That is the gap this directory fills, and why the findings below came from it ra
 
 | Harness | Kind | Client side | Covers |
 |---|---|---|---|
-| `h3semantics` | demo-driven, gated | .NET `HttpClient` over **msquic** | RFC 9114 semantics: status/headers/trailers, 300 KB download byte-exact, request bodies from 16 B to 300 KB, `MAX_FIELD_SECTION_SIZE`, connection reuse, 16 concurrent streams, long-lived connections, large uploads on fresh connections (26 checks) |
+| `h3semantics` | demo-driven, gated | .NET `HttpClient` over **msquic** | RFC 9114 semantics: status/headers/trailers, 300 KB download byte-exact, request bodies from 16 B to 300 KB, `MAX_FIELD_SECTION_SIZE`, connection reuse, 16 concurrent streams, long-lived connections, large uploads on fresh connections, a path cut mid-response so that only the server's own timers can act (29 checks) |
 | `h3attack` | demo-driven, gated | hand-built UDP datagrams | noise, undersized Initials (§14.1), version negotiation + GREASE (§6.1/§6.3), stateless reset sizing (§10.3.3), the 3× amplification limit (§8.1), a 128-source flood, a cancellation storm (13 checks) |
 | `h3bench` | benchmark, not gated | .NET `HttpClient` over **msquic** | throughput up and down, latency percentiles, concurrency scaling — no verdict, just numbers |
 | `h3interop` | live network, gated nightly at 6/8 | our own client, outbound | the client interop matrix against 8 public HTTP/3 servers — see [INTEROP.md](../INTEROP.md) |
@@ -172,6 +172,35 @@ Throughput did not move, and neither did the queue under full load. At 32 in fli
 still sits near 60 ms. Ending slow start on rising delay (HyStart++, RFC 9406) is the lever for
 that. The gap to Kestrel remains.
 
+**`h3semantics`: the demo host's timers ran only on silence.** ✅ Fixed.
+
+The demo host ran its connections' timers only when `ReceiveFrom` timed out after a full second
+without a datagram, from any client. These were the probe timeout, loss detection, the idle
+timeout, the end of closing/draining, and handler tasks finishing in the background. Every
+harness kept the server talking, so nothing noticed. The new check takes the client away instead.
+A UDP relay forwards a `GET /big` until 40 datagrams of the response are through, then drops
+everything in both directions for 1.5 s. Whatever the server sends in that time, it sends on its
+own timer. The first 50 ms do not count, because the server may still be answering what reached
+it just before the cut.
+
+Against the old loop, a quiet server's first datagram came after 1 083 ms. While a second client
+kept the server busy, it sent nothing in the whole 1.5 s, because a talking neighbour means the
+receive never times out. That second case is the one that pins the fix: a shorter receive
+timeout alone would pass the first check and still fail the second.
+
+The timers now run every 5 ms: through the receive timeout on a quiet socket, and through a clock
+comparison after each datagram under load. The server now probes after 60–140 ms in both cases.
+Polling the socket before each receive would have cost a system call per datagram. Measured on
+the same 64 responses, that is ~6 % more server CPU, so the loop does not poll. An interleaved
+A/B of the concurrency ladder showed no throughput difference between the old loop and the new
+one. The idle server costs 0.16 % of one core.
+
+Hermod's own `Http3Server` has the milder form of the same pattern, found by reading the code,
+not by measurement. It runs its timers only when no datagram arrives within its 20 ms tick, and
+otherwise touches only connections that just received something. So a silent connection's
+probe timeout waits for as long as another connection keeps it busy. No harness here runs
+against it. It is listed in PLAN.md.
+
 ## Benchmarks (h3bench)
 
 ```bash
@@ -181,7 +210,7 @@ dotnet run --project samples/H3Server -- 4433
 dotnet run --project tests/h3bench --configuration Release
 ```
 
-Everything else in this repository has a number behind it — 738 in-process tests, 39/39 harness checks,
+Everything else in this repository has a number behind it — 738 in-process tests, 42/42 harness checks,
 8 foreign stacks, Chrome and Edge 8/8. Performance had none, which made "readable rather than fast"
 an assumption rather than a finding. Loopback measures our packet handling, framing and crypto, not
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is

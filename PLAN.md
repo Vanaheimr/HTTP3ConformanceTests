@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **738 tests green** (401 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **39/39** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **738 tests green** (401 QUIC + 337 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1229,16 +1229,28 @@ because pacing alone must not count. With one request in flight the window avera
 against ~4.8 MB. Throughput is unchanged; the guard is HermodTests' `ApplicationLimitedTests`,
 since a client cannot see the server's window.
 
+**The demo host's timers run on a schedule:** they used to run only after a second without any
+datagram, from any client. A quiet server probed a path gone dark after ~1.1 s instead of one PTO,
+and a busy one never did. Now they run every 5 ms, and the server probes after 60–140 ms.
+`h3semantics` cuts a path mid-response through a relay to check both cases (26 → 29 checks); see
+tests/README.md.
+
 **Open, roughly by value:**
 
 1. **Slow start does not end on loopback** — under full load the window is used, so §7.8 lets it
    grow, and with no loss nothing stops slow start. At 32 in flight the server's RTT sits near
    60 ms on a 0.5 ms path, all of it queue. HyStart++ (RFC 9406) leaves slow start when the RTT
    rises. RFC 9002 leaves the exit to the implementation, so this is latency, not conformance.
-2. **The gap to Kestrel** — four to five times the throughput on the same path, same client. No
+2. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
+   code, not measured. It runs timers only when its 20 ms tick passes without a datagram, and
+   otherwise touches only connections that just received one. So a connection whose path went
+   dark gets no probe while others keep the server busy. This is the demo host's former defect
+   with a shorter tick. No harness runs against `Http3Server`, so the guard would belong in
+   HermodTests.
+3. **The gap to Kestrel** — four to five times the throughput on the same path, same client. No
    single defect is known; candidates are the per-packet stream selection and the demo host's
    one-datagram-at-a-time send loop.
-3. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+4. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References

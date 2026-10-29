@@ -17,7 +17,9 @@
 
 #region Usings
 
+using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -293,5 +295,193 @@ bool[] concurrent = await Task.WhenAll(inFlight);
 Check("16 concurrent requests all 200 with a body", concurrent.All(ok => ok),
       $"{concurrent.Count(ok => ok)}/16");
 
+Console.WriteLine("\n=== The server's own timers — the path goes dark mid-response (RFC 9002 §6.2) ===");
+// Every check above has the client talking, and a server that acts only when a datagram arrives
+// passes all of them. This one takes the client away. A UDP relay between msquic and the server
+// forwards a GET /big until 40 datagrams of the response are through, then drops everything in
+// both directions for 1.5 s. Nothing reaches the server in that time, so whatever it sends then, it
+// sends on a timer of its own: the probe timeout (PTO) fires because acknowledgments stopped, and
+// the server probes. On loopback the PTO is a few tens of milliseconds.
+//
+// The demo host used to look at its timers only after a full second without any datagram, from
+// any client. Its first probe came after a second on a quiet server, and never while another
+// connection kept it busy. The second case is the one that pins the fix: a server that merely waits
+// less for silence still never hears silence while a neighbour talks.
+//
+// The first 50 ms after the cut do not count: the server may still be answering what reached it
+// just before, and that needs no timer.
+const int darkAfterDatagrams = 40;
+var darkFor     = TimeSpan.FromMilliseconds(1500);
+var darkGrace   = TimeSpan.FromMilliseconds(50);
+var probeWithin = TimeSpan.FromMilliseconds(400);
+
+HttpClient FreshClient(TimeSpan timeout) =>
+    new(new SocketsHttpHandler {
+            SslOptions = new System.Net.Security.SslClientAuthenticationOptions {
+                RemoteCertificateValidationCallback = (_, _, _, _) => true
+            }
+        }) { Timeout = timeout };
+
+async Task<byte[]> GetBody(HttpClient via, string url)
+{
+    var request = new HttpRequestMessage(HttpMethod.Get, url) {
+        Version       = HttpVersion.Version30,
+        VersionPolicy = HttpVersionPolicy.RequestVersionExact
+    };
+    HttpResponseMessage response = await via.SendAsync(request);
+    return await response.Content.ReadAsByteArrayAsync();
+}
+
+async Task<(TimeSpan? OwnSend, int SentWhileDark, string? Failure)> DarkPath(bool busyNeighbour)
+{
+    IPAddress serverAddress = (await Dns.GetHostAddressesAsync(host))
+                              .OrderBy(a => a.AddressFamily == AddressFamily.InterNetwork ? 0 : 1).First();
+    using var relay = new DarkRelay(new IPEndPoint(serverAddress, port), darkAfterDatagrams, darkFor, darkGrace);
+    using var viaRelay = FreshClient(TimeSpan.FromSeconds(15));
+    Task<byte[]> response = GetBody(viaRelay, $"https://127.0.0.1:{relay.Port}/big");
+
+    if (await Task.WhenAny(relay.WentDark, response, Task.Delay(10_000)) != relay.WentDark)
+        return (null, 0, response.IsCompletedSuccessfully
+                             ? $"the response was through before {darkAfterDatagrams} datagrams, nothing to cut"
+                             : $"the path never went dark: {response.Exception?.InnerException?.Message ?? "no response"}");
+
+    // The neighbour talks to the server directly, back to back, for as long as the path is dark.
+    Task neighbour = Task.CompletedTask;
+    if (busyNeighbour)
+        neighbour = Task.Run(async () => {
+            using var busy = FreshClient(TimeSpan.FromSeconds(10));
+            var talking = Stopwatch.StartNew();
+            while (talking.Elapsed < darkFor)
+                try { await GetBody(busy, root + "/big"); } catch { return; }
+        });
+    await Task.Delay(darkFor);
+    await neighbour;
+    (TimeSpan? ownSend, int sentWhileDark) = (relay.FirstOwnSend, relay.SentWhileDark);
+
+    try
+    {
+        byte[] body = await response;
+        bool exact = body.Length == 300_000;
+        for (int i = 0; exact && i < body.Length; i++)
+            exact = body[i] == (byte) (i * 13 + 5);
+        return (ownSend, sentWhileDark, exact ? null : $"{body.Length} bytes, not the 300 000-byte pattern");
+    }
+    catch (Exception e)
+    {
+        return (ownSend, sentWhileDark, $"no response once the path was back: {(e.InnerException ?? e).Message}");
+    }
+}
+
+string OwnSendDetail((TimeSpan? OwnSend, int SentWhileDark, string? Failure) run) =>
+    run.OwnSend is { } at
+        ? $"first datagram of its own after {at.TotalMilliseconds:F0} ms, {run.SentWhileDark} while dark"
+        : $"nothing of its own in {darkFor.TotalMilliseconds:F0} ms of darkness"
+          + (run.Failure is null ? "" : $" — {run.Failure}");
+
+var quietRun = await DarkPath(busyNeighbour: false);
+Check($"a quiet server probes within {probeWithin.TotalMilliseconds:F0} ms",
+      quietRun.OwnSend <= probeWithin, OwnSendDetail(quietRun));
+var busyRun = await DarkPath(busyNeighbour: true);
+Check($"a busy server probes within {probeWithin.TotalMilliseconds:F0} ms too",
+      busyRun.OwnSend <= probeWithin, OwnSendDetail(busyRun));
+Check("both responses complete byte-exact once the path is back",
+      quietRun.Failure is null && busyRun.Failure is null,
+      quietRun.Failure ?? busyRun.Failure ?? "2 x 300 000 bytes, pattern intact");
+
 Console.WriteLine($"\n=== {passed}/{passed + failed} checks passed ===");
 return failed == 0 ? 0 : 1;
+
+// A UDP relay that can cut the path. It forwards both ways until `darkAfter` datagrams from the
+// server are through, then drops everything in both directions for `darkFor`, noting what the
+// server sends meanwhile: from `grace` on, none of it can be an answer, only a timer firing.
+sealed class DarkRelay : IDisposable
+{
+    private readonly UdpClient               _front = new(new IPEndPoint(IPAddress.Loopback, 0)); // the client talks to this
+    private readonly UdpClient               _back;                                             // this talks to the server
+    private readonly CancellationTokenSource _stop  = new();
+    private readonly TaskCompletionSource    _wentDark = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly int                     _darkAfter;
+    private readonly long                    _darkTicks;
+    private readonly long                    _graceTicks;
+    private IPEndPoint?                      _client;
+    private int                              _forwarded;
+    private int                              _sentWhileDark;
+    private long                             _darkFrom;     // Stopwatch timestamp; 0 until the cut
+    private long                             _firstOwnSend; // Stopwatch timestamp; 0 until one arrives
+
+    public DarkRelay(IPEndPoint server, int darkAfter, TimeSpan darkFor, TimeSpan grace)
+    {
+        _back = new UdpClient(server.AddressFamily);
+        _back.Connect(server);
+        _darkAfter  = darkAfter;
+        _darkTicks  = (long) (darkFor.TotalSeconds * Stopwatch.Frequency);
+        _graceTicks = (long) (grace.TotalSeconds   * Stopwatch.Frequency);
+        _ = Task.Run(ClientToServer);
+        _ = Task.Run(ServerToClient);
+    }
+
+    public int  Port          => ((IPEndPoint) _front.Client.LocalEndPoint!).Port;
+    public Task WentDark      => _wentDark.Task;
+    public int  SentWhileDark => Volatile.Read(ref _sentWhileDark);
+
+    public TimeSpan? FirstOwnSend =>
+        Volatile.Read(ref _firstOwnSend) is var at and not 0 ? Stopwatch.GetElapsedTime(_darkFrom, at) : null;
+
+    private bool IsDark(long now)
+    {
+        long from = Volatile.Read(ref _darkFrom);
+        return from != 0 && now - from < _darkTicks;
+    }
+
+    private async Task ClientToServer()
+    {
+        while (!_stop.IsCancellationRequested)
+        {
+            try
+            {
+                UdpReceiveResult datagram = await _front.ReceiveAsync(_stop.Token);
+                _client = datagram.RemoteEndPoint;
+                if (!IsDark(Stopwatch.GetTimestamp()))
+                    await _back.SendAsync(datagram.Buffer, _stop.Token);
+            }
+            catch (SocketException) { } // Windows reports an earlier ICMP "port unreachable" here
+            catch (Exception)       { return; }
+        }
+    }
+
+    private async Task ServerToClient()
+    {
+        while (!_stop.IsCancellationRequested)
+        {
+            try
+            {
+                UdpReceiveResult datagram = await _back.ReceiveAsync(_stop.Token);
+                long now = Stopwatch.GetTimestamp();
+                if (IsDark(now))
+                {
+                    Interlocked.Increment(ref _sentWhileDark);
+                    if (now - _darkFrom >= _graceTicks)
+                        Interlocked.CompareExchange(ref _firstOwnSend, now, 0);
+                    continue;
+                }
+                if (_client is { } client)
+                    await _front.SendAsync(datagram.Buffer, client, _stop.Token);
+                if (++_forwarded == _darkAfter)
+                {
+                    Volatile.Write(ref _darkFrom, Stopwatch.GetTimestamp());
+                    _wentDark.TrySetResult();
+                }
+            }
+            catch (SocketException) { }
+            catch (Exception)       { return; }
+        }
+    }
+
+    public void Dispose()
+    {
+        _stop.Cancel();
+        _front.Dispose();
+        _back.Dispose();
+        _stop.Dispose();
+    }
+}

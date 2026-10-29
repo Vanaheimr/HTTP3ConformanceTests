@@ -14,8 +14,8 @@ Everything below is repeatable from a clean checkout with the command next to it
 
 | Driver | What it establishes | Result |
 |---|---|---|
-| `tests/run-tests.sh` | the gate: two harnesses against the live demo host over real UDP | **39/39 checks** |
-| ├ [`tests/h3semantics`](tests/h3semantics) | RFC 9114 semantics, driven by **msquic** through .NET's `HttpClient` — a foreign stack on the client side | 26/26 checks |
+| `tests/run-tests.sh` | the gate: two harnesses against the live demo host over real UDP | **42/42 checks** |
+| ├ [`tests/h3semantics`](tests/h3semantics) | RFC 9114 semantics, driven by **msquic** through .NET's `HttpClient` — a foreign stack on the client side | 29/29 checks |
 | └ [`tests/h3attack`](tests/h3attack) | hand-built hostile datagrams: noise, undersized Initials, version negotiation, stateless reset, amplification, a 128-source flood | 13/13 checks |
 | `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
 | `pwsh tools/browser-interop.ps1 -Browser chrome` | **Chrome 150 / Edge 150** headless, incl. WebTransport and the post-quantum hybrid | **8/8** checks |
@@ -31,7 +31,7 @@ are our own code, sharing one reading of the RFCs and one set of bugs.
 
 ### What the drivers have found
 
-Three findings, all from the out-of-process harnesses, and none reachable from in-process tests —
+Four findings, all from the out-of-process harnesses, and none reachable from in-process tests —
 those work in single digits of streams, and both ends of every one of them are ours:
 
 - **A connection stalled after exactly 100 requests.** ✅ **fixed** — `MAX_STREAMS` was parsed and
@@ -59,6 +59,12 @@ those work in single digits of streams, and both ends of every one of them are o
   waited in the same queue. Fixed in [Hermod#165](https://github.com/Vanaheimr/Hermod/pull/165):
   now ~45 → ~28 MiB/s. What remains is a gap rather than a defect: Kestrel, serving the same body
   to the same msquic client, reaches 140–190 MiB/s at 32 in flight.
+- **The demo host's timers ran only on silence.** ✅ **fixed** — it ran its connections' timers
+  (probe timeout, loss detection, idle timeout) only after a full second without a datagram from
+  any client. When the path to one client went dark mid-response, a quiet server sent its first
+  probe after ~1.1 s instead of one PTO. With a second client keeping it busy, it sent none at all.
+  The timers now run every 5 ms whether datagrams arrive or not, and the server probes after
+  60–140 ms. `h3semantics` cuts the path through a relay to check both cases.
 
 Details in [tests/README.md](tests/README.md). The interop evidence and how to repeat it is in
 [INTEROP.md](INTEROP.md); the implementation history — phases, milestones, crypto roadmap — is in
@@ -103,7 +109,7 @@ Hermod — this table is the map from RFC to evidence, not a build log; the chro
 | 9 | **Performance**: zero-alloc hot paths (`ByteQueue`, 300 KB download 51→7 MiB), UDP batching (GSO via `UdpBatchSender`), window auto-tuning (`ReceiveWindowTuner`, BDP) | ✅ done |
 | interop | **Client interop against 8 foreign QUIC stacks**: quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — each 2xx/3xx with full cert validation | ✅ done |
 | browser | **Browser interop (server side)**: Chrome 150 / Edge 150 headless, 8/8 checks incl. WebTransport and the PQ hybrid — `tools/browser-interop.ps1` | ✅ done |
-| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `tests/run-tests.sh` gives one verdict, and CI runs it | ✅ 39/39 |
+| harness | **Out-of-process harnesses** (`tests/`): `h3semantics` drives our server with **msquic** — the first foreign client to do so besides `curl` and the browsers — and `h3attack` with hand-built hostile datagrams; `tests/run-tests.sh` gives one verdict, and CI runs it | ✅ 42/42 |
 | bench | **`h3bench`**: throughput, latency percentiles and concurrency scaling against the demo host — the first reproducible performance numbers this repository has | ✅ done |
 
 ### Per-area detail
