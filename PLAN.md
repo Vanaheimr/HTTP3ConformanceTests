@@ -1231,7 +1231,7 @@ since a client cannot see the server's window.
 
 **The demo host's timers run on a schedule:** they used to run only after a second without any
 datagram, from any client. A quiet server probed a path gone dark after ~1.1 s instead of one PTO,
-and a busy one never did. Now they run every 5 ms, and the server probes after 60–140 ms.
+and a busy one never did. Now they run every 5 ms, and the server probes after 50–140 ms.
 `h3semantics` cuts a path mid-response through a relay to check both cases (26 → 29 checks); see
 tests/README.md.
 
@@ -1257,6 +1257,21 @@ the trade turned. At 32 in flight it now moves ~26 MiB/s against ~18 without, at
 p90 of ~90 ms against ~195; with one request in flight the two are level. Merged at Hermod
 4ac13e3b (410 → 416 QUIC tests).
 
+**The demo host lost datagrams to its own receive timeout:** about 1 in 1 000 fresh connections
+never answered its first 300 KB upload, and `h3semantics` went red about once in 60 runs. The
+qlogs showed the client's first Initials never arriving. On Windows, a blocking receive that
+times out can lose the datagram arriving at that moment, and the 5 ms timer interval made it
+time out 200 times a second. Under load, 16 of 1 800 new connections lost their first Initial
+and 5 their first three. With `Poll` as the wait, it was 0 of 1 800, at 6–8 % more server CPU.
+`Http3Server` keeps its receive outstanding across ticks and does not have this.
+
+**Lost credit was never sent again** ([Hermod#188](https://github.com/Vanaheimr/Hermod/pull/188),
+open), found by reading the code while chasing that stall, and not its cause. MAX_STREAM_DATA,
+MAX_DATA and MAX_STREAMS were not tracked by loss recovery, so one lost packet stopped the peer at
+its old limit for good (RFC 9000 §13.3). With the default 256 KiB stream window, a 300 KB upload
+needs exactly one MAX_STREAM_DATA. Three tests drop that one packet on a simulated clock; without
+the fix the upload stops at 262 144 bytes.
+
 **Open, roughly by value:**
 
 1. **CPU per packet: the gap to Kestrel, and the RTT under load** — after #174–#176 Kestrel still
@@ -1266,20 +1281,15 @@ p90 of ~90 ms against ~195; with one request in flight the two are level. Merged
    per packet and a copy per STREAM frame kept for retransmission. Pooling them reaches into the
    send path and the hosts' API. Next, the connection keeps every stream it ever had, and each
    send pass walks all of them.
-2. **A rare stall on a fresh connection's first upload** — about 1 in 1 000 fresh connections gets
-   no answer to its first 300 KB POST within 5 s. Measured while testing HyStart++, 1/1000 with it
-   and 1/1000 without, so it is older than #171. The gate's sixteen fresh uploads meet it in about
-   one run in 60. Not investigated yet. At that rate a reproducer needs thousands of connections
-   and a qlog of the one that stalls.
-3. **Hermod's HTTP/3 client keeps every response it received** — ~1.1 MB per 300 KB response on one
+2. **Hermod's HTTP/3 client keeps every response it received** — ~1.1 MB per 300 KB response on one
    live connection, measured in-process: the receive side of what #177 fixed for the server.
-4. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
+3. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
    code, not measured. It runs timers only when its 20 ms tick passes without a datagram, and
    otherwise touches only connections that just received one. So a connection whose path went
    dark gets no probe while others keep the server busy. This is the demo host's former defect
    with a shorter tick. No harness runs against `Http3Server`, so the guard would belong in
    HermodTests.
-5. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+4. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References

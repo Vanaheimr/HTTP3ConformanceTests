@@ -205,9 +205,9 @@ rising delay, because RFC 9406 uses the raw RTT sample. 122 of 300 entered conse
 start, almost all while the sender was application-limited. Every one of them resumed slow start
 at the next fast sample.
 
-Measuring it also turned up an older stall: about 1 in 1 000 fresh connections gets no answer to
-its first 300 KB upload within 5 s, with HyStart++ and without (1/1000 each). The sixteen fresh
-uploads in `h3semantics` meet it in about one run in 60. It is not investigated yet; see PLAN.md.
+Measuring it also turned up an older stall: about 1 in 1 000 fresh connections got no answer to
+its first 300 KB upload within 5 s, with HyStart++ and without (1/1000 each). It was the demo
+host losing datagrams to its own receive timeout, see the timers finding below.
 
 **Profiling the demo host: where the server's CPU went.** 🔶 A third less.
 
@@ -264,12 +264,42 @@ kept the server busy, it sent nothing in the whole 1.5 s, because a talking neig
 receive never times out. That second case is the one that pins the fix: a shorter receive
 timeout alone would pass the first check and still fail the second.
 
-The timers now run every 5 ms: through the receive timeout on a quiet socket, and through a clock
-comparison after each datagram under load. The server now probes after 60–140 ms in both cases.
-Polling the socket before each receive would have cost a system call per datagram. Measured on
-the same 64 responses, that is ~6 % more server CPU, so the loop does not poll. An interleaved
-A/B of the concurrency ladder showed no throughput difference between the old loop and the new
-one. The idle server costs 0.16 % of one core.
+The timers now run every 5 ms: on a quiet socket when the wait for a datagram runs out, and
+through a clock comparison after each datagram under load. The server now probes after 50–140 ms
+in both cases. At first the wait was a 5 ms receive timeout, because polling the socket before
+each receive costs a system call per datagram: ~6 % more server CPU on the same 64 responses.
+The next finding is why it polls now. An interleaved A/B of the concurrency ladder showed no
+throughput difference between the old loop and the new one. The idle server costs 0.16 % of one
+core.
+
+**The 5 ms receive timeout lost datagrams.** ✅ Fixed. About 1 in 1 000 fresh connections never
+answered its first 300 KB upload, so `h3semantics`, with sixteen of them, went red about once in
+60 runs. The upload was not the problem. Per-connection qlogs showed the client's first Initials
+never reaching the server: the first one it received carried packet number 3, sent 7 s in, after
+the client's 5 s timeout. Server logs with timestamps showed the loop running and the socket
+quiet in that time. A UDP relay in front showed the client sending them. On a busy machine, about
+1 in 110 new connections lost its first Initial, a second of delay, and 1 in 360 its first three,
+the stall. On a quiet one, 4 000 trials showed no stall and at most one lost Initial, so load
+decides how often it happens.
+
+The timeout itself was the cause. For a blocking receive that times out, Windows says the socket
+is "in an indeterminate state and should be closed" (SO_RCVTIMEO). The loop kept using it, 200
+times a second. The measurement shows what the documentation leaves open: a datagram arriving as
+the receive gives up can be lost. Why the losses cluster on one client's retransmissions, rather
+than spreading evenly, was not measured. Run interleaved with qlog on a loaded machine, 1 800
+connections each:
+
+| the loop waits with | first Initial lost | no response within 5 s |
+|---|---|---|
+| a 5 ms receive timeout | 16 | 5 |
+| `Poll`, then a receive without timeout | 0 | 0 |
+
+A receive kept outstanding across ticks, as `Http3Server` does, lost nothing either, but cost no
+less CPU than `Poll`. The loop now waits with `Poll`. That is the system call per datagram the timer
+fix had avoided, measured again here at 6–8 % more server CPU. It is the price of not losing any.
+
+Before this finding, the timers ran every 5 ms through the receive timeout. That had replaced a
+1 s timeout, which raced 200 times less often, so the same defect stayed near invisible.
 
 Hermod's own `Http3Server` has the milder form of the same pattern, found by reading the code,
 not by measurement. It runs its timers only when no datagram arrives within its 20 ms tick, and

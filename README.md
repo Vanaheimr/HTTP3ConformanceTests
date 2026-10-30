@@ -31,7 +31,7 @@ are our own code, sharing one reading of the RFCs and one set of bugs.
 
 ### What the drivers have found
 
-Five findings, all from driving the demo host from outside. None showed in the in-process tests,
+Six findings, all from driving the demo host from outside. None showed in the in-process tests,
 which work in single digits of streams and have our own code at both ends:
 
 - **A connection stalled after exactly 100 requests.** ✅ **fixed** — `MAX_STREAMS` was parsed and
@@ -72,7 +72,13 @@ which work in single digits of streams and have our own code at both ends:
   any client. When the path to one client went dark mid-response, a quiet server sent its first
   probe after ~1.1 s instead of one PTO. With a second client keeping it busy, it sent none at all.
   The timers now run every 5 ms whether datagrams arrive or not, and the server probes after
-  60–140 ms. `h3semantics` cuts the path through a relay to check both cases.
+  50–140 ms. `h3semantics` cuts the path through a relay to check both cases.
+- **About 1 in 1 000 fresh connections never answered.** ✅ **fixed** — the timer fix waited for
+  datagrams with a 5 ms receive timeout. On Windows, a blocking receive that times out can lose the
+  datagram arriving at that moment. On a busy machine, about 1 in 110 new connections lost its
+  first Initial, and 1 in 360 its first three, which outlasts the client's 5 s timeout. qlogs
+  showed the Initials never arriving, and a relay showed the client sending them. The loop waits
+  with `Poll` now, at 6–8 % more server CPU.
 
 Details in [tests/README.md](tests/README.md). The interop evidence and how to repeat it is in
 [INTEROP.md](INTEROP.md); the implementation history — phases, milestones, crypto roadmap — is in

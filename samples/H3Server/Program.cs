@@ -184,11 +184,15 @@ byte[] buffer = new byte[2048];
 // client kept talking, no connection's timers ran at all. h3semantics cuts a path mid-response to
 // check both.
 //
-// A quiet socket wakes the loop through the receive timeout; under load, a clock comparison after
-// each datagram decides. Polling the socket before each receive instead costs a system call per
-// datagram, which measured as ~6 % more server CPU for the same 64 responses.
+// A quiet socket wakes the loop through Poll, with the timer interval as its timeout; under load,
+// a clock comparison after each datagram decides. The wait must not be a receive timeout. On
+// Windows a blocking receive that times out can lose the datagram arriving at that moment, and at
+// 200 timeouts a second, on a busy machine, about 1 in 110 new connections lost its first Initial
+// and 1 in 360 its first three: no response within 5 s (tests/README.md). Poll never consumes a
+// datagram. It costs a system call per datagram, 6–8 % more server CPU, which is the price of
+// not losing any.
 var timerInterval = TimeSpan.FromMilliseconds(5);
-socket.ReceiveTimeout = (int) timerInterval.TotalMilliseconds;
+int timerIntervalMicroseconds = (int) (timerInterval.TotalMilliseconds * 1000);
 long lastTimerPass = Stopwatch.GetTimestamp();
 
 while (true)
@@ -205,12 +209,13 @@ while (true)
     int n;
     try
     {
+        if (!socket.Poll(timerIntervalMicroseconds, SelectMode.SelectRead))
+            continue; // one timer interval without a datagram
         n = socket.ReceiveFrom(buffer, ref from);
     }
     catch (SocketException)
     {
-        // The receive timeout - one timer interval without a datagram - or, on Windows, an ICMP
-        // "port unreachable" from a client that has gone away.
+        // On Windows, an ICMP "port unreachable" from a client that has gone away.
         continue;
     }
 
