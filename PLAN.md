@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **756 tests green** (416 QUIC + 340 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **759 tests green** (419 QUIC + 340 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1265,12 +1265,12 @@ time out 200 times a second. Under load, 16 of 1 800 new connections lost their 
 and 5 their first three. With `Poll` as the wait, it was 0 of 1 800, at 6–8 % more server CPU.
 `Http3Server` keeps its receive outstanding across ticks and does not have this.
 
-**Lost credit was never sent again** ([Hermod#188](https://github.com/Vanaheimr/Hermod/pull/188),
-open), found by reading the code while chasing that stall, and not its cause. MAX_STREAM_DATA,
+**Lost credit was never sent again** ([Hermod#188](https://github.com/Vanaheimr/Hermod/pull/188)),
+found by reading the code while chasing that stall, and not its cause. MAX_STREAM_DATA,
 MAX_DATA and MAX_STREAMS were not tracked by loss recovery, so one lost packet stopped the peer at
 its old limit for good (RFC 9000 §13.3). With the default 256 KiB stream window, a 300 KB upload
 needs exactly one MAX_STREAM_DATA. Three tests drop that one packet on a simulated clock; without
-the fix the upload stops at 262 144 bytes.
+the fix the upload stops at 262 144 bytes. Merged at Hermod 4f116936 (416 → 419 QUIC tests).
 
 **Open, roughly by value:**
 

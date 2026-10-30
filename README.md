@@ -20,7 +20,7 @@ Everything below is repeatable from a clean checkout with the command next to it
 | `dotnet run --project tests/h3interop` | our client against **8 public QUIC stacks** — quiche, nginx, Google, mvfst, lsquic, msquic, quic-go, Akamai — full chain + hostname validation, no `-k` | **8/8** reachable |
 | `pwsh tools/browser-interop.ps1 -Browser chrome` | **Chrome 150 / Edge 150** headless, incl. WebTransport and the post-quantum hybrid | **8/8** checks |
 | `curl --http3-only -k https://127.0.0.1:4433/` | **ngtcp2/LibreSSL** and **OpenSSL-QUIC** against our server — GET, POST, 300 KB, 103 + trailers | see [INTEROP.md](INTEROP.md) |
-| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **340 tests** (416 more for QUIC) |
+| `dotnet test libs/Hermod/HermodTests --filter FullyQualifiedName~Hermod.Tests.HTTP3` | the in-process suite that ships with the stack: RFC vectors, "evil" raw-QUIC peers, a seeded lossy link | **340 tests** (419 more for QUIC) |
 | `dotnet run --project tests/h3bench` | throughput, latency percentiles, concurrency scaling | numbers, no verdict |
 
 On the other side of those rows sits code nobody here wrote: eight public QUIC stacks, two
