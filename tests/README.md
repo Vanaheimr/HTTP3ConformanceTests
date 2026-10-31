@@ -29,12 +29,12 @@ see [What this found](#what-this-found).
 
 The in-process unit and integration tests — RFC 9000/9001/9002/9114/9204 vectors, the TLS 1.3 key
 schedule, QPACK, the frame state machine, "evil" raw-QUIC peers, a seeded lossy link — live with the
-stack in Hermod (`HermodTests/HTTP3/`, 340 tests) and are what `ci.yml` gates on. They are far more
+stack in Hermod (`HermodTests/HTTP3/`, 343 tests) and are what `ci.yml` gates on. They are far more
 thorough than anything here. What they cannot be is *independent*: both ends of every one of them
 is our own code, sharing one reading of the RFCs and one set of bugs.
 
 That is the gap this directory fills, and why the findings below came from it rather than from the
-340.
+343.
 
 ## The harnesses
 
@@ -316,7 +316,7 @@ dotnet run --project samples/H3Server -- 4433
 dotnet run --project tests/h3bench --configuration Release
 ```
 
-Everything else in this repository has a number behind it — 759 in-process tests, 42/42 harness checks,
+Everything else in this repository has a number behind it — 762 in-process tests, 42/42 harness checks,
 8 foreign stacks, Chrome and Edge 8/8. Performance had none, which made "readable rather than fast"
 an assumption rather than a finding. Loopback measures our packet handling, framing and crypto, not
 a network, and the msquic client's cost sits inside every figure: comparing two runs of this file is

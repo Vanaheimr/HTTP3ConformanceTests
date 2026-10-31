@@ -82,7 +82,7 @@ libs/Hermod/             # submodule
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
   HermodTests/QUIC/      # mirrors Hermod/QUIC/
-  HermodTests/HTTP3/     # 340 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
+  HermodTests/HTTP3/     # 343 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
                          # WebTransport/ Robustness/ — RFC vectors, "evil" raw-QUIC peers,
                          # a seeded lossy link (drop/reorder/duplicate)
   HermodTests/Helpers/   # Expect/Hex/FakeTimeProvider/LossyNetwork, shared by both areas
@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **759 tests green** (419 QUIC + 340 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **762 tests green** (419 QUIC + 343 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1272,6 +1272,30 @@ its old limit for good (RFC 9000 §13.3). With the default 256 KiB stream window
 needs exactly one MAX_STREAM_DATA. Three tests drop that one packet on a simulated clock; without
 the fix the upload stops at 262 144 bytes. Merged at Hermod 4f116936 (416 → 419 QUIC tests).
 
+**Nor with every message received** ([Hermod#194](https://github.com/Vanaheimr/Hermod/pull/194)),
+the receive side of #177. Three things kept what had arrived on a long-lived connection:
+- The QUIC client logged every 1-RTT frame it received, STREAM data included. Nothing read the
+  log, and it is gone, `QuicClientConnection.ApplicationFrames` with it.
+- `Http3ClientConnection` could not forget a request. Each one kept its body and the frame buffer
+  it was parsed from, which a 300 KB DATA frame grows to 512 KiB. `ForgetRequest` is new, and
+  `Http3Client` calls it for every request it settles. `TryGetResponse` still answers repeatedly:
+  polling loops like H3Get's assign `out` on every round.
+- The server kept the same two buffers for every upload. It releases them once the request is
+  answered.
+
+Measured in-process, forty 300 KB messages on one connection:
+- the client held 1 145 KiB per response;
+- the server held 815 KiB per upload;
+- both now stay under the tests' 32 KiB.
+
+From outside, the demo host grew from 10 MB to 436 MB over 400 uploads from .NET's `HttpClient`. It
+now stays at 20 MB. Merged at Hermod 30f94587 (340 → 343 HTTP/3 tests).
+
+Left over, both small:
+- the server keeps each answered request's small state, which belongs with item 1;
+- after a STOP_SENDING, QUIC buffers what still arrives until the peer's RESET_STREAM, bounded by
+  the stream window.
+
 **Open, roughly by value:**
 
 1. **CPU per packet: the gap to Kestrel, and the RTT under load** — after #174–#176 Kestrel still
@@ -1280,16 +1304,15 @@ the fix the upload stops at 262 144 bytes. Merged at Hermod 4f116936 (416 → 41
    share left is the GC, 22 % of the thread: arrays that live exactly one round trip, a datagram
    per packet and a copy per STREAM frame kept for retransmission. Pooling them reaches into the
    send path and the hosts' API. Next, the connection keeps every stream it ever had, and each
-   send pass walks all of them.
-2. **Hermod's HTTP/3 client keeps every response it received** — ~1.1 MB per 300 KB response on one
-   live connection, measured in-process: the receive side of what #177 fixed for the server.
-3. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
+   send pass walks all of them. The HTTP/3 server likewise keeps a small state per answered
+   request, and every pump walks those.
+2. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
    code, not measured. It runs timers only when its 20 ms tick passes without a datagram, and
    otherwise touches only connections that just received one. So a connection whose path went
    dark gets no probe while others keep the server busy. This is the demo host's former defect
    with a shorter tick. No harness runs against `Http3Server`, so the guard would belong in
    HermodTests.
-4. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+3. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References
