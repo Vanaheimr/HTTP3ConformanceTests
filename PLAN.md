@@ -82,7 +82,7 @@ libs/Hermod/             # submodule
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
   HermodTests/QUIC/      # mirrors Hermod/QUIC/
-  HermodTests/HTTP3/     # 343 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
+  HermodTests/HTTP3/     # 346 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
                          # WebTransport/ Robustness/ — RFC vectors, "evil" raw-QUIC peers,
                          # a seeded lossy link (drop/reorder/duplicate)
   HermodTests/Helpers/   # Expect/Hex/FakeTimeProvider/LossyNetwork, shared by both areas
@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **762 tests green** (419 QUIC + 343 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **765 tests green** (419 QUIC + 346 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1296,6 +1296,26 @@ Left over, both small:
 - after a STOP_SENDING, QUIC buffers what still arrives until the peer's RESET_STREAM, bounded by
   the stream window.
 
+**Hermod's `Http3Server` runs its timers under steady traffic too**
+([Hermod#196](https://github.com/Vanaheimr/Hermod/pull/196)). This is the demo host's former defect
+with a 20 ms tick. The timers ran only after a whole tick without any datagram, from anyone, so
+under steady traffic they did not run at all. A datagram every 2 ms that the server cannot even
+place was enough. While they stood still:
+- a client that had fallen silent after its request never got the response of a handler that
+  finished in the background;
+- a vanished or closed connection was never let go, until `maxConnections` turned new clients
+  away.
+
+`Http3Client` hid the first case, because its own probes reach the server soon enough. The loop now
+checks the clock after each batch, as the demo host does. Three tests in `Http3ServerHardeningTests`
+drive a client that only listens, against such a stream of datagrams. Each fails after 5 s without
+the fix and passes in about one second with it.
+
+The same PR awaits a receive that failed. Before, that receive stayed in place, and the loop never
+received again. This was found by reading the code and is untested.
+
+Merged at Hermod 2776e3b6 (343 → 346 HTTP/3 tests).
+
 **Open, roughly by value:**
 
 1. **CPU per packet: the gap to Kestrel, and the RTT under load** — after #174–#176 Kestrel still
@@ -1306,13 +1326,7 @@ Left over, both small:
    send path and the hosts' API. Next, the connection keeps every stream it ever had, and each
    send pass walks all of them. The HTTP/3 server likewise keeps a small state per answered
    request, and every pump walks those.
-2. **Hermod's `Http3Server` starves silent connections' timers under load** — found by reading the
-   code, not measured. It runs timers only when its 20 ms tick passes without a datagram, and
-   otherwise touches only connections that just received one. So a connection whose path went
-   dark gets no probe while others keep the server busy. This is the demo host's former defect
-   with a shorter tick. No harness runs against `Http3Server`, so the guard would belong in
-   HermodTests.
-3. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
+2. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
 ## References
