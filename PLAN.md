@@ -82,7 +82,7 @@ libs/Hermod/             # submodule
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
   HermodTests/QUIC/      # mirrors Hermod/QUIC/
-  HermodTests/HTTP3/     # 346 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
+  HermodTests/HTTP3/     # 349 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
                          # WebTransport/ Robustness/ — RFC vectors, "evil" raw-QUIC peers,
                          # a seeded lossy link (drop/reorder/duplicate)
   HermodTests/Helpers/   # Expect/Hex/FakeTimeProvider/LossyNetwork, shared by both areas
@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **765 tests green** (419 QUIC + 346 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **778 tests green** (429 QUIC + 349 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1292,7 +1292,7 @@ From outside, the demo host grew from 10 MB to 436 MB over 400 uploads from .NET
 now stays at 20 MB. Merged at Hermod 30f94587 (340 → 343 HTTP/3 tests).
 
 Left over, both small:
-- the server keeps each answered request's small state, which belongs with item 1;
+- the server keeps each answered request's small state, which belongs with item 1 (gone with #201);
 - after a STOP_SENDING, QUIC buffers what still arrives until the peer's RESET_STREAM, bounded by
   the stream window.
 
@@ -1316,6 +1316,32 @@ received again. This was found by reading the code and is untested.
 
 Merged at Hermod 2776e3b6 (343 → 346 HTTP/3 tests).
 
+**A connection lets go of its finished streams** ([Hermod#201](https://github.com/Vanaheimr/Hermod/pull/201)).
+A QUIC connection kept every stream it ever had, and `Http3ServerConnection` kept every request
+state. Every send pass walked all the streams, several times per packet, and every pump walked all
+the request states. A request's cost therefore grew with the requests before it on the same
+connection. Measured in-process, 8,000 small requests on one connection:
+- requests 2,000 to 3,000 took 469 µs each, requests 7,000 to 8,000 took 1,407 µs;
+- at the end, each side held 8,006 streams;
+- now every request takes 78 to 110 µs, and 7 streams remain.
+
+`QuicEndpoint.ReleaseStream` says the owner is done with a stream. The connection lets go of it
+once our FIN or reset is out and the peer's final size is known. The HTTP/3 server releases each
+request it has answered, the client each request it forgets.
+
+A closed stream stays accounted for:
+- late frames that name it are ignored instead of opening it anew;
+- the flow-control sums keep its final size;
+- its MAX_STREAMS credit comes back;
+- a reset stream's lost data does not go out again.
+
+Two server defects went with it:
+- PRIORITY_UPDATEs for finished requests filled the buffer of 32, and an update for a stream still
+  to come was dropped;
+- a request cancelled before its end counted as pending for good.
+
+Merged at Hermod 86c7acd6 (419 → 429 QUIC, 346 → 349 HTTP/3 tests).
+
 **Open, roughly by value:**
 
 1. **CPU per packet: the gap to Kestrel, and the RTT under load** — after #174–#176 Kestrel still
@@ -1323,9 +1349,7 @@ Merged at Hermod 2776e3b6 (343 → 346 HTTP/3 tests).
    the same CPU cost is most of the server's RTT under load (see HyStart++ above). The largest
    share left is the GC, 22 % of the thread: arrays that live exactly one round trip, a datagram
    per packet and a copy per STREAM frame kept for retransmission. Pooling them reaches into the
-   send path and the hosts' API. Next, the connection keeps every stream it ever had, and each
-   send pass walks all of them. The HTTP/3 server likewise keeps a small state per answered
-   request, and every pump walks those.
+   send path and the hosts' API.
 2. **Firefox** — not installed on the development machine. It ignores the Chromium flags and wants the
    certificate in its own NSS store, so it needs a different setup path than `tools/browser-interop.ps1`.
 
