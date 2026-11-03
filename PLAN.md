@@ -82,7 +82,7 @@ libs/Hermod/             # submodule
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
   HermodTests/QUIC/      # mirrors Hermod/QUIC/
-  HermodTests/HTTP3/     # 365 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
+  HermodTests/HTTP3/     # 373 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
                          # WebTransport/ Robustness/ — RFC vectors, "evil" raw-QUIC peers,
                          # a seeded lossy link (drop/reorder/duplicate)
   HermodTests/Helpers/   # Expect/Hex/FakeTimeProvider/LossyNetwork, shared by both areas
@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **794 tests green** (429 QUIC + 365 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **804 tests green** (431 QUIC + 373 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1294,7 +1294,7 @@ now stays at 20 MB. Merged at Hermod 30f94587 (340 → 343 HTTP/3 tests).
 Left over, both small:
 - the server keeps each answered request's small state, which belongs with item 1 (gone with #201);
 - after a STOP_SENDING, QUIC buffers what still arrives until the peer's RESET_STREAM, bounded by
-  the stream window.
+  the stream window (gone with #224).
 
 **Hermod's `Http3Server` runs its timers under steady traffic too**
 ([Hermod#196](https://github.com/Vanaheimr/Hermod/pull/196)). This is the demo host's former defect
@@ -1312,7 +1312,7 @@ drive a client that only listens, against such a stream of datagrams. Each fails
 the fix and passes in about one second with it.
 
 The same PR awaits a receive that failed. Before, that receive stayed in place, and the loop never
-received again. This was found by reading the code and is untested.
+received again. This was found by reading the code; #225 added the test.
 
 Merged at Hermod 2776e3b6 (343 → 346 HTTP/3 tests).
 
@@ -1362,9 +1362,9 @@ Defects on the same paths:
 - a 17th buffered uni stream ended the connection: turning it away sent a RESET_STREAM for the
   peer's uni stream, which is the peer's STREAM_STATE_ERROR.
 
-Left over: QPACK still keeps unknown and reserved uni stream types (grease) for the connection's
-life, and a tunnel or session that nobody ends stays. Merged at Hermod 90f87fa3 (349 → 365 HTTP/3
-tests).
+Left over: QPACK still kept the peer's uni streams of unknown type, grease among them, for the
+connection's life (gone with #223). A tunnel or session that nobody ends stays. Merged at Hermod
+90f87fa3 (349 → 365 HTTP/3 tests).
 
 The demo host kept them all the same: its echo lists only grew, for every connection, and the main
 loop walked them on every datagram. A datagram-echo tunnel never ended at all, since the host never
@@ -1380,6 +1380,21 @@ clock, so its own schedule is still what has to notice. Any 20 ms pause in the t
 without the #196 fix run its timers all the same. So the chatter runs at the highest thread
 priority, and the timers get 2 s. Under the same load the tests passed in 12 of 12 runs, and
 without the #196 fix they failed in 36 of 36. Merged at Hermod 1d2c5866.
+
+**What #194, #196 and #208 left over** ([Hermod#223](https://github.com/Vanaheimr/Hermod/pull/223),
+[#224](https://github.com/Vanaheimr/Hermod/pull/224), [#225](https://github.com/Vanaheimr/Hermod/pull/225)):
+- HTTP/3 lets go of a peer's uni stream of unknown type (#223). It stops reading with
+  H3_STREAM_CREATION_ERROR (RFC 9114 §6.2) unless the FIN is in, and hands the stream back to QUIC.
+  A stream that ends before its type has arrived goes the same way. Both kinds used to stay for
+  the connection's life;
+- QUIC drops what arrives after our STOP_SENDING (#224). It still checks it against the window and
+  the final size;
+- two paths that had no test have one (#225): the server loop's failed receive (#196), through a
+  test seam, and the client's FIN on a turned-down CONNECT (#208), against a raw QUIC server that
+  sends no STOP_SENDING.
+
+Every part of #223 and #224, taken out alone, fails a test, and so does each path #225 covers.
+Merged at Hermod 244cbfeb (365 → 373 HTTP/3, 429 → 431 QUIC tests).
 
 **Open, roughly by value:**
 
