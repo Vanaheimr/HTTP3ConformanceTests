@@ -82,7 +82,7 @@ libs/Hermod/             # submodule
     WebSocket/           # RFC 6455 framing (copies from Hermod.HTTP2, only the namespace swapped)
     WebTransport/        # WebTransport over HTTP/3 (draft-13): session/streams/capsules/manager
   HermodTests/QUIC/      # mirrors Hermod/QUIC/
-  HermodTests/HTTP3/     # 349 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
+  HermodTests/HTTP3/     # 365 tests: Api/ Connection/ Messages/ QPack/ Security/ Tunnels/
                          # WebTransport/ Robustness/ — RFC vectors, "evil" raw-QUIC peers,
                          # a seeded lossy link (drop/reorder/duplicate)
   HermodTests/Helpers/   # Expect/Hex/FakeTimeProvider/LossyNetwork, shared by both areas
@@ -102,7 +102,7 @@ Usings in #region Usings blocks.
 
 ## Phases
 
-**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **778 tests green** (429 QUIC + 349 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
+**Status legend:** ✅ done · 🔶 partial · ⬜ open. Current state: **794 tests green** (429 QUIC + 365 HTTP/3, both in HermodTests since the move) plus **42/42** out-of-process harness checks in `tests/`, milestones
 M1–M3 reached (M1: live handshake against cloudflare-quic.com · M2: real `GET` → status 200 +
 126 KB HTML · M3: our own HTTP/3 server, the `H3Get` client fetches status 200 over real localhost
 UDP), phases 0–9 complete, client interop against 8 foreign QUIC stacks.
@@ -1341,6 +1341,40 @@ Two server defects went with it:
 - a request cancelled before its end counted as pending for good.
 
 Merged at Hermod 86c7acd6 (419 → 429 QUIC, 346 → 349 HTTP/3 tests).
+
+**Tunnels and WebTransport let go of their streams too**
+([Hermod#208](https://github.com/Vanaheimr/Hermod/pull/208)). #201 left them out: a connection kept
+every tunnel, every WebTransport session and every stream of a session for as long as it lived. Now:
+- the server lets go of a tunnel once both its directions are over, the client once it has also
+  forgotten the request (`ForgetRequest` takes an Extended CONNECT stream);
+- a session lets go of each of its streams once it is done in the directions it has;
+- both sides let go of a session once it has ended and their FIN is out.
+
+Whoever learns that a session has ended now closes its side of the CONNECT stream (§6). Before,
+only the side that closed did, so the stream never ended on the other.
+
+Defects on the same paths:
+- `webTransportMaxSessions` counted every session, ended or not, so a server accepted no more than
+  that many over a connection's whole life. It now counts sessions at once (§5.2);
+- a CONNECT stream reset by the peer did not end its session;
+- a turned-down CONNECT kept its stream open on both sides, and the server counted the request as
+  pending for good;
+- a 17th buffered uni stream ended the connection: turning it away sent a RESET_STREAM for the
+  peer's uni stream, which is the peer's STREAM_STATE_ERROR.
+
+Left over: QPACK still keeps unknown and reserved uni stream types (grease) for the connection's
+life, and a tunnel or session that nobody ends stays. Merged at Hermod 90f87fa3 (349 → 365 HTTP/3
+tests).
+
+**The steady-traffic tests hold on a loaded machine**
+([Hermod#213](https://github.com/Vanaheimr/Hermod/pull/213)). The three tests from #196 failed under
+load although the server did its part: with 24 busy processes on 16 cores, master failed them in
+12 of 12 runs. The server's connections now go by a `FakeTimeProvider`, which the test moves past
+the idle timeout or the draining period while the traffic goes on. The server's loop keeps the real
+clock, so its own schedule is still what has to notice. Any 20 ms pause in the traffic lets a loop
+without the #196 fix run its timers all the same. So the chatter runs at the highest thread
+priority, and the timers get 2 s. Under the same load the tests passed in 12 of 12 runs, and
+without the #196 fix they failed in 36 of 36. Merged at Hermod 1d2c5866.
 
 **Open, roughly by value:**
 
