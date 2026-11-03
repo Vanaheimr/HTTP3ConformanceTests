@@ -171,9 +171,12 @@ Console.WriteLine($"Listening on {socket.LocalEndPoint} "
 // Connections are demultiplexed primarily via the connection ID (not via the address), so that a
 // connection migration (RFC 9000 §9) — a client changing its address — hits the same connection.
 var connections = new List<ServerConn>();
-var datagramEchoTunnels = new List<Http3Tunnel>(); // "datagram-echo" tunnels (RFC 9297): echo in the main loop
-var webTransportSessions = new List<WebTransportSession>(); // WebTransport sessions: echo in the main loop
-var wtEchoStreams = new List<(WebTransportStream In, WebTransportStream? Reply)>();
+// The tunnels, sessions and streams the main loop echoes on. Each leaves its list once it is over;
+// Hermod lets go of them too (Hermod#208), but whatever this host still holds lives on, and the
+// loop walks every entry on every datagram.
+var datagramEchoTunnels = new List<(Http3Tunnel Tunnel, Task Ended)>(); // "datagram-echo" tunnels (RFC 9297)
+var webTransportSessions = new List<WebTransportSession>(); // WebTransport sessions
+var wtEchoStreams = new List<(WebTransportSession Session, WebTransportStream In, WebTransportStream? Reply)>();
 var wtEchoBuffers = new Dictionary<WebTransportStream, List<byte>>();
 byte[] buffer = new byte[2048];
 
@@ -340,7 +343,13 @@ while (true)
     }
 
     // Serve "datagram-echo" tunnels (RFC 9297): mirror received HTTP datagrams back.
-    foreach (Http3Tunnel echoTunnel in datagramEchoTunnels)
+    datagramEchoTunnels.RemoveAll(t =>
+    {
+        if (!t.Ended.IsCompleted) return false;
+        Console.WriteLine("  ✓ datagram-echo tunnel over — let go.");
+        return true;
+    });
+    foreach ((Http3Tunnel echoTunnel, _) in datagramEchoTunnels)
         while (echoTunnel.TryReceiveDatagram(out byte[]? payload) && payload is not null)
         {
             Console.WriteLine($"  ← HTTP datagram ({payload.Length} bytes) — echoing back (unreliable, RFC 9297).");
@@ -348,6 +357,12 @@ while (true)
         }
 
     // Serve WebTransport sessions: mirror datagrams + incoming streams back (echo).
+    webTransportSessions.RemoveAll(wt =>
+    {
+        if (!wt.IsClosed) return false;
+        Console.WriteLine($"  ✓ WebTransport session {wt.SessionId} over — let go.");
+        return true;
+    });
     foreach (WebTransportSession wt in webTransportSessions)
     {
         while (wt.TryReceiveDatagram(out byte[]? dgram) && dgram is not null)
@@ -357,13 +372,25 @@ while (true)
         }
         // Accept incoming uni/bidi streams and send the body back.
         while (wt.AcceptUnidirectionalStream() is { } uni)
-            wtEchoStreams.Add((uni, null));
+            wtEchoStreams.Add((wt, uni, null));
         while (wt.AcceptBidirectionalStream() is { } bidi)
-            wtEchoStreams.Add((bidi, bidi));
+            wtEchoStreams.Add((wt, bidi, bidi));
     }
     for (int i = wtEchoStreams.Count - 1; i >= 0; i--)
     {
-        (WebTransportStream inStream, WebTransportStream? reply) = wtEchoStreams[i];
+        (WebTransportSession session, WebTransportStream inStream, WebTransportStream? reply) = wtEchoStreams[i];
+
+        // Neither stream finishes any more: an ended session has aborted its streams, and a reset
+        // one sends no more. A reset bidi stream gets its reset mirrored, as its FIN gets the echo.
+        if (session.IsClosed || inStream.IsResetByPeer)
+        {
+            if (!session.IsClosed)
+                reply?.Reset(inStream.PeerResetErrorCode ?? 0);
+            wtEchoBuffers.Remove(inStream);
+            wtEchoStreams.RemoveAt(i);
+            continue;
+        }
+
         wtEchoBuffers.TryAdd(inStream, []);
         wtEchoBuffers[inStream].AddRange(inStream.Read());
         if (inStream.IsReceiveComplete)
@@ -477,7 +504,7 @@ Http3ConnectResult HandleConnect(Http3Request request)
         return new Http3ConnectResult
         {
             Status = 200,
-            OnTunnel = tunnel => datagramEchoTunnels.Add(tunnel), // the main loop takes over the echo
+            OnTunnel = tunnel => datagramEchoTunnels.Add((tunnel, EndWithThePeer(tunnel))), // the main loop takes over the echo
         };
 
     if (request.Protocol != "websocket")
@@ -515,6 +542,15 @@ static async Task EchoWebSocket(WebSocketConnection ws, Http3Tunnel tunnel)
     }
     tunnel.Complete(); // orderly tunnel end (FIN ≙ TCP close, RFC 9220 §3)
     Console.WriteLine("  ✓ WebSocket closed (close handshake performed).");
+}
+
+// A datagram-echo tunnel carries no bytes of its own. Reads run until the client's FIN or reset, or
+// the connection's end; then our side ends too. Hermod lets go of a tunnel only once both sides are
+// over, so without our FIN it would keep it for as long as the connection lives.
+static async Task EndWithThePeer(Http3Tunnel tunnel)
+{
+    while (await tunnel.ReadAsync(CancellationToken.None) is not null) { }
+    tunnel.Complete();
 }
 
 // WebTransport (draft-webtrans-http3): accept /wt, otherwise 404. Echo for datagrams + incoming streams.

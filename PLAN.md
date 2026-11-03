@@ -1366,6 +1366,11 @@ Left over: QPACK still keeps unknown and reserved uni stream types (grease) for 
 life, and a tunnel or session that nobody ends stays. Merged at Hermod 90f87fa3 (349 → 365 HTTP/3
 tests).
 
+The demo host kept them all the same: its echo lists only grew, for every connection, and the main
+loop walked them on every datagram. A datagram-echo tunnel never ended at all, since the host never
+sent its FIN. The lists now drop what is over, and the tunnel answers the client's FIN with its own.
+`H3Get --datagrams` checks for that FIN; against the old host it fails.
+
 **The steady-traffic tests hold on a loaded machine**
 ([Hermod#213](https://github.com/Vanaheimr/Hermod/pull/213)). The three tests from #196 failed under
 load although the server did its part: with 24 busy processes on 16 cores, master failed them in

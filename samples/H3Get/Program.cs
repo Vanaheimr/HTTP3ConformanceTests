@@ -363,6 +363,15 @@ if (args.Contains("--datagrams"))
         echoed++;
     }
     Console.WriteLine($"✓✓ {echoed}/3 HTTP datagrams echoed — RFC 9297 (quarter stream ID) over RFC 9221 (DATAGRAM frames).");
+
+    // Orderly end (FIN ≙ TCP close, RFC 9220 §3). The server's tunnel carries no bytes, so the first
+    // read ends with its FIN, which answers ours once it has finished the tunnel too.
+    Task<byte[]?> serverEnd = dgTunnel.ReadAsync(CancellationToken.None);
+    dgTunnel.Complete();
+    for (int round = 0; round < 10 && !serverEnd.IsCompleted; round++)
+        Exchange();
+    if (!serverEnd.IsCompletedSuccessfully || serverEnd.Result is not null) { Console.WriteLine("✗ The server did not end its side of the tunnel."); return 1; }
+    Console.WriteLine("✓ Tunnel ended on both sides: our FIN, then the server's.");
     http3.Close();
     foreach (byte[] dg in http3.GetDatagramsToSend()) socket.SendTo(dg, remote);
     return 0;
